@@ -25,3 +25,4 @@ The Geometrical Optics code is versatile and can be used for various purposes, i
 - Investigating optical aberrations and their effects on image quality.
 - Designing and optimizing optical systems for specific applications.
 - We encourage you to explore the code and adapt it to your specific research or educational needs. If you find any issues or have suggestions for improvements, please feel free to contribute.
+
