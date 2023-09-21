@@ -14,3 +14,14 @@ Our codebase is designed to provide a clear and accessible implementation of Geo
    ```bash
    git clone https://github.com/your-username/your-repo.git
 2. **Install Dependencies:** Make sure you have all the necessary dependencies installed. Detailed instructions can be found in the repository's documentation.
+
+3. **Explore and Experiment:** Dive into the code, explore different optical scenarios, and use it to conduct your experiments or simulations.
+
+## Usage
+The Geometrical Optics code is versatile and can be used for various purposes, including:
+
+- Simulating the behavior of light rays in different optical systems.
+- Analyzing the formation of images by lenses, mirrors, and other optical components.
+- Investigating optical aberrations and their effects on image quality.
+- Designing and optimizing optical systems for specific applications.
+- We encourage you to explore the code and adapt it to your specific research or educational needs. If you find any issues or have suggestions for improvements, please feel free to contribute.
