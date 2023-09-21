@@ -12,7 +12,7 @@ Our codebase is designed to provide a clear and accessible implementation of Geo
 1. **Clone the Repository:** Start by cloning this repository to your local machine using Git. You can do this by running the following command:
 
    ```bash
-   git clone https://github.com/your-username/your-repo.git
+   git clone https://github.com/borgi-s/Geometrical_Optics-master.git
 2. **Install Dependencies:** Make sure you have all the necessary dependencies installed. Detailed instructions can be found in the repository's documentation.
 
 3. **Explore and Experiment:** Dive into the code, explore different optical scenarios, and use it to conduct your experiments or simulations.
