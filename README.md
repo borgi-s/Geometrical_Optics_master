@@ -19,7 +19,7 @@ Our codebase is designed to provide a clear and accessible implementation of Geo
 
 4. **Reciprocal Space:** Use the 'generate_res.py' script to generate your reciprocal space resolution. Define the angular space that will be probed. This will create some pkl files with information for the direct space part of the resolution function.
 
-5. **Direct Space:** Use either 'forward_model.py' or 'init_forward.py' to start generating some images. Standard geometrical parameters of ID06 at the European Synchrotron Radiation Facility, where the microscope is setup experimentally is default.
+5. **Direct Space:** Use either 'forward_model.py' or 'init_forward.py' to start generating images. The standard geometrical parameters of ID06 at the European Synchrotron Radiation Facility, where the microscope is set up experimentally, are the default settings.
 
 ## Usage
 The Geometrical Optics code is versatile and can be used for various purposes, including:
