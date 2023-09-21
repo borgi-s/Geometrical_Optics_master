@@ -13,7 +13,7 @@ Our codebase is designed to provide a clear and accessible implementation of Geo
 
    ```bash
    git clone https://github.com/borgi-s/Geometrical_Optics-master.git
-2. **Install Dependencies:** Make sure you have all the necessary dependencies installed. Detailed instructions can be found in the repository's documentation.
+2. **Install Dependencies:** Make sure you have all the necessary dependencies installed. Detailed instructions will be added in the repository's documentation at a later date.
 
 3. **Explore and Experiment:** Dive into the code, explore different optical scenarios, and use it to conduct your experiments or simulations.
 
