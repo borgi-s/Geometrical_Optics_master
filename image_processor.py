@@ -9,6 +9,23 @@ from concurrent.futures import ThreadPoolExecutor
 from direct_space.forward_model import forward, Find_Hg
 
 def save_image(args):
+    '''
+    Save an image with specified parameters.
+    ---------------------------------------------------------------------
+    Parameters:
+        args (tuple): A tuple containing the following elements:
+            Hg (float): A parameter.
+            phi (float): Angle in radians.
+            chi (float): Angle in radians.
+            j (int): Step in phi
+            i (int): Step in chi
+            fpath (str): Path to a folder where the image will be saved.
+            fn_prefix (str): Prefix for the image filename.
+            ftype (str): Filetype extension for the image (e.g., '.png').
+    ---------------------------------------------------------------------
+    Returns:
+        None: The function saves an image but does not return a value.
+    '''
     Hg, phi, chi, j, i, fpath, fn_prefix, ftype = args
     im, qi_field = forward(Hg, phi=phi, chi=chi)
     fn_suffix = ("{0}".format(i).zfill(4) + "_" +
@@ -16,6 +33,22 @@ def save_image(args):
     np.save(os.path.join(fpath + fn_prefix + fn_suffix), im)
 
 def save_images_parallel(Hg, phi_range, phi_steps, chi_range, chi_steps, fpath, fn_prefix, ftype):
+    '''
+    Generate a grid of parameter combinations and save images in parallel.
+    ----------------------------------------------------------------------------------------------
+    Parameters:
+        Hg (float): A parameter.
+        phi_range (float): Range of phi values in degrees.
+        phi_steps (int): Number of steps in the phi range.
+        chi_range (float): Range of chi values in degrees.
+        chi_steps (int): Number of steps in the chi range.
+        fpath (str): Path to a folder where the images will be saved.
+        fn_prefix (str): Prefix for the image filenames.
+        ftype (str): Filetype extension for the images (e.g., '.png').
+    ----------------------------------------------------------------------------------------------
+    Returns:
+        True (bool): True if the function completes successfully.
+    '''
     Phi = np.linspace(-np.deg2rad(phi_range), np.deg2rad(phi_range), phi_steps)
     Chi = np.linspace(-np.deg2rad(chi_range), np.deg2rad(chi_range), chi_steps)
 
@@ -87,75 +120,7 @@ def inv_polefigure_colors(o_grid, test_grid, float_bit=np.float16):
     return xy_colors_griddata, xydata
 
 
-def find_min_max_indices(x, y, image, threshold_factor, v_steps, u_steps):
-    '''
-    Calculates the extreme curve values at which there is still as signal above a threshold.
-    -----------------------------------------------------------------------------------------
-    Parameters:
-        x (int): x-coordinate of the pixel
-        y (int): y-coordinate of the pixel
-        image (ndarray): Input image as a 2D NumPy array.
-        threshold_factor (float): Threshold value in percentage between 0.0 and 1.0
-    -----------------------------------------------------------------------------------------
-    '''
-    
-    image = image[:, x, y].reshape((v_steps, u_steps))
-    # Step 1: Normalize the image
-    image_norm = image - np.min(image)
-    image_norm = image_norm / np.max(image_norm)
 
-    # motor_m_max = np.unravel_index(np.argmax(image_norm), (chi_steps,phi_steps))[0]
-    com = np.round(center_of_mass(image_norm)).astype(int)[0] # if the ranges are different from test case this might not be the best
-    indices = np.argwhere(image_norm[com] >= threshold_factor).flatten()
-    idx = np.array([[com, indices[0]], [com, indices[-1]]])
-
-    return idx
-
-def calculate_fwhm(arr, urange, vrange):
-    """
-    Calculates the FWHM for each row and column in a 2D numpy array.
-    ------------------------------------------------------------------------------------
-    Parameters:
-        arr (numpy.ndarray): A 2D numpy array.
-    ------------------------------------------------------------------------------------
-    Returns:
-    Tuple of two numpy arrays containing the FWHM for each row and column respectively.
-    """
-    fwhm_row = []
-    fwhm_col = []
-    
-    for row in arr:
-        max_val = np.max(row)
-        half_max = max_val / 2.0
-        left_idx = np.argmin(np.abs(row[:len(row) // 2] - half_max))
-        right_idx = np.argmin(np.abs(row[len(row) // 2:] - half_max)) + len(row) // 2
-        fwhm_row.append(right_idx - left_idx)
-    
-    for col in arr.T:
-        max_val = np.max(col)
-        half_max = max_val / 2.0
-        left_idx = np.argmin(np.abs(col[:len(col) // 2] - half_max))
-        right_idx = np.argmin(np.abs(col[len(col) // 2:] - half_max)) + len(col) // 2
-        fwhm_col.append(right_idx - left_idx)
-        
-    return np.mean(fwhm_row) * urange, np.mean(fwhm_col) * vrange
-
-def calculate_pixel_com(x, y, stack):
-    """
-    Calculates the center of mass of a pixel for a given pixel position (x,y) and a stack of images.
-    
-    Parameters:
-    x (int): x-coordinate of the pixel
-    y (int): y-coordinate of the pixel
-    stack (ndarray): stack of images as a 3D numpy array
-    
-    Returns:
-    value (tuple of int): the x and y coordinate of the center of mass of the pixel, rounded to the nearest integer
-    """
-    value = center_of_mass(stack[:,x,y])[0]
-    return value
-
-# See if save_images can be parallelized to run on cluster
 def save_images(*args):
     '''
     Saves images generated by the forward function for different phi and chi values in a specified folder path.
@@ -191,26 +156,6 @@ def save_images(*args):
             np.save(fpath + fn_prefix + fn_suffix, im)
             # print(fn_suffix, ': Done')
     return True
-
-# def save_images(*args):
-#     
-#     phi_r, phi_s, chi_r, chi_s, fpath, fn_prefix, ftype = args
-#     # Extract input parameters for phi and chi ranges and steps
-#     Phi = np.linspace(-phi_r, phi_r, phi_s)
-#     Chi = np.linspace(-chi_r, chi_r, chi_s)
-
-
-#     for i in tqdm(range(phi_s)):
-#         for j in range(chi_s):
-#             # Calculate forward model for given phi and chi values
-#             qi_field, im = forward(phi = Phi[j], chi = Chi[i])
-#             # Generate filename suffix with padded zeros for indexing
-#             fn_suffix = ("{0}".format(i).zfill(4) + "_" +
-#                          "{0}".format(j).zfill(4) + ftype)
-#             # Save the image in numpy format in the specified path
-#             np.save(fpath + fn_prefix + fn_suffix, im)
-#             # print(fn_suffix, ': Done')
-#     return True
 
 def fastgrainplot(imagestack, vlist, ulist):
     '''
@@ -292,16 +237,12 @@ def fastgrainplot(imagestack, vlist, ulist):
     ukurt = (u4sum/inttot - 4*unorm*u3sum/inttot + 6*unorm**2*u2sum/inttot - 3*unorm**4)/(uvar**2)
     # unormnn = unorm[~np.isnan(unorm)]
     # vnormnn = vnorm[~np.isnan(vnorm)]
-
     # sort1 = np.sort(unormnn.flatten())
     # sort2 = np.sort(vnormnn.flatten())
-
     # Imin1 = sort1[int(round(len(sort1)*0.02))]
     # Imax1 = sort1[int(round(len(sort1)*0.98))]
-
     # Imin2 = sort2[int(round(len(sort2)*0.02))]
     # Imax2 = sort2[int(round(len(sort2)*0.98))]
-
     # C = np.zeros(imglist[0].shape+(3,))
     # C[...,0] = (unorm-Imin1)/(Imax1-Imin1)
     # C[...,1] = (vnorm-Imin2)/(Imax2-Imin2)
@@ -364,55 +305,6 @@ def calc_moments(image, u_range, v_range, u_steps, v_steps):
     moments['nu03'] = moments['mu03'] / np.sum(image)**(3/2+1) # skewness
     moments['nu30'] = moments['mu30'] / np.sum(image)**(3/2+1) # skewness
     return moments
-
-def calc_COM_FWHM(image, *args):
-    """
-    Calculate the moments, center of mass (CoM), and full width at half maximum (FWHM) for an input image.
-    ---------------------------------------------------------------------------------------------------------------
-    Parameters:
-        image (numpy.ndarray): Input image as a NumPy array.
-    ---------------------------------------------------------------------------------------------------------------
-    Returns:
-    tuple: A tuple containing the CoM and FWHM for each dimension, in the following order: (uc, vc, uFWHM, vFWHM).
-    ---------------------------------------------------------------------------------------------------------------
-    Raises:
-        TypeError: If the input image is not a NumPy array.
-        ValueError: If the input image contains invalid values, such as NaN or infinity.
-    """
-    # Validate input image
-    if not isinstance(image, np.ndarray):
-        raise TypeError("Input image must be a NumPy array")
-    if not np.all(np.isfinite(image)):
-        raise ValueError("Input image contains invalid values")
-    
-    # Calculate moments
-    MXX = calc_moments(image, *args)
-    
-    M00 = MXX['m00']
-    M10 = MXX['m10'] 
-    M01 = MXX['m01']
-    M20 = MXX['m20']
-    M02 = MXX['m02']
-
-    vc = M10 / M00 
-    uc = M01 / M00
-
-    # Calculate the FWHM
-    varx = M20 / M00 - vc ** 2 
-    vary = M02 / M00 - uc ** 2
-    if varx <= 0:
-        varx = np.nan
-    if vary <= 0:
-        vary = np.nan
-    # sigmax = chi, sigmay = phi
-    sigmax = np.sqrt(varx)
-    sigmay = np.sqrt(vary)
-    
-    vFWHM = 2.355 * sigmax
-    uFWHM = 2.355 * sigmay
-
-    # Return the CoM and FWHM for each dimension
-    return uc, vc, uFWHM, vFWHM 
 
 def save_edfs(imstack, v, u, fpath, fn_prefix):
     """
@@ -506,210 +398,3 @@ def load_images(fpath, u_steps, v_steps, file_ext = ".npy"):
     
     # Return stack, stack_reshape, and dimensions
     return stack, stack_reshape, dim_1, dim_2
-
-
-
-def inv_polefigure_colors2(o_grid, test_grid, float_bit=np.float16):
-    """
-    Maps the RGB values for a color gradient onto a grid of points.
-    ------------------------------------------------------------------------------------------------------------------
-    Parameters:
-        o_grid (numpy array, dtype: object): Np.array containing the angular data for the original grid (2D).
-        test_grid (numpy array, dtype: object): Np.array containing the angular data for the test grid (2D).
-        float_bit (numpy dtype, optional): Floating point precision for RGB values.
-    ------------------------------------------------------------------------------------------------------------------
-    Returns:
-        xy_colors_griddata (numpy.ndarray): Array containing the RGB and alpha values for each point in the original grid.
-        xydata (numpy.ndarray): Array containing the coordinate data for each point in the original grid.
-    """
-    
-    # Define the RGB values for the color gradient
-    key_xy_RGBs = np.array([
-        [1, 1, 1, 1],    # White
-        [0, 1, 1, 1],    # Cyan
-        [0, 1, 0, 1],    # Green
-        [1, 0.65, 0, 1], # Orange
-        [1, 0, 0, 1],    # Red
-        [0, 0, 1, 1],    # Blue
-        [1, 0, 0.5, 1]   # Magenta
-    ], dtype=float_bit)
-
-    # Extract the angular data for the original and test grids
-    o_chi, o_diffry = o_grid[0], o_grid[1]
-    test_chi, test_diffry = test_grid[0], test_grid[1]
-    
-    # Define the coordinates for the RGB values
-    key_xy_points = np.array([
-        [0, 0],                          # White center
-        [0, np.min(test_diffry)],        # Cyan min y-axis center x-axis
-        [np.max(test_chi), np.min(test_diffry)], # Green min y-axis max x-axis
-        [np.max(test_chi), np.max(test_diffry)], # Orange max y-axis max x-axis
-        [0, np.max(test_diffry)],   # Red max y-axis center x-axis
-        [np.min(test_chi), np.min(test_diffry)], # Blue min y-axis min x-axis
-        [np.min(test_chi), np.max(test_diffry)]  # Magenta max y-axis min x-axis
-    ], dtype=float_bit)
-        
-    # Create a 2D array of all coordinate combinations
-    xydata = np.array([(x, y) for x in o_chi for y in o_diffry], dtype=float_bit)
-    
-    # Map the RGB values onto the 2D array of coordinates using griddata
-    reds = griddata(key_xy_points, key_xy_RGBs.T[0], xydata)
-    greens = griddata(key_xy_points, key_xy_RGBs.T[1], xydata)
-    blues = griddata(key_xy_points, key_xy_RGBs.T[2], xydata)
-    alphas = griddata(key_xy_points, key_xy_RGBs.T[3], xydata)
-    xy_colors_griddata = np.vstack((reds, greens, blues, alphas)).T
-    
-    # Force the RGB values to be within range [0, 1]
-    xy_colors_griddata[xy_colors_griddata<0] = 0.0
-    xy_colors_griddata[xy_colors_griddata>1] = 1.0
-    
-    return xy_colors_griddata, xydata
-
-def inv_polefigure_colors1(o_grid, test_grid, float_bit=np.float16):
-    """
-    Maps the RGB values for a color gradient onto a grid of points.
-    ------------------------------------------------------------------------------------------------------------------
-    Parameters:
-        o_grid (numpy array, dtype: object): Np.array containing the angular data for the original grid (2D).
-        test_grid (numpy array, dtype: object): Np.array containing the angular data for the test grid (2D).
-        float_bit (numpy dtype, optional): Floating point precision for RGB values.
-    ------------------------------------------------------------------------------------------------------------------
-    Returns:
-        xy_colors_griddata (numpy.ndarray): Array containing the RGB and alpha values for each point in the original grid.
-        xydata (numpy.ndarray): Array containing the coordinate data for each point in the original grid.
-    """
-    
-    # Define the RGB values for the color gradient
-    key_xy_RGBs = np.array([
-        [0, 0.6, 0, 1],    # Green
-        [0, 1, 0, 1],   # Green
-        [0, 0.3, 0, 1],    # Green
-        [1, 0, 0, 1],    # Red
-        [0.6, 0, 0, 1],    # Red
-        [0.3, 0, 0, 1], # Red
-        [0, 0, 0.3, 1],    # Blue
-        [0, 0, 0.6, 1],     # Blue
-        [0, 0, 1, 1],     # Blue
-        [0, 0.6, 0.6, 1],    # Cyan
-        [0, 1, 1, 1],     # Cyan
-        [0, 0.3, 0.3, 1],     # Cyan
-        [0.6, 0.6, 0, 1],    # Yellow
-        [1, 1, 0, 1],     # Yellow
-        [0.3, 0.3, 0, 1],     # Yellow
-    ], dtype=float_bit)
-
-    # Extract the angular data for the original and test grids
-    o_chi, o_diffry = o_grid[0], o_grid[1]
-    test_chi, test_diffry = test_grid[0], test_grid[1]
-    quantile_chi = abs(test_chi[0] - test_chi[-1])/4
-    # Define the coordinates for the RGB values
-    key_xy_points = np.array([
-        [0, 0],                          # Green center
-        [0, np.min(test_diffry)],        # Green min y-axis center x-axis
-        [0, np.max(test_diffry)],   # Green max y-axis center x-axis
-        [np.max(test_chi), np.min(test_diffry)], # Red min y-axis max x-axis
-        [np.max(test_chi), 0], # Red max y-axis max x-axis
-        [np.max(test_chi), np.max(test_diffry)], # Red min y-axis min x-axis
-        [np.min(test_chi), np.max(test_diffry)],  # Blue max y-axis min x-axis
-        [np.min(test_chi), 0],  # Blue max y-axis min x-axis
-        [np.min(test_chi), np.min(test_diffry)],  # Blue max y-axis min x-axis
-        [-quantile_chi, 0],                          # Cyan center
-        [-quantile_chi, np.min(test_diffry)],        # Cyan min y-axis center x-axis
-        [-quantile_chi, np.max(test_diffry)],   # Cyan max y-axis center x-axis
-        [quantile_chi, 0],                          # Yellow center
-        [quantile_chi, np.min(test_diffry)],        # Yellow min y-axis center x-axis
-        [quantile_chi, np.max(test_diffry)],   # Yellow max y-axis center x-axis
-    ], dtype=float_bit)
-        
-    # Create a 2D array of all coordinate combinations
-    xydata = np.array([(x, y) for x in o_chi for y in o_diffry], dtype=float_bit)
-    
-    # Map the RGB values onto the 2D array of coordinates using griddata
-    reds = griddata(key_xy_points, key_xy_RGBs.T[0], xydata)
-    greens = griddata(key_xy_points, key_xy_RGBs.T[1], xydata)
-    blues = griddata(key_xy_points, key_xy_RGBs.T[2], xydata)
-    alphas = griddata(key_xy_points, key_xy_RGBs.T[3], xydata)
-    xy_colors_griddata = np.vstack((reds, greens, blues, alphas)).T
-    
-    # Force the RGB values to be within range [0, 1]
-    xy_colors_griddata[xy_colors_griddata<0] = 0.0
-    xy_colors_griddata[xy_colors_griddata>1] = 1.0
-    
-    return xy_colors_griddata, xydata
-
-def extreme_map(residuals, dim1, dim2, thresh = 0.1):
-    # Find the indices of residual_mask
-    xtremap = np.zeros((dim1, dim2))
-    misori_map = np.zeros((dim1, dim2))
-    residual_mask = np.where(residuals >= np.max(residuals)*thresh, 1, 0)
-
-    for i in tqdm(range(residual_mask.shape[2])):
-        for j in range(residual_mask.shape[3]):
-                    
-            indices = np.argwhere(residual_mask[:,:,i,j] > 0)
-
-            y_ind = indices[np.argmax(abs(indices[:,1] - residual_mask.shape[1]//2))][-1]
-            y_inds = np.where(indices[:,1] == y_ind)[0]
-            x_inds = np.asarray((np.min(indices[y_inds][:,0]), np.max(indices[y_inds][:,0])))
-            x_dists = np.argmax(abs(x_inds-residual_mask.shape[1]//2))
-            # x_ind = x_inds[x_dists]
-            x_ind = np.round(center_of_mass(residual_mask[:,:,i,j])).astype(int)[1]
-            cmap_coords = x_ind, y_ind
-            flattened_index = np.ravel_multi_index((y_ind, x_ind), residual_mask.shape[:2])
-            xtremap[i,j] = flattened_index
-            dist = np.sqrt(Phi[cmap_coords[0]] ** 2 + Chi[cmap_coords[1]] ** 2)
-            if Chi[cmap_coords[1]] <= 0:
-                dist *= -1
-            misori_map[i,j] = dist
-    return xtremap, misori_map
-
-
-
-
-def calc_plots(images, images_reshaped, thresh, u_range, v_range, u_steps, v_steps, dim_1, dim_2):
-    '''
-    Calls different functions for plotting purposes.
-    
-    Parameters:
-        images (ndarray): 3D NumPy array of loaded image files.
-        images_reshape (ndarray): 4D NumPy array of reshaped image stack spanning both spatial and angular space.
-        thresh (float): Percentage of maximum int to threshold images
-        u_range (float): range of the u motor
-        v_range (float): range of the v motor
-        u_steps (int): number of steps taken with u motor
-        v_steps (int): number of steps taken with v motor
-        dim_1 (int): 
-        dim_2 (int): 
-    
-    Raises:
-        TypeError: If the input image is not a stack of NumPy array.
-        ValueError: If the input image contains invalid values, such as NaN or infinity.
-        ValueError: If the threshold value is less than 0% or above 100%.
-    '''
-    # Validate input image
-    if not isinstance(images, np.ndarray):
-        raise TypeError("Input images must be NumPy arrays")
-    if not np.all(np.isfinite(images)):
-        raise ValueError("Input image contains invalid values")
-    if not thresh <= 1.0 and thresh >= 0.0:
-        raise ValueError("Invalid values for threshold")
-
-    
-    # Iterate through the stack of images and calculate the center of mass of each pixel
-    com_values = np.zeros((dim_1, dim_2,))
-    FWHM_phi_values = np.zeros((dim_1, dim_2))
-    FWHM_chi_values = np.zeros((dim_1, dim_2))
-    min_ind_values = np.zeros((dim_1, dim_2,))
-    max_ind_values = np.zeros((dim_1, dim_2,))
-
-
-    for i in tqdm(range(dim_1)):
-        for j in range(dim_2):
-            com_values[i, j] = calculate_pixel_com(i, j, images)
-            FWHM_phi_values[i,j], FWHM_chi_values[i,j] = calculate_fwhm(images_reshaped[:,:,i,j], u_range, v_range)
-            min_ind_values[i,j], max_ind_values[i,j] = np.ravel_multi_index(
-                find_min_max_indices(i, j, images, thresh, v_steps, u_steps).T, (v_steps, u_steps))
-
-    min_ind_values += 1
-    max_ind_values += 1
-    return com_values, FWHM_phi_values, FWHM_chi_values, min_ind_values, max_ind_values
