@@ -49,7 +49,7 @@ stack_dislocs, stack_reshape_dislocs, dim_1_dislocs, dim_2_dislocs = load_images
 
 
 plt.title('Angular spread of example pixel')
-plt.imshow(stack_no_dislocs.reshape((chi_steps, phi_steps, dim_1_no_dislocs, dim_2_no_dislocs))[:,:,dim_1_no_dislocs//2,dim_2_no_dislocs//2], origin='lower', aspect='auto',
+plt.imshow(stack_no_dislocs.reshape((chi_steps, phi_steps, dim_1_no_dislocs, dim_2_no_dislocs))[:,:,dim_1_no_dislocs//2-2,dim_2_no_dislocs//2-2], origin='lower', aspect='auto',
            extent = [-np.deg2rad(phi_range), np.deg2rad(phi_range), 
                      -np.deg2rad(chi_range), np.deg2rad(chi_range)])
 plt.colorbar()
@@ -72,10 +72,6 @@ plt.show()
 pic = stack_dislocs.reshape((chi_steps, phi_steps, dim_1_dislocs, dim_2_dislocs))[15,15]
 reshaped_stack = stack_dislocs.reshape((chi_steps, phi_steps, dim_1_dislocs, dim_2_dislocs))
 reshaped_stack_clean = stack_no_dislocs.reshape((chi_steps, phi_steps, dim_1_no_dislocs, dim_2_no_dislocs))
-# reshaped_residuals = reshaped_stack-reshaped_stack_clean
-# reshaped_residuals[reshaped_residuals<0] = 0
-# stack_residuals = stack_dislocs-stack_no_dislocs
-
 
 com = center_of_mass(reshaped_stack_clean[:,:,-1,-1])
 plt.imshow(reshaped_stack_clean[:,:,-1,-1].T,)
@@ -112,10 +108,6 @@ plt.show()
 Chi_high = np.linspace(-chi_range,chi_range,chi_steps*100)
 
 
-
-
-
-
 phi_list = np.zeros((dim_1_dislocs, dim_2_dislocs))
 chi_list = np.zeros((dim_1_dislocs, dim_2_dislocs))
 shifted_Chi = np.deg2rad(np.linspace(-chi_range+ shift_rads,chi_range+shift_rads,chi_steps*20))
@@ -125,8 +117,6 @@ for i in tqdm(range(reshaped_stack.shape[2])):
         x_ind, y_ind = center_of_mass(reshaped_stack[:,:,i,j])
         phi_list[i,j] = Phi_high[np.round(y_ind*20).astype(int)]
         chi_list[i,j] = shifted_Chi[np.round(x_ind*20).astype(int)]
-
-
 
 
 # Plot of three components of qi in (x, y, z=0) plane
@@ -143,12 +133,6 @@ axs[0].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
 axs[0].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
 # axs[0].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
 axs[0].grid(False)
-
-# # Add contours for qi_1
-# contour_levels1 = np.linspace(-3E-4, 3E-4, 10)  # Adjust the contour levels as needed
-# contour1 = axs[0].contour(Y, X, qi_fieldp[0, :, :, zl_steps // 2].squeeze(), 
-#                           levels = contour_levels1, colors='black')
-
 
 # Customize colorbar with scientific notation
 cbar1 = fig.colorbar(im1, ax=axs[0], format=ScalarFormatter(useMathText=True))
@@ -167,11 +151,6 @@ axs[1].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
 axs[1].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
 # axs[1].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
 axs[1].grid(False)
-
-# # Add contours for qi_2
-# contour_levels2 = np.linspace(-3E-4, 3E-4, 10)  # Adjust the contour levels as needed
-# contour2 = axs[1].contour(Y, X, qi_fieldp[1, :, :, zl_steps // 2].squeeze(), 
-#                           levels = contour_levels2, colors='black')
 
 # Customize colorbar with scientific notation
 cbar2 = fig.colorbar(im2, ax=axs[1], format=ScalarFormatter(useMathText=True))
@@ -203,12 +182,6 @@ axs[0].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
 # axs[0].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
 axs[0].grid(False)
 
-# # Add contours for qi_1
-# contour_levels1 = np.linspace(-3E-4, 3E-4, 10)  # Adjust the contour levels as needed
-# contour1 = axs[0].contour(Y, X, qi_fieldp[0, :, :, zl_steps // 2].squeeze(), 
-#                           levels = contour_levels1, colors='black')
-
-
 # Customize colorbar with scientific notation
 cbar1 = fig.colorbar(im1, ax=axs[0], format=ScalarFormatter(useMathText=True))
 cbar1.formatter.set_powerlimits((-2, 2))  # Adjust the power limits as needed
@@ -223,11 +196,6 @@ axs[1].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
 axs[1].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
 # axs[1].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
 axs[1].grid(False)
-
-# # Add contours for qi_2
-# contour_levels2 = np.linspace(-3E-4, 3E-4, 10)  # Adjust the contour levels as needed
-# contour2 = axs[1].contour(Y, X, qi_fieldp[1, :, :, zl_steps // 2].squeeze(), 
-#                           levels = contour_levels2, colors='black')
 
 # Customize colorbar with scientific notation
 cbar2 = fig.colorbar(im2, ax=axs[1], format=ScalarFormatter(useMathText=True))
