@@ -1,6 +1,6 @@
 # Geometrical_Optics-master
 
-Welcome to the Geometrical Optics Code Repository! This repository serves as a snapshot of the powerful codebase used to generate the results presented in our recent article. If you're looking to understand, reproduce, or build upon the optical simulations that were an integral part of our research, you've come to the right place.
+Welcome to the Geometrical Optics Code Repository! This repository serves as a snapshot of the powerful codebase used to generate the results presented in our recent article. If you're looking to understand, reproduce, or build upon the geometrical optics simulations that were an integral part of our research, you've come to the right place.
 
 ## Introduction
 Optical phenomena play a vital role in a wide range of scientific and engineering fields, from physics and astronomy to telecommunications and medical imaging. This repository contains the Geometrical Optics code that powered the simulations of Dark Field X-ray Microscopy (DFXM) and analyses discussed in our article, which is available [here](link-to-article).
