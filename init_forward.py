@@ -73,12 +73,13 @@ pic = stack_dislocs.reshape((chi_steps, phi_steps, dim_1_dislocs, dim_2_dislocs)
 reshaped_stack = stack_dislocs.reshape((chi_steps, phi_steps, dim_1_dislocs, dim_2_dislocs))
 reshaped_stack_clean = stack_no_dislocs.reshape((chi_steps, phi_steps, dim_1_no_dislocs, dim_2_no_dislocs))
 
+# Going to higher resolution, Chi can shift. Here it is corrected.
 com = center_of_mass(reshaped_stack_clean[:,:,-1,-1])
 plt.imshow(reshaped_stack_clean[:,:,-1,-1].T,)
 plt.scatter(*com, label = com)
 plt.legend()
 Chi_high = np.linspace(-chi_range,chi_range,chi_steps*100)
-shift = com[0]*100 - (chi_steps*100 / 2)  # Assuming data is 1D, so center_of_mass[0] gives the center position
+shift = com[0]*100 - (chi_steps*100 / 2)
 shift_rads = Chi_high[int(abs(shift))]-Chi_high[0]
 
 shifted_Chi = np.linspace(-chi_range+ shift_rads,chi_range+shift_rads,chi_steps)
@@ -88,7 +89,7 @@ shifted_Chi = np.linspace(-chi_range+ shift_rads,chi_range+shift_rads,chi_steps)
 com = center_of_mass(reshaped_stack[:,:,256,85])
 x, y = np.deg2rad(Phi[int(com[1])]), np.deg2rad(Chi[int(com[0])])
 
-fig, axs = plt.subplots(1, 2, figsize=(10, 4))  # Create a figure with two subplots
+fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
 
 axs[0].imshow(reshaped_stack[chi_steps//2, phi_steps//2].T, aspect='auto', origin='lower')
@@ -119,8 +120,8 @@ for i in tqdm(range(reshaped_stack.shape[2])):
         chi_list[i,j] = shifted_Chi[np.round(x_ind*20).astype(int)]
 
 
-# Plot of three components of qi in (x, y, z=0) plane
-fig, axs = plt.subplots(1, 2, figsize=(10, 4))  # Create a figure with two subplots
+# Plot of two components of qi in (x, y, z=0) plane
+fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
 # Plot qi_1
 im1 = axs[0].imshow((phi_list*-1).T, interpolation='none',
@@ -167,8 +168,8 @@ X = np.linspace(-xl_start, xl_start, xl_steps) * 1E6  # rulers on the x-axis in 
 Y = np.linspace(-yl_start, yl_start, yl_steps) * 1E6  # rulers on the y-axis in µm
 Z = np.linspace(-zl_start, zl_start, zl_steps) * 1E6  # rulers on the z-axis in µm
 
-# Plot of three components of qi in (x, y, z=0) plane
-fig, axs = plt.subplots(1, 2, figsize=(10, 4))  # Create a figure with two subplots
+# Plot of two components of qi in (x, y, z=0) plane
+fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
 # Plot qi_1
 im1 = axs[0].imshow(qi_fieldp[0, :, :, zl_steps // 2].squeeze(), extent=[Y.min(), Y.max(), X.min(), X.max()],
