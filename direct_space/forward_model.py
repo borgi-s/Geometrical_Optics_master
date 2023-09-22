@@ -92,11 +92,11 @@ prob_z = np.exp(-0.5*(rl[2]/zl_rms)**2)
 # for dis 0.25, ndis >= 7501
 # for dis 0.5, ndis >= 1151
 # for dis 1, ndis >= 501 
-# for dis 2, ndis >= 125
-# for dis 4, ndis >= 51
+# for dis 2, ndis >= 251
+# for dis 4, ndis >= 151
 
 
-ndis = 151
+ndis = 151 # number of dislocations
 dis = 4 # units of micrometer
 def Find_Hg(dis, ndis, psize, zl_rms, I = np.identity(3), h=-1, k=1, l=-1):
     Q_norm = np.sqrt(h * h + k * k + l * l) # We have assumed B_0 = I
@@ -125,7 +125,7 @@ def Find_Hg(dis, ndis, psize, zl_rms, I = np.identity(3), h=-1, k=1, l=-1):
 
 Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
 
-def forward(Hg, phi = 0, chi = 0, TwoDeltaTheta = 0):
+def forward(Hg, phi = 0, chi = 0, TwoDeltaTheta = 0, qi_return = False):
     '''
     This function calculates the forward model image for a given set of angles on
     the goniometer holding the sample, this is based on equations from a paper. 
@@ -191,5 +191,10 @@ def forward(Hg, phi = 0, chi = 0, TwoDeltaTheta = 0):
     
     # Add probability distribution to forward model image
     np.add.at(im_1, tuple(indices.T), pro)
-    # Return scattering vector in imaging space and forward model image
-    return im_1, qi_field
+    if qi_return == True:
+        qi_field = qi.reshape(3,NN1,NN2,NN3)
+        # Return scattering vector in imaging space and forward model image
+        return im_1, qi_field
+    else:
+        # Return the forward model image
+        return im_1
