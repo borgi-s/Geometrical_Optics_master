@@ -398,3 +398,40 @@ def load_images(fpath, u_steps, v_steps, file_ext = ".npy"):
     
     # Return stack, stack_reshape, and dimensions
     return stack, stack_reshape, dim_1, dim_2
+
+
+def load_image(file_path):
+    return np.load(file_path)
+
+def load_images_parallel(fpath, u_steps, v_steps, file_ext=".npy"):
+    if not os.path.isdir(fpath):
+        raise ValueError("Directory does not exist: {}".format(fpath))
+    
+    file_list = [f for f in os.listdir(fpath) if f.endswith(file_ext)]
+    
+    if not file_list:
+        raise ValueError("Directory is empty or does not contain any {} files: {}".format(file_ext, fpath))
+    
+    file_list.sort()
+    num_files = len(file_list)
+    
+    # Initialize a ThreadPoolExecutor with a number of threads
+    # You can adjust the number of threads based on your system's capabilities
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        # Load images from files into a list of numpy arrays using parallel execution
+        loaded_images = list(executor.map(lambda file: np.load(os.path.join(fpath, file)), file_list))
+    
+    # Create an empty stack
+    stack = np.empty((num_files, *loaded_images[0].shape))
+    
+    # Populate the stack with loaded images
+    for i, img in enumerate(loaded_images):
+        stack[i, :, :] = img
+    
+    dim_1, dim_2 = stack.shape[1], stack.shape[2] 
+    stack_reshape = stack.reshape((v_steps, u_steps, dim_1, dim_2))
+    
+    return stack, stack_reshape, dim_1, dim_2
+
+
+
