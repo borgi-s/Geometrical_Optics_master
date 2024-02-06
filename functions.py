@@ -6,6 +6,83 @@ from numba import jit
 from concurrent.futures import ThreadPoolExecutor
 from joblib import Parallel, delayed, cpu_count
 
+
+def Fd_find_mixed(rl, Us, Ud_mix, a, Theta, dis = 1, ndis = 1, b = 2.862e-4, ny = 0.334, misorientation = False, t_vec = None):
+    '''
+    Calculates the displacement field due to multiple edge dislocations in a 
+    crystal lattice, given the lab coordinates and accompanying rotation matrices.
+    The dislocation wall will start at the center of the system and branch out as 
+    more is added. If more than 100 dislocations are needed the function will call
+    multi_dislocs_parallel to run with multiprocessing for saving time. This requires
+    a lot of memory.
+    -----------------------------------------------------------------------------
+    Parameters:
+    rl: np.ndarray of shape (3, X)
+        An array of coordinates in lab space, with X being the number of steps in 
+        each dimension. rl contains the x_lab, y_lab, z_lab coordinates.
+    Ud: np.ndarray of shape (3, 3)
+        A rotational matrix used for going from dislocation space to grain space.
+    Us: np.ndarray of shape (3, 3)
+        A rotational matrix used for going from grain space to sample space.
+    Theta: np.ndarray of shape (3, 3)
+        A rotational matrix used for going from sample space to lab space.
+    dis : int, optional
+        Distance in micrometer between each edge dislocation in the dislocation coordinate system. 
+        Default is 1.
+    ndis : int, optional
+        Number of edge dislocations to include. 
+        Default is 1.
+    b : float, optional
+        Magnitude of the Burger's vector. 
+        Default is 2.862e-4 [micrometer] - 2.862 [Aangstrom].
+    ny : float, optional
+        Poisson ratio. Default is 0.334.
+        
+    Returns
+    -----------------------------------------------------------------------------
+    numpy.ndarray
+        Displacement gradient field induced by set of edge dislocations, 
+        in grain space. Shape is (X, 3, 3).
+    '''
+    # Rotate lab coordinates to dislocation coordinates
+    rs = Theta @ rl # sample
+    rc = Us.T @ rs # crystal
+    rd = Ud_mix.T @ rc # dislocation
+
+    # Initialize 3D tensor for the dislocation-induced deformation gradient field.
+    Fdd = np.zeros([len(rd[-1]), 3, 3])
+    alpha = 1e-20
+
+    # Calculate intermediate values for deformation gradient tensor calculation.
+    sqx = rd[0] * rd[0]
+    sqy = rd[1] * rd[1]
+    denom = (sqx + sqy) * (sqx + sqy) + alpha
+    bfactor = b / (4 * np.pi * (1 - ny))
+    nyfactor = 2 * ny * (sqx + sqy)
+
+    # Calculate components of the deformation gradient tensor.
+    Fdd[:, 0, 0] = -rd[1] * (3 * sqx + sqy - nyfactor) / denom
+    Fdd[:, 0, 1] =  rd[0] * (3 * sqx + sqy - nyfactor) / denom
+    Fdd[:, 1, 0] = -rd[0] * (3 * sqy + sqx - nyfactor) / denom
+    Fdd[:, 1, 1] =  rd[1] * (sqx - sqy - nyfactor) / denom
+
+    # Finish the calculation of Fdd
+    Fdd *= bfactor
+    Fdd *= np.cos(np.deg2rad(a))
+    # Calculate intermediate values for deformation gradient tensor calculation.
+    sqz = rd[2] * rd[2]
+    denom1 = (sqz) + (sqy) + alpha
+    bfactor1 = b / (2 * np.pi)
+
+    # Calculate components of the deformation gradient tensor.
+    Fdd[:, 0, 1] += ((-rd[2] / denom1) * bfactor1 * np.sin(np.deg2rad(a)))
+    Fdd[:, 0, 2] += ((rd[1] / denom1) * bfactor1 * np.sin(np.deg2rad(a)))
+
+    # Finish the calculation of Fdd
+    Fdd += np.identity(3)
+    return Ud_mix @ Fdd @ Ud_mix.T # Return the rotated Fdd -> Fg
+
+
 def rotatedU(axis, alpha, U, coordtype):
     # rotates U according to rotation vector defined in either sample or cryst coords as specified by coordtype
     # angle in degrees
@@ -23,6 +100,13 @@ def rotatedU(axis, alpha, U, coordtype):
     Urot = np.dot(R, U)
 
     return Urot
+def check_path(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+        print(f"Path {path} created.")
+    else:
+        print(f"Path {path} already exists.")
+
 
 def check_folder(path, folder_name):
     folder_path = os.path.join(path, folder_name)

@@ -3,7 +3,7 @@ import numpy as np
 import fabio
 from scipy.ndimage import center_of_mass
 from scipy.interpolate import griddata
-from functions import check_folder
+from functions import check_folder, check_path
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from direct_space.forward_model import forward, Find_Hg

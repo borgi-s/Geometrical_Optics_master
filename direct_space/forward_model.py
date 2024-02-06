@@ -7,28 +7,28 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from pprint import pprint
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
-from functions import (fast_inverse2, load_or_generate_Hg, rotatedU)
+from functions import (fast_inverse2, load_or_generate_Hg, rotatedU, Fd_find_mixed)
 
 
 fast_inverse2(np.random.random(size = (100,3,3))); # DO NOT OUTCOMMENT, this line jit compiles "fast_inverse2" function so performance on larger arrays are obtained
 # INPUT instrumental settings, related to direct space resolution function
 psize = 40E-9 # pixel size in units of m, in the object plane
-zl_rms = 0.15E-6/2.35  # rms value of Gaussian beam profile, in m, centered at 0
+zl_rms = 0.6E-6/2.35  # rms value of Gaussian beam profile, in m, centered at 0
 theta_0 = 17.953/2*np.pi/180 # in rad
 # input reciprocal space resolution function (in the imaging system)
 # by loading an already generated version Resq_i and insertin q_i-ranges and steps here
 
 # INPUT FOV
 Npixels = 510 # nr of pixels on detector (same in both y and z) - sets the FOV.
-Nsub = 2     # NN1^3 = (Nsub*Npixels)^3 is the total number of "rays" probed
+Nsub = 1     # NN1^3 = (Nsub*Npixels)^3 is the total number of "rays" probed
 NN1 = int(Npixels//3*Nsub)# 3 is used as 1/sin(2*~18 deg) = 3.24
 NN2 = int(Npixels*Nsub)
 NN3 = int(Npixels//30*Nsub)
 
 # Choose sys.path[0] or sys.path[1] depending on parent folder
 # Define the file paths for reciprocal array
-pkl_fpath = sys.path[0]+'/reciprocal_space/pkl_files/'
-pkl_fn = 'Resq_i_20230913_1308.pkl' # Change accordingly
+pkl_fpath = sys.path[0]+'/pkl_files/'
+pkl_fn = 'Resq_i_20240131_1014.pkl' # Change accordingly
 vars_fn = os.path.splitext(pkl_fn)[0] + '_vars.txt'
 print('Loading Resq_i.')
 # Load the pickle file
@@ -96,7 +96,7 @@ prob_z = np.exp(-0.5*(rl[2]/zl_rms)**2)
 # for dis 4, ndis >= 151
 
 
-ndis = 151 # number of dislocations
+ndis = 1 # number of dislocations
 dis = 4 # units of micrometer
 def Find_Hg(dis, ndis, psize, zl_rms, I = np.identity(3), h=-1, k=1, l=-1):
     Q_norm = np.sqrt(h * h + k * k + l * l) # We have assumed B_0 = I
@@ -123,7 +123,22 @@ def Find_Hg(dis, ndis, psize, zl_rms, I = np.identity(3), h=-1, k=1, l=-1):
                     data.write(f"{key}: {value}\n\n")
     return Hg, q_hkl
 
-Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
+# Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
+
+h = -1
+k = 1
+l = -1 
+Q_norm = np.sqrt(h * h + k * k + l * l) # We have assumed B_0 = I
+q_hkl = np.asarray([h, k, l]) / Q_norm
+# Us = np.array([[1 / np.sqrt(6),    -2 / np.sqrt(6),   1 / np.sqrt(6)],
+#                [ 1 / np.sqrt(2),    0,                -1 / np.sqrt(2)],
+#                [ 1 / np.sqrt(3),   1 / np.sqrt(3),   1 / np.sqrt(3)]])
+
+# Theta = np.array([[np.cos(theta),  0, np.sin(theta)],
+#                   [      0,        1,       0      ],
+#                   [-np.sin(theta), 0, np.cos(theta)]])
+
+
 
 def forward(Hg, phi = 0, chi = 0, TwoDeltaTheta = 0, qi_return = False):
     '''
