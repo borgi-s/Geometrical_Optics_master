@@ -1,4 +1,3 @@
-# Import necessary libraries
 import numpy as np
 import matplotlib.pyplot as plt
 import sys
@@ -83,7 +82,8 @@ class BurgersVectorsPlotter:
     def plot_images(self):
         self.Ud = self.calculate_ud_matrices()
         b_vecs = self.find_b_vectors()
-        
+        check_path(self.fpath1 + '\images')
+        check_path(self.fpath1 + '\im_data')
         for i in tqdm(range(self.Ud.shape[1])):
             for j in range(self.Ud.shape[0]):
                 Fg = Fd_find_mixed(rl * 1e6, Us, self.Ud[j, i], self.vec_angles[j], Theta)
@@ -98,13 +98,12 @@ class BurgersVectorsPlotter:
                 plt.xlabel('yl (µm)')
                 plt.title('Alpha = {0} degrees\nb = {1}\nn = {2}'.format(self.vec_angles[j], b_vecs[i] * np.sqrt(2),
                                                                           self.n * np.sqrt(3)))
-                check_path(self.fpath1 + '\images')
                 plt.savefig(self.fpath1 + "\images\\n_{0}_b_{1}_alpha_{2}_degrees.png".format(
                     str(self.n * np.sqrt(3)).replace(" ", "").replace("[", "").replace("]", "").replace(".", ""),
                     str(b_vecs[i] * np.sqrt(2)).replace(" ", "").replace("[", "").replace("]", "").replace(".", ""),
                     int(self.vec_angles[j])))
                 plt.close()
-                check_path(self.fpath1 + '\im_data')
+                
                 np.save(self.fpath1 + "\im_data\\n_{0}_b_{1}_alpha_{2}_degrees.npy".format(
                     str(self.n * np.sqrt(3)).replace(" ", "").replace("[", "").replace("]", "").replace(".", ""),
                     str(b_vecs[i] * np.sqrt(2)).replace(" ", "").replace("[", "").replace("]", "").replace(".", ""),
@@ -117,4 +116,4 @@ fpath1 = (r'C:\Users\borgi\Documents\Production\Identification_paper' +
 n = np.array([1, 1, 1], dtype=np.float64)
 burgers_vectors_plotter = BurgersVectorsPlotter(n, fpath1, extent)
 burgers_vectors_plotter.plot_vectors()
-# burgers_vectors_plotter.plot_images()
+burgers_vectors_plotter.plot_images()
