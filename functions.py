@@ -103,9 +103,9 @@ def rotatedU(axis, alpha, U, coordtype):
 def check_path(path):
     if not os.path.exists(path):
         os.makedirs(path)
-        print(f"Path {path} created.")
+        print(f"Path created: {path}")
     else:
-        print(f"Path {path} already exists.")
+        print(f"Path already exists.\n{path}")
 
 
 def check_folder(path, folder_name):

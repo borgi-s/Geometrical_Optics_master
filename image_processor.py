@@ -7,6 +7,35 @@ from functions import check_folder, check_path
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from direct_space.forward_model import forward, Find_Hg
+import re
+import glob
+import imageio
+
+def create_video_from_png(PNG_path, output_name, fps = 3):
+    # List PNG files in the path
+    png_files = glob.glob(os.path.join(PNG_path, 'Alpha_*_degrees.png'))
+
+    # Extract angle values from file names
+    angles = [int(re.search(r'Alpha_(\d+)_degrees', os.path.basename(file)).group(1)) for file in png_files]
+
+    # Sort PNG files based on angle values
+    sorted_png_files = [x for _, x in sorted(zip(angles, png_files))]
+
+    # Output video file
+    video_file = output_name
+
+    # Create a writer object to write the video
+    writer = imageio.get_writer(video_file, fps=fps)  # Adjust fps as needed
+
+    # Iterate over PNG files and add them as frames to the video
+    for png_file in sorted_png_files:
+        image = imageio.imread(png_file)
+        writer.append_data(image)
+
+    # Close the writer
+    writer.close()
+
+    print(f"Video saved as {video_file}")
 
 def save_image(args):
     '''
