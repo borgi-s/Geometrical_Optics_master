@@ -216,7 +216,7 @@ def Fd_find_mixed(rl, Us, Ud_mix, a, Theta, dis = 1, ndis = 1, b = 2.862e-4, ny 
     Fdd[:, 0, 0] = -rd[1] * (3 * sqx + sqy - nyfactor) / denom
     Fdd[:, 0, 1] =  rd[0] * (3 * sqx + sqy - nyfactor) / denom
     Fdd[:, 1, 0] = -rd[0] * (3 * sqy + sqx - nyfactor) / denom
-    Fdd[:, 1, 1] =  rd[1] * (sqx - sqy - nyfactor) / denom
+    Fdd[:, 1, 1] =  rd[1] * (sqx - sqy + nyfactor) / denom
 
     # Finish the calculation of Fdd
     Fdd *= bfactor
@@ -233,6 +233,16 @@ def Fd_find_mixed(rl, Us, Ud_mix, a, Theta, dis = 1, ndis = 1, b = 2.862e-4, ny 
     # Finish the calculation of Fdd
     Fdd += np.identity(3)
     return Ud_mix @ Fdd @ Ud_mix.T # Return the rotated Fdd -> Fg
+
+def Z_shift(xl_start,yl_start,zl_start,NN1, NN2, NN3, offset=0):
+    xl_range, xl_steps = -xl_start, NN1
+    yl_range, yl_steps = -yl_start, NN2
+    zl_range, zl_steps = -zl_start, NN3
+    rl = np.vstack(np.mgrid[-xl_range:xl_range:complex(xl_steps), 
+                            -yl_range:yl_range:complex(yl_steps),
+                            -zl_range-offset:zl_range-offset:complex(zl_steps)]).reshape(3,-1)
+    return rl
+
 
 def rotate_matrix_z_axis(matrix, angle_degrees):
     # Convert degrees to radians

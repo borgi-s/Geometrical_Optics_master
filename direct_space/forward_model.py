@@ -121,15 +121,15 @@ indices = np.vstack((ZI, YI)).T
 xl_range, xl_steps = -xl_start, NN1
 yl_range, yl_steps = -yl_start, NN2
 zl_range, zl_steps = -zl_start, NN3
-rl = np.vstack(np.mgrid[-xl_range:xl_range:complex(xl_steps), 
-                         -yl_range:yl_range:complex(yl_steps),
-                         -zl_range:zl_range:complex(zl_steps)]).reshape(3,-1)
+# rl = np.vstack(np.mgrid[-xl_range:xl_range:complex(xl_steps), 
+#                          -yl_range:yl_range:complex(yl_steps),
+#                          -zl_range:zl_range:complex(zl_steps)]).reshape(3,-1)
 
 
 
 
 
-prob_z = np.exp(-0.5*(rl[2]/zl_rms)**2)
+# prob_z = np.exp(-0.5*(rl[2]/zl_rms)**2)
 
 # To avoid edge effects:
 # for dis 0.25, ndis >= 7501
@@ -214,7 +214,7 @@ Theta = np.array([[np.cos(theta),  0, np.sin(theta)],
 # Hg -= np.identity(3)
 # Hg = Find_Hg(dis, ndis, psize, Ud, zl_rms, screw=False, edge = False)
 
-def forward(Hg, phi = 0, chi = 0, TwoDeltaTheta = 0, qi_return = False):
+def forward(Hg, phi = 0, chi = 0, TwoDeltaTheta = 0, prob_z = None, qi_return = False):
     '''
     This function calculates the forward model image for a given set of angles on
     the goniometer holding the sample, this is based on equations from a paper. 
