@@ -12,22 +12,23 @@ from matplotlib.colors import ListedColormap
 from matplotlib.ticker import ScalarFormatter
 
 # Define the range and number of steps for phi and chi
-phi_range, phi_steps = 0.0006*180/np.pi, 61
-chi_range, chi_steps = 0.002*180/np.pi, 61
+phi_range, phi_steps = 400e-6*180/np.pi, 51
+chi_range, chi_steps = 300e-5*180/np.pi, 31
 
 # Define the filepath and filename prefix for the output images
-fpath = r'C:\Users\borgi\Documents\Production\images10_perf_crystal'
+fpath = r'/dtu/3d-imaging-center/projects/2022_QIM_PMP/analysis/borgi/Dislocation_Identification/Geometrical_Optics_BS/Geometrical_Optics_master/perfect_crystal_53_retry'
 fn_prefix = r'/mosa_test_0000_'
 ftype = ".npy"
 
 # Define the filepath and filename prefix for the output images
-fpath1 = r'C:\Users\borgi\Documents\Production\images10'
+fpath1 = r'/dtu/3d-imaging-center/projects/2022_QIM_PMP/analysis/borgi/Dislocation_Identification/Geometrical_Optics_BS/Geometrical_Optics_master/disloc_crystal_53_retry'
 fn_prefix1 = r'/mosa_test_0000_'
 ftype1 = ".npy"
 
 # Generate arrays for phi and chi values
 Phi = np.linspace(-phi_range, phi_range, phi_steps)
 Chi = np.linspace(-chi_range, chi_range, chi_steps)
+
 
 # # Out comment to save images of new results
 # save_images(phi_range, phi_steps, 
@@ -48,8 +49,8 @@ stack_no_dislocs, stack_reshape_no_dislocs, dim_1_no_dislocs, dim_2_no_dislocs =
 stack_dislocs, stack_reshape_dislocs, dim_1_dislocs, dim_2_dislocs = load_images(fpath1, phi_steps, chi_steps)
 
 
-plt.title('Angular spread of example pixel')
-plt.imshow(stack_no_dislocs.reshape((chi_steps, phi_steps, dim_1_no_dislocs, dim_2_no_dislocs))[:,:,dim_1_no_dislocs//2-2,dim_2_no_dislocs//2-2], origin='lower', aspect='auto',
+plt.title('Perfect crystal: Example pixels angular spread')
+plt.imshow(40*stack_no_dislocs.reshape((chi_steps, phi_steps, dim_1_no_dislocs, dim_2_no_dislocs))[:,:,dim_1_no_dislocs//2+2,dim_2_no_dislocs//2+2], origin='lower', aspect='auto',
            extent = [-np.deg2rad(phi_range), np.deg2rad(phi_range), 
                      -np.deg2rad(chi_range), np.deg2rad(chi_range)])
 plt.colorbar()
@@ -57,152 +58,157 @@ plt.xlabel(f'$\phi$ [radians]')
 plt.ylabel(f'$\chi$ [radians]')
 plt.show()
 
-plt.title('Angular spread of example pixel')
-plt.imshow(stack_dislocs.reshape((chi_steps, phi_steps, dim_1_dislocs, dim_2_dislocs))[:,:,dim_1_dislocs//2-2,dim_2_dislocs//2-2], origin='lower', aspect='auto',
+plt.title('Single Dislocation in crystal: \n Example pixels angular spread')
+plt.imshow(40*stack_dislocs.reshape((chi_steps, phi_steps, dim_1_dislocs, dim_2_dislocs))[:,:,dim_1_dislocs//2+2,dim_2_dislocs//2+2], origin='lower', aspect='auto',
            extent = [-np.deg2rad(phi_range), np.deg2rad(phi_range), 
                      -np.deg2rad(chi_range), np.deg2rad(chi_range)])
 plt.colorbar()
 plt.xlabel(f'$\phi$ [radians]')
 plt.ylabel(f'$\chi$ [radians]')
 plt.show()
-
-
-
-
-pic = stack_dislocs.reshape((chi_steps, phi_steps, dim_1_dislocs, dim_2_dislocs))[15,15]
-reshaped_stack = stack_dislocs.reshape((chi_steps, phi_steps, dim_1_dislocs, dim_2_dislocs))
-reshaped_stack_clean = stack_no_dislocs.reshape((chi_steps, phi_steps, dim_1_no_dislocs, dim_2_no_dislocs))
-
-# Going to higher resolution, Chi can shift. Here it is corrected.
-com = center_of_mass(reshaped_stack_clean[:,:,-1,-1])
-plt.imshow(reshaped_stack_clean[:,:,-1,-1].T,)
-plt.scatter(*com, label = com)
-plt.legend()
-Chi_high = np.linspace(-chi_range,chi_range,chi_steps*100)
-shift = com[0]*100 - (chi_steps*100 / 2)
-shift_rads = Chi_high[int(abs(shift))]-Chi_high[0]
-
-shifted_Chi = np.linspace(-chi_range+ shift_rads,chi_range+shift_rads,chi_steps)
-
-
-
-com = center_of_mass(reshaped_stack[:,:,256,85])
-x, y = np.deg2rad(Phi[int(com[1])]), np.deg2rad(Chi[int(com[0])])
-
-fig, axs = plt.subplots(1, 2, figsize=(10, 4))
-
-
-axs[0].imshow(reshaped_stack[chi_steps//2, phi_steps//2].T, aspect='auto', origin='lower')
-axs[0].scatter(256,85, s=3, c='red')
-
-axs[1].imshow(reshaped_stack[:,:,256,85], aspect=1/4, origin='lower',
-extent = [-np.deg2rad(phi_range), np.deg2rad(phi_range), 
-                     -np.deg2rad(chi_range), np.deg2rad(chi_range)])
-axs[1].scatter(x,y, s=3, c='red', label = np.round((x,y),8))
-axs[1].set_xlabel(f'$\phi$ [radians]')
-axs[1].set_ylabel(f'$\chi$ [radians]')
-axs[1].legend()
-plt.tight_layout()
+plt.title('Phi: 192 µrad')
+plt.imshow(stack_reshape_dislocs[37,15], aspect='auto')
+plt.scatter(83, 253, s=25, c='black')
+plt.scatter(83, 253, s=3, c='orange')
+plt.xlabel('Pixels')
+plt.ylabel('Pixels')
 plt.show()
 
 
-Chi_high = np.linspace(-chi_range,chi_range,chi_steps*100)
+# pic = stack_dislocs.reshape((chi_steps, phi_steps, dim_1_dislocs, dim_2_dislocs))[15,15]
+# reshaped_stack = stack_dislocs.reshape((chi_steps, phi_steps, dim_1_dislocs, dim_2_dislocs))
+# reshaped_stack_clean = stack_no_dislocs.reshape((chi_steps, phi_steps, dim_1_no_dislocs, dim_2_no_dislocs))
+
+# # Going to higher resolution, Chi can shift. Here it is corrected.
+# com = center_of_mass(reshaped_stack_clean[:,:,-1,-1])
+# plt.imshow(reshaped_stack_clean[:,:,-1,-1].T,)
+# plt.scatter(*com, label = com)
+# plt.legend()
+# Chi_high = np.linspace(-chi_range,chi_range,chi_steps*100)
+# shift = com[0]*100 - (chi_steps*100 / 2)
+# shift_rads = Chi_high[int(abs(shift))]-Chi_high[0]
+
+# shifted_Chi = np.linspace(-chi_range+ shift_rads,chi_range+shift_rads,chi_steps)
 
 
-phi_list = np.zeros((dim_1_dislocs, dim_2_dislocs))
-chi_list = np.zeros((dim_1_dislocs, dim_2_dislocs))
-shifted_Chi = np.deg2rad(np.linspace(-chi_range+ shift_rads,chi_range+shift_rads,chi_steps*20))
-Phi_high = np.deg2rad(np.linspace(-phi_range,phi_range,phi_steps*20))
-for i in tqdm(range(reshaped_stack.shape[2])):
-    for j in range(reshaped_stack.shape[3]):
-        x_ind, y_ind = center_of_mass(reshaped_stack[:,:,i,j])
-        phi_list[i,j] = Phi_high[np.round(y_ind*20).astype(int)]
-        chi_list[i,j] = shifted_Chi[np.round(x_ind*20).astype(int)]
+
+# com = center_of_mass(reshaped_stack[:,:,256,85])
+# x, y = np.deg2rad(Phi[int(com[1])]), np.deg2rad(Chi[int(com[0])])
+
+# fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
 
-# Plot of two components of qi in (x, y, z=0) plane
-fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+# axs[0].imshow(reshaped_stack[chi_steps//2, phi_steps//2].T, aspect='auto', origin='lower')
+# axs[0].scatter(256,85, s=3, c='red')
 
-# Plot qi_1
-im1 = axs[0].imshow((phi_list*-1).T, interpolation='none',
-                    extent=[xl_start, -xl_start,
-                            yl_start, -yl_start],
-                    vmin = -1e-4, vmax = 1e-4, cmap='viridis', origin = 'lower')
-axs[0].set_aspect('equal')
-axs[0].set_title('Extreme Phi')
-axs[0].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
-axs[0].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
-# axs[0].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
-axs[0].grid(False)
-
-# Customize colorbar with scientific notation
-cbar1 = fig.colorbar(im1, ax=axs[0], format=ScalarFormatter(useMathText=True))
-cbar1.formatter.set_powerlimits((-2, 2))  # Adjust the power limits as needed
-cbar1.update_ticks()
-
-# Plot qi_2
-im2 = axs[1].imshow(chi_list.T*-1, 
-                    extent=[xl_start, -xl_start,
-                            yl_start, -yl_start],
-                    interpolation = 'none',
-                    vmin = -1e-4, vmax = 1e-4, cmap='viridis', origin = 'lower')
-axs[1].set_aspect('equal')
-axs[1].set_title('Extreme Chi')
-axs[1].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
-axs[1].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
-# axs[1].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
-axs[1].grid(False)
-
-# Customize colorbar with scientific notation
-cbar2 = fig.colorbar(im2, ax=axs[1], format=ScalarFormatter(useMathText=True))
-cbar2.formatter.set_powerlimits((-2, 2))  # Adjust the power limits as needed
-cbar2.update_ticks()
-
-plt.tight_layout()
-plt.savefig('extrem_phi+chi2.svg')
+# axs[1].imshow(reshaped_stack[:,:,256,85], aspect=1/4, origin='lower',
+# extent = [-np.deg2rad(phi_range), np.deg2rad(phi_range), 
+#                      -np.deg2rad(chi_range), np.deg2rad(chi_range)])
+# axs[1].scatter(x,y, s=3, c='red', label = np.round((x,y),8))
+# axs[1].set_xlabel(f'$\phi$ [radians]')
+# axs[1].set_ylabel(f'$\chi$ [radians]')
+# axs[1].legend()
+# plt.tight_layout()
+# plt.show()
 
 
-imp, qi_fieldp = forward(Hg, phi = 0, qi_return=True)
+# Chi_high = np.linspace(-chi_range,chi_range,chi_steps*100)
 
-X = np.linspace(-xl_start, xl_start, xl_steps) * 1E6  # rulers on the x-axis in µm
-Y = np.linspace(-yl_start, yl_start, yl_steps) * 1E6  # rulers on the y-axis in µm
-Z = np.linspace(-zl_start, zl_start, zl_steps) * 1E6  # rulers on the z-axis in µm
 
-# Plot of two components of qi in (x, y, z=0) plane
-fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+# phi_list = np.zeros((dim_1_dislocs, dim_2_dislocs))
+# chi_list = np.zeros((dim_1_dislocs, dim_2_dislocs))
+# shifted_Chi = np.deg2rad(np.linspace(-chi_range+ shift_rads,chi_range+shift_rads,chi_steps*20))
+# Phi_high = np.deg2rad(np.linspace(-phi_range,phi_range,phi_steps*20))
+# for i in tqdm(range(reshaped_stack.shape[2])):
+#     for j in range(reshaped_stack.shape[3]):
+#         x_ind, y_ind = center_of_mass(reshaped_stack[:,:,i,j])
+#         phi_list[i,j] = Phi_high[np.round(y_ind*20).astype(int)]
+#         chi_list[i,j] = shifted_Chi[np.round(x_ind*20).astype(int)]
 
-# Plot qi_1
-im1 = axs[0].imshow(qi_fieldp[0, :, :, zl_steps // 2].squeeze(), extent=[Y.min(), Y.max(), X.min(), X.max()],
-                    vmin=-1E-4, vmax=1E-4, cmap='viridis', origin = 'lower')
-# axs[0].set_xlim((-6,-4))
-# axs[0].set_ylim((1.5,3.5))
-axs[0].set_aspect('equal')
-axs[0].set_title('qi_1 for (x, y) plane, z=0')
-axs[0].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
-axs[0].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
-# axs[0].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
-axs[0].grid(False)
 
-# Customize colorbar with scientific notation
-cbar1 = fig.colorbar(im1, ax=axs[0], format=ScalarFormatter(useMathText=True))
-cbar1.formatter.set_powerlimits((-2, 2))  # Adjust the power limits as needed
-cbar1.update_ticks()
+# # Plot of two components of qi in (x, y, z=0) plane
+# fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
-# Plot qi_2
-im2 = axs[1].imshow(qi_fieldp[1, :, :, zl_steps // 2].squeeze(), extent=[Y.min(), Y.max(), X.min(), X.max()],
-                    vmin=-1E-4, vmax=1E-4, cmap='viridis', origin = 'lower')
-axs[1].set_aspect('equal')
-axs[1].set_title('qi_2 for (x, y) plane, z=0')
-axs[1].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
-axs[1].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
-# axs[1].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
-axs[1].grid(False)
+# # Plot qi_1
+# im1 = axs[0].imshow((phi_list*-1).T, interpolation='none',
+#                     extent=[xl_start, -xl_start,
+#                             yl_start, -yl_start],
+#                     vmin = -1e-4, vmax = 1e-4, cmap='viridis', origin = 'lower')
+# axs[0].set_aspect('equal')
+# axs[0].set_title('Extreme Phi')
+# axs[0].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
+# axs[0].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
+# # axs[0].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
+# axs[0].grid(False)
 
-# Customize colorbar with scientific notation
-cbar2 = fig.colorbar(im2, ax=axs[1], format=ScalarFormatter(useMathText=True))
-cbar2.formatter.set_powerlimits((-2, 2))  # Adjust the power limits as needed
-cbar2.update_ticks()
+# # Customize colorbar with scientific notation
+# cbar1 = fig.colorbar(im1, ax=axs[0], format=ScalarFormatter(useMathText=True))
+# cbar1.formatter.set_powerlimits((-2, 2))  # Adjust the power limits as needed
+# cbar1.update_ticks()
 
-plt.tight_layout()
-plt.savefig('qi1+qi2_fields1.svg')
+# # Plot qi_2
+# im2 = axs[1].imshow(chi_list.T*-1, 
+#                     extent=[xl_start, -xl_start,
+#                             yl_start, -yl_start],
+#                     interpolation = 'none',
+#                     vmin = -1e-4, vmax = 1e-4, cmap='viridis', origin = 'lower')
+# axs[1].set_aspect('equal')
+# axs[1].set_title('Extreme Chi')
+# axs[1].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
+# axs[1].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
+# # axs[1].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
+# axs[1].grid(False)
+
+# # Customize colorbar with scientific notation
+# cbar2 = fig.colorbar(im2, ax=axs[1], format=ScalarFormatter(useMathText=True))
+# cbar2.formatter.set_powerlimits((-2, 2))  # Adjust the power limits as needed
+# cbar2.update_ticks()
+
+# plt.tight_layout()
+# plt.savefig('extrem_phi+chi2.svg')
+
+
+# imp, qi_fieldp = forward(Hg, phi = 0, qi_return=True)
+
+# X = np.linspace(-xl_start, xl_start, xl_steps) * 1E6  # rulers on the x-axis in µm
+# Y = np.linspace(-yl_start, yl_start, yl_steps) * 1E6  # rulers on the y-axis in µm
+# Z = np.linspace(-zl_start, zl_start, zl_steps) * 1E6  # rulers on the z-axis in µm
+
+# # Plot of two components of qi in (x, y, z=0) plane
+# fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+# # Plot qi_1
+# im1 = axs[0].imshow(qi_fieldp[0, :, :, zl_steps // 2].squeeze(), extent=[Y.min(), Y.max(), X.min(), X.max()],
+#                     vmin=-1E-4, vmax=1E-4, cmap='viridis', origin = 'lower')
+# # axs[0].set_xlim((-6,-4))
+# # axs[0].set_ylim((1.5,3.5))
+# axs[0].set_aspect('equal')
+# axs[0].set_title('qi_1 for (x, y) plane, z=0')
+# axs[0].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
+# axs[0].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
+# # axs[0].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
+# axs[0].grid(False)
+
+# # Customize colorbar with scientific notation
+# cbar1 = fig.colorbar(im1, ax=axs[0], format=ScalarFormatter(useMathText=True))
+# cbar1.formatter.set_powerlimits((-2, 2))  # Adjust the power limits as needed
+# cbar1.update_ticks()
+
+# # Plot qi_2
+# im2 = axs[1].imshow(qi_fieldp[1, :, :, zl_steps // 2].squeeze(), extent=[Y.min(), Y.max(), X.min(), X.max()],
+#                     vmin=-1E-4, vmax=1E-4, cmap='viridis', origin = 'lower')
+# axs[1].set_aspect('equal')
+# axs[1].set_title('qi_2 for (x, y) plane, z=0')
+# axs[1].set_xlabel('$y_{\ell}$ ($\mu$m)', fontsize=12)
+# axs[1].set_ylabel('$x_{\ell}$ ($\mu$m)', fontsize=12)
+# # axs[1].invert_yaxis()  # To match 'set(gca,'ydir','normal')' in MATLAB
+# axs[1].grid(False)
+
+# # Customize colorbar with scientific notation
+# cbar2 = fig.colorbar(im2, ax=axs[1], format=ScalarFormatter(useMathText=True))
+# cbar2.formatter.set_powerlimits((-2, 2))  # Adjust the power limits as needed
+# cbar2.update_ticks()
+
+# plt.tight_layout()
+# plt.savefig('qi1+qi2_fields1.svg')
 

@@ -56,7 +56,7 @@ def save_image(args):
         None: The function saves an image but does not return a value.
     '''
     Hg, phi, chi, j, i, fpath, fn_prefix, ftype = args
-    im, qi_field = forward(Hg, phi=phi, chi=chi)
+    im = forward(Hg, phi=phi, chi=chi)
     fn_suffix = ("{0}".format(i).zfill(4) + "_" +
                          "{0}".format(j).zfill(4) + ftype)
     np.save(os.path.join(fpath + fn_prefix + fn_suffix), im)
@@ -86,7 +86,6 @@ def save_images_parallel(Hg, phi_range, phi_steps, chi_range, chi_steps, fpath, 
         os.makedirs(fpath)
 
     args_list = [(Hg, Phi[j], Chi[i], j, i, fpath, fn_prefix, ftype) for i in range(chi_steps) for j in range(phi_steps)]
-
     with ThreadPoolExecutor() as executor:
         results = list(tqdm(executor.map(save_image, args_list), total=len(args_list)))
 

@@ -14,7 +14,12 @@ fast_inverse2(np.random.random(size = (100,3,3))); # DO NOT OUTCOMMENT, this lin
 # INPUT instrumental settings, related to direct space resolution function
 psize = 40E-9 # pixel size in units of m, in the object plane
 zl_rms = 0.6E-6/2.35  # rms value of Gaussian beam profile, in m, centered at 0
-theta_0 = 17.953/2*np.pi/180 # in rad
+keV = 17
+wavelength = 1.239841984e-9 / keV  # kev to wavelength in m
+a = 4.0495e-10  # lattice parameter in m
+d_111 = a / np.sqrt(3) # D-Spacing 111 reflection
+theta_0 = np.arcsin(wavelength / (2 * d_111))  # scattering angle, in radians
+# theta_0 = 17.953/2*np.pi/180 # in rad
 # input reciprocal space resolution function (in the imaging system)
 # by loading an already generated version Resq_i and insertin q_i-ranges and steps here
 
@@ -27,8 +32,8 @@ NN3 = int(Npixels//30*Nsub)
 
 # Choose sys.path[0] or sys.path[1] depending on parent folder
 # Define the file paths for reciprocal array
-pkl_fpath = sys.path[0]+'/pkl_files/'
-pkl_fn = 'Resq_i_20240131_1014.pkl' # Change accordingly
+pkl_fpath = sys.path[0]+'/reciprocal_space/pkl_files/'
+pkl_fn = 'Resq_i_20250514_1458.pkl' # Change accordingly
 vars_fn = os.path.splitext(pkl_fn)[0] + '_vars.txt'
 print('Loading Resq_i.')
 # Load the pickle file
@@ -58,9 +63,9 @@ qi_starts = np.asarray([qi1_start, qi2_start, qi3_start])
 qi_steps = 1 / np.asarray([qi1_step, qi2_step, qi3_step])
 
 # CREATE MATRICES according to Eqs 2,3,7:
-# Ud = np.array([[1 / np.sqrt(2), 1 / np.sqrt(3), 1 / np.sqrt(6)],
-#                [-1 / np.sqrt(2), 1 / np.sqrt(3), 1 / np.sqrt(6)],
-#                [0, -1 / np.sqrt(3), 2 / np.sqrt(6)]])
+Ud = np.array([[1 / np.sqrt(2), 1 / np.sqrt(3), 1 / np.sqrt(6)],
+               [-1 / np.sqrt(2), 1 / np.sqrt(3), 1 / np.sqrt(6)],
+               [0, -1 / np.sqrt(3), 2 / np.sqrt(6)]])
 Us = np.array([[1 / np.sqrt(2), -1 / np.sqrt(6), -1 / np.sqrt(3)],
                [0, -2 / np.sqrt(6), 1 / np.sqrt(3)],
                [-1 / np.sqrt(2), -1 / np.sqrt(6), -1 / np.sqrt(3)]]).T
@@ -97,7 +102,7 @@ prob_z = np.exp(-0.5*(rl[2]/zl_rms)**2)
 
 
 ndis = 1 # number of dislocations
-dis = 4 # units of micrometer
+dis = 5 # units of micrometer
 def Find_Hg(dis, ndis, psize, zl_rms, I = np.identity(3), h=-1, k=1, l=-1):
     Q_norm = np.sqrt(h * h + k * k + l * l) # We have assumed B_0 = I
     q_hkl = np.asarray([h, k, l]) / Q_norm
@@ -123,13 +128,13 @@ def Find_Hg(dis, ndis, psize, zl_rms, I = np.identity(3), h=-1, k=1, l=-1):
                     data.write(f"{key}: {value}\n\n")
     return Hg, q_hkl
 
-# Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
 
 h = -1
 k = 1
 l = -1 
 Q_norm = np.sqrt(h * h + k * k + l * l) # We have assumed B_0 = I
 q_hkl = np.asarray([h, k, l]) / Q_norm
+Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
 # Us = np.array([[1 / np.sqrt(6),    -2 / np.sqrt(6),   1 / np.sqrt(6)],
 #                [ 1 / np.sqrt(2),    0,                -1 / np.sqrt(2)],
 #                [ 1 / np.sqrt(3),   1 / np.sqrt(3),   1 / np.sqrt(3)]])
