@@ -65,7 +65,7 @@ def Fd_find_edge(rl, Ud, Us, Theta, dis = 1, ndis = 1, b = 2.862e-4, ny = 0.334,
     Fdd[:, 0, 0] = -rd[1] * (3 * sqx + sqy - nyfactor) / denom
     Fdd[:, 0, 1] =  rd[0] * (3 * sqx + sqy - nyfactor) / denom
     Fdd[:, 1, 0] = -rd[0] * (3 * sqy + sqx - nyfactor) / denom
-    Fdd[:, 1, 1] =  rd[1] * (sqx - sqy - nyfactor) / denom
+    Fdd[:, 1, 1] =  rd[1] * (sqx - sqy + nyfactor) / denom
 
     # Finish the calculation of Fdd
     Fdd *= bfactor
@@ -329,7 +329,7 @@ def multi_dislocs_parallel(chunk, rd, Fdd_shape, dis, ny = 0.334):
         Fdd_chunk[:, 0, 0] += -rd_new[1] * (3 * sqx + sqy - nyfactor) / denom
         Fdd_chunk[:, 0, 1] += rd_new[0] * (3 * sqx + sqy - nyfactor) / denom
         Fdd_chunk[:, 1, 0] += -rd_new[0] * (3 * sqy + sqx - nyfactor) / denom
-        Fdd_chunk[:, 1, 1] += rd_new[1] * (sqx - sqy - nyfactor) / denom
+        Fdd_chunk[:, 1, 1] += rd_new[1] * (sqx - sqy + nyfactor) / denom
 
 
         rd_new = np.copy(rd[:2])
@@ -345,7 +345,7 @@ def multi_dislocs_parallel(chunk, rd, Fdd_shape, dis, ny = 0.334):
         Fdd_chunk[:, 0, 0] += -rd_new[1] * (3 * sqx + sqy - nyfactor) / denom
         Fdd_chunk[:, 0, 1] += rd_new[0] * (3 * sqx + sqy - nyfactor) / denom
         Fdd_chunk[:, 1, 0] += -rd_new[0] * (3 * sqy + sqx - nyfactor) / denom
-        Fdd_chunk[:, 1, 1] += rd_new[1] * (sqx - sqy - nyfactor) / denom
+        Fdd_chunk[:, 1, 1] += rd_new[1] * (sqx - sqy + nyfactor) / denom
 
     return Fdd_chunk
 
@@ -420,7 +420,7 @@ def Fd_find(rl, Ud, Us, Theta, dis = 1, ndis = 1, b = 2.862e-4, ny = 0.334, miso
     Fdd[:, 0, 0] = -rd[1] * (3 * sqx + sqy - nyfactor) / denom
     Fdd[:, 0, 1] =  rd[0] * (3 * sqx + sqy - nyfactor) / denom
     Fdd[:, 1, 0] = -rd[0] * (3 * sqy + sqx - nyfactor) / denom
-    Fdd[:, 1, 1] =  rd[1] * (sqx - sqy - nyfactor) / denom
+    Fdd[:, 1, 1] =  rd[1] * (sqx - sqy + nyfactor) / denom
 
     if ndis > 100:
         # Determine the chunk size based on the total number of iterations and the number of jobs
@@ -468,7 +468,7 @@ def Fd_find(rl, Ud, Us, Theta, dis = 1, ndis = 1, b = 2.862e-4, ny = 0.334, miso
             Fdd[:, 0, 0] += -rd_new[1] * (3 * sqx + sqy - nyfactor) / denom
             Fdd[:, 0, 1] +=  rd_new[0] * (3 * sqx + sqy - nyfactor) / denom
             Fdd[:, 1, 0] += -rd_new[0] * (3 * sqy + sqx - nyfactor) / denom
-            Fdd[:, 1, 1] +=  rd_new[1] * (sqx - sqy - nyfactor) / denom
+            Fdd[:, 1, 1] +=  rd_new[1] * (sqx - sqy + nyfactor) / denom
 
     # Finish the calculation of Fdd
     Fdd *= bfactor
@@ -540,7 +540,7 @@ def image_range(im_in, lower, upper):
 #     Fdd[:, 0, 0] = -rd[1] * (3 * sqx + sqy - nyfactor) / denom
 #     Fdd[:, 0, 1] =  rd[0] * (3 * sqx + sqy - nyfactor) / denom
 #     Fdd[:, 1, 0] = -rd[0] * (3 * sqy + sqx - nyfactor) / denom
-#     Fdd[:, 1, 1] =  rd[1] * (sqx - sqy - nyfactor) / denom
+#     Fdd[:, 1, 1] =  rd[1] * (sqx - sqy + nyfactor) / denom
 
 #     if ndis > 1:
 #         count1, count2, = 1, 1
@@ -565,7 +565,7 @@ def image_range(im_in, lower, upper):
 #             Fdd[:, 0, 0] += -rd_new[1] * (3 * sqx + sqy - nyfactor) / denom
 #             Fdd[:, 0, 1] +=  rd_new[0] * (3 * sqx + sqy - nyfactor) / denom
 #             Fdd[:, 1, 0] += -rd_new[0] * (3 * sqy + sqx - nyfactor) / denom
-#             Fdd[:, 1, 1] +=  rd_new[1] * (sqx - sqy - nyfactor) / denom
+#             Fdd[:, 1, 1] +=  rd_new[1] * (sqx - sqy + nyfactor) / denom
 #         del rd, rd_new, sqx, sqy, denom
 #     gc.collect()
 #     Fdd *= bfactor
@@ -591,7 +591,7 @@ def Fd_find_domain(xl, yl, zl, Ud, Us, Theta, dis = 1, ndis = 1, b = 3.507*1e-4,
             Fdd[:, 0, 0] += bfactor * (-dy * (3 * sqx + sqy - nyfactor) / denom)
             Fdd[:, 0, 1] += bfactor * ( dx * (3 * sqx + sqy - nyfactor) / denom)
             Fdd[:, 1, 0] += bfactor * (-dx * (3 * sqy + sqx - nyfactor) / denom)
-            Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy - nyfactor) / denom)
+            Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy + nyfactor) / denom)
             if ndis > 1:
                 count1, count2, = 1, 1
                 for i in range(1, ndis):
@@ -611,7 +611,7 @@ def Fd_find_domain(xl, yl, zl, Ud, Us, Theta, dis = 1, ndis = 1, b = 3.507*1e-4,
                     Fdd[:, 0, 0] += bfactor * (-dy * (3 * sqx + sqy - nyfactor) / denom )
                     Fdd[:, 0, 1] += bfactor * ( dx * (3 * sqx + sqy - nyfactor) / denom )
                     Fdd[:, 1, 0] += bfactor * (-dx * (3 * sqy + sqx - nyfactor) / denom )
-                    Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy - nyfactor) / denom )
+                    Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy + nyfactor) / denom )
         if mm == 1:
             mats = np.asarray([xl, yl, zl])*1e6
             mats[0] -= 80
@@ -641,7 +641,7 @@ def Fd_find_domain(xl, yl, zl, Ud, Us, Theta, dis = 1, ndis = 1, b = 3.507*1e-4,
                     Fdd[:, 0, 0] += bfactor * (-dy * (3 * sqx + sqy - nyfactor) / denom )
                     Fdd[:, 0, 1] += bfactor * ( dx * (3 * sqx + sqy - nyfactor) / denom )
                     Fdd[:, 1, 0] += bfactor * (-dx * (3 * sqy + sqx - nyfactor) / denom )
-                    Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy - nyfactor) / denom )
+                    Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy + nyfactor) / denom )
         if mm == 2:
             num_b2, num_n2, num_t2 = [-1, 1, 0], [-1, -1, 1], [ 1, 1,  2]
             Ud2 = np.asarray([m_norm(num_b2), m_norm(num_n2), m_norm(num_t2)])
@@ -657,7 +657,7 @@ def Fd_find_domain(xl, yl, zl, Ud, Us, Theta, dis = 1, ndis = 1, b = 3.507*1e-4,
             Fdd[:, 0, 0] += bfactor * (-dy * (3 * sqx + sqy - nyfactor) / denom)
             Fdd[:, 0, 1] += bfactor * ( dx * (3 * sqx + sqy - nyfactor) / denom)
             Fdd[:, 1, 0] += bfactor * (-dx * (3 * sqy + sqx - nyfactor) / denom)
-            Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy - nyfactor) / denom)
+            Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy + nyfactor) / denom)
             if ndis > 1:
                 count1, count2, = 1, 1
                 for i in range(1, ndis):
@@ -677,7 +677,7 @@ def Fd_find_domain(xl, yl, zl, Ud, Us, Theta, dis = 1, ndis = 1, b = 3.507*1e-4,
                     Fdd[:, 0, 0] += bfactor * (-dy * (3 * sqx + sqy - nyfactor) / denom )
                     Fdd[:, 0, 1] += bfactor * ( dx * (3 * sqx + sqy - nyfactor) / denom )
                     Fdd[:, 1, 0] += bfactor * (-dx * (3 * sqy + sqx - nyfactor) / denom )
-                    Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy - nyfactor) / denom )    
+                    Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy + nyfactor) / denom )    
         if mm == 3:
             num_b3, num_n3, num_t3 = [1, 1, 0], [-1, 1, 1], [ 1, -1,  -2]
             Ud3 = np.asarray([m_norm(num_b3), m_norm(num_n3), m_norm(num_t3)])
@@ -709,7 +709,7 @@ def Fd_find_domain(xl, yl, zl, Ud, Us, Theta, dis = 1, ndis = 1, b = 3.507*1e-4,
                     Fdd[:, 0, 0] += bfactor * (-dy * (3 * sqx + sqy - nyfactor) / denom )
                     Fdd[:, 0, 1] += bfactor * ( dx * (3 * sqx + sqy - nyfactor) / denom )
                     Fdd[:, 1, 0] += bfactor * (-dx * (3 * sqy + sqx - nyfactor) / denom )
-                    Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy - nyfactor) / denom )
+                    Fdd[:, 1, 1] += bfactor * ( dy * (sqx - sqy + nyfactor) / denom )
     Fg = Ud @ Fdd @ Ud.T
     return Fg
 
