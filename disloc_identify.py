@@ -245,7 +245,7 @@ class BurgersVectorsPlotter:
                         random_disloc = self.Ud[rand_idx_j, rand_idx_i] # save this if its relevant to know random dislocations b, n, and t values.
                         random_angle  = self.vec_angles[rand_idx_j] # save this if its relevant to know random dislocations alpha
                             
-                        Fg = Fd_find_mixed(rl * 1e6, self.Us, self.Ud[j, i], random_disloc, self.vec_angles[j], random_angle, Theta, dis = 4) # Change dis for distance between the dislocations, unit is micrometer
+                        Fg = d_find_multi_dislocs_mixed(rl * 1e6, self.Us, self.Ud[j, i], random_disloc, self.vec_angles[j], random_angle, Theta, dis = 4) # Change dis for distance between the dislocations, unit is micrometer
                         Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1])
                         Hg -= np.identity(3)
 
