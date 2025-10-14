@@ -27,7 +27,7 @@ def Fd_find_multi_dislocs_mixed(rl, Us, Ud_mix1, Ud_mix2, a1, a2, Theta, dis = 1
     Theta: np.ndarray of shape (3, 3)
         A rotational matrix used for going from sample space to lab space.
     dis : int, optional
-        Distance in micrometer between each edge dislocation in the dislocation coordinate system. 
+        Distance in micrometer between the two dislocations in the second dislocations coordinate system. 
         Default is 1.
     ndis : int, optional
         Number of edge dislocations to include. 
@@ -49,8 +49,10 @@ def Fd_find_multi_dislocs_mixed(rl, Us, Ud_mix1, Ud_mix2, a1, a2, Theta, dis = 1
     rc = Us.T @ rs               # crystal
 
     # Helper: compute Fdd (WITHOUT adding identity) in a given dislocation frame
-    def _Fdd_no_I(Ud_mix, a_deg):
+    def _Fdd_no_I(Ud_mix, a_deg, dis, second_disloc = False):
         rd = Ud_mix.T @ rc  # dislocation coordinates
+        if second_disloc == True:
+            rd[1] -= dis
 
         # Initialize
         Fdd = np.zeros((rd.shape[1], 3, 3))
@@ -85,7 +87,7 @@ def Fd_find_multi_dislocs_mixed(rl, Us, Ud_mix1, Ud_mix2, a1, a2, Theta, dis = 1
     
 
     Fdd1 = _Fdd_no_I(Ud_mix1, a1)
-    Fdd2 = _Fdd_no_I(Ud_mix2, a2)
+    Fdd2 = _Fdd_no_I(Ud_mix2, a2, second_disloc = True)
 
     # Rotate to same space first (grain)
     Fg1 = Ud_mix1 @ Fdd1 @ Ud_mix1.T
@@ -839,4 +841,5 @@ def fast_inverse2(A): # Try to rewrite this
 
 def repeat(arr, count):
     return np.stack([arr for _ in range(count)], axis=0)
+
 
