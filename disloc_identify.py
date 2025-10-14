@@ -239,8 +239,13 @@ class BurgersVectorsPlotter:
                 for j in range(self.Ud.shape[0]):
                     if (not np.allclose(np.dot(np.cross(self.Ud[j, i].T[2], self.Ud[j, i].T[1]), b_vecs[i]), 0) or 
                         not np.allclose(np.dot(self.q_hkl, b_vecs[i]), 0)):
-                        
-                        Fg = Fd_find_mixed(rl * 1e6, self.Us, self.Ud[j, i], self.vec_angles[j], Theta)
+                            
+                        rand_idx_j = np.random.randint(0, self.Ud.shape[0])
+                        rand_idx_i = np.random.randint(0, self.Ud.shape[1])
+                        random_disloc = self.Ud[rand_idx_j, rand_idx_i] # save this if its relevant to know random dislocations b, n, and t values.
+                        random_angle  = self.vec_angles[rand_idx_j] # save this if its relevant to know random dislocations alpha
+                            
+                        Fg = Fd_find_mixed(rl * 1e6, self.Us, self.Ud[j, i], random_disloc, self.vec_angles[j], random_angle, Theta, dis = 4) # Change dis for distance between the dislocations, unit is micrometer
                         Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1])
                         Hg -= np.identity(3)
 
