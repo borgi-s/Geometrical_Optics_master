@@ -7,6 +7,97 @@ from concurrent.futures import ThreadPoolExecutor
 from joblib import Parallel, delayed, cpu_count
 
 
+def Fd_find_multi_dislocs_mixed(rl, Us, Ud_mix1, Ud_mix2, a1, a2, Theta, dis = 1, ndis = 1, b = 2.862e-4, ny = 0.334, misorientation = False, t_vec = None):
+    '''
+    Calculates the displacement field due to multiple edge dislocations in a 
+    crystal lattice, given the lab coordinates and accompanying rotation matrices.
+    The dislocation wall will start at the center of the system and branch out as 
+    more is added. If more than 100 dislocations are needed the function will call
+    multi_dislocs_parallel to run with multiprocessing for saving time. This requires
+    a lot of memory.
+    -----------------------------------------------------------------------------
+    Parameters:
+    rl: np.ndarray of shape (3, X)
+        An array of coordinates in lab space, with X being the number of steps in 
+        each dimension. rl contains the x_lab, y_lab, z_lab coordinates.
+    Ud: np.ndarray of shape (3, 3)
+        A rotational matrix used for going from dislocation space to grain space.
+    Us: np.ndarray of shape (3, 3)
+        A rotational matrix used for going from grain space to sample space.
+    Theta: np.ndarray of shape (3, 3)
+        A rotational matrix used for going from sample space to lab space.
+    dis : int, optional
+        Distance in micrometer between each edge dislocation in the dislocation coordinate system. 
+        Default is 1.
+    ndis : int, optional
+        Number of edge dislocations to include. 
+        Default is 1.
+    b : float, optional
+        Magnitude of the Burger's vector. 
+        Default is 2.862e-4 [micrometer] - 2.862 [Aangstrom].
+    ny : float, optional
+        Poisson ratio. Default is 0.334.
+        
+    Returns
+    -----------------------------------------------------------------------------
+    numpy.ndarray
+        Displacement gradient field induced by set of edge dislocations, 
+        in grain space. Shape is (X, 3, 3).
+    '''
+    # Rotate lab -> sample -> crystal
+    rs = Theta @ rl              # sample
+    rc = Us.T @ rs               # crystal
+
+    # Helper: compute Fdd (WITHOUT adding identity) in a given dislocation frame
+    def _Fdd_no_I(Ud_mix, a_deg):
+        rd = Ud_mix.T @ rc  # dislocation coordinates
+
+        # Initialize
+        Fdd = np.zeros((rd.shape[1], 3, 3))
+        alpha = 1e-20
+
+        # Common in-plane terms
+        sqx = rd[0] * rd[0]
+        sqy = rd[1] * rd[1]
+        denom = (sqx + sqy) * (sqx + sqy) + alpha
+        bfactor = b / (4 * np.pi * (1 - ny))
+        nyfactor = 2 * ny * (sqx + sqy)
+
+        # Base in-plane components
+        Fdd[:, 0, 0] = -rd[1] * (3 * sqx + sqy - nyfactor) / denom
+        Fdd[:, 0, 1] =  rd[0] * (3 * sqx + sqy - nyfactor) / denom
+        Fdd[:, 1, 0] = -rd[0] * (3 * sqy + sqx - nyfactor) / denom
+        Fdd[:, 1, 1] =  rd[1] * (sqx - sqy + nyfactor) / denom
+
+        # Finish the "original" part up to—but not including—adding identity
+        Fdd *= bfactor
+        Fdd *= np.cos(np.deg2rad(a_deg))
+
+        # Out-of-plane coupling terms for mixed character
+        sqz = rd[2] * rd[2]
+        denom1 = (sqz) + (sqy) + alpha
+        bfactor1 = b / (2 * np.pi)
+
+        Fdd[:, 0, 1] += ((-rd[2] / denom1) * bfactor1 * np.sin(np.deg2rad(a_deg)))
+        Fdd[:, 0, 2] += (( rd[1] / denom1) * bfactor1 * np.sin(np.deg2rad(a_deg)))
+
+        return Fdd
+    
+
+    Fdd1 = _Fdd_no_I(Ud_mix1, a1)
+    Fdd2 = _Fdd_no_I(Ud_mix2, a2)
+
+    # Rotate to same space first (grain)
+    Fg1 = Ud_mix1 @ Fdd1 @ Ud_mix1.T
+    Fg2 = Ud_mix2 @ Fdd2 @ Ud_mix2.T
+    # add fields together
+    Fg  = Fg1 + Fg2
+
+    #adding identity in grain space
+    Fg += np.identity(3)
+
+    return Fg
+    
 def Fd_find_mixed(rl, Us, Ud_mix, a, Theta, dis = 1, ndis = 1, b = 2.862e-4, ny = 0.334, misorientation = False, t_vec = None):
     '''
     Calculates the displacement field due to multiple edge dislocations in a 
@@ -570,3 +661,4 @@ def fast_inverse2(A): # Try to rewrite this
 
 def repeat(arr, count):
     return np.stack([arr for _ in range(count)], axis=0)
+
