@@ -111,7 +111,20 @@ class BurgersVectorsPlotter:
                        for i in range(len(rotated_vectors)) for j in range(len(rotated_vectors[i]))])
         Ud = Ud.reshape(len(rotated_vectors), len(rotated_vectors[0]), 3, 3)
         return Ud
-    
+        
+    def is_valid_rotation_matrix(R):
+        '''
+        Checks if the rotation matrix is valid and right handed.
+        -----
+        Inputs:
+            R (np.ndarray): 3D Array of rotation matrix.
+        '''
+        if R.shape != (3, 3):
+            return False
+        is_orthogonal = np.allclose(R @ R.T, np.identity(3), atol=1e-6)
+        has_unit_determinant = np.allclose(np.linalg.det(R), 1.0, atol=1e-6)
+        return is_orthogonal and has_unit_determinant
+        
     def rotate_sample_zl(self, rl, angle):
         '''
         Applies a rotation to 3D coordinates around the z-axis by a given angle.
@@ -188,6 +201,8 @@ class BurgersVectorsPlotter:
             Saves images and corresponding data files to the specified file path.
         '''
         self.Ud = self.calculate_ud_matrices()
+        if not is_valid_rotation_matrix(self.Us):
+            raise ValueError("Us contains invalid rotation matrices.")
         b_vecs = self.find_b_vectors()
         check_path(self.fpath1 + '/images')
         check_path(self.fpath1 + '/im_data')
@@ -228,6 +243,9 @@ class BurgersVectorsPlotter:
         '''
         self.Ud = self.calculate_ud_matrices()
         b_vecs = self.find_b_vectors()
+
+        if not is_valid_rotation_matrix(self.Us):
+            raise ValueError("Us contains invalid rotation matrices.")
 
         batch_Hg = []  # Store batched Hg matrices
         batch_savepaths = []  # Store corresponding save paths for each batch
