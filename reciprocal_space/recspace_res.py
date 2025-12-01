@@ -37,7 +37,7 @@ def check_folder(path, folder_name):
 check_folder('','pkl_files')
 
 
-def reciprocal_res_func(Nrays, npoints1, npoints2, npoints3, qi1_range, qi2_range, qi3_range, plot_figs, save_resqi, zeta_v_fwhm, zeta_h_fwhm, NA_rms, eps_rms, theta, phys_aper, date, mem_save = True, beamstop = False, bs_height = None):
+def reciprocal_res_func(Nrays, npoints1, npoints2, npoints3, qi1_range, qi2_range, qi3_range, plot_figs, save_resqi, zeta_v_fwhm, zeta_h_fwhm, NA_rms, eps_rms, theta, phys_aper, date, mem_save = True, beamstop = False, bs_height = None, return_qs = False, aperture = False, knife_edge = False, dphi_range = 0.0):
 
 
     print('Defining properties of rays')
@@ -77,7 +77,10 @@ def reciprocal_res_func(Nrays, npoints1, npoints2, npoints3, qi1_range, qi2_rang
     #zeta_v = (np.random.normal(size=Nrays)*zeta_v_fwhm/2.35)
     zeta_h = (np.random.normal(size=Nrays)*zeta_h_fwhm/2.35)
     eps = (np.random.normal(size=Nrays)*eps_rms) 
-
+    if dphi_range > 0.0:
+        dphi = np.random.uniform(-dphi_range/2, dphi_range/2, Nrays)
+    else:
+        dphi = 0.0
     print('Properties of rays defined')
 
     x1 = (np.random.normal(size=int(1.01*Nrays))*NA_rms)
@@ -92,7 +95,7 @@ def reciprocal_res_func(Nrays, npoints1, npoints2, npoints3, qi1_range, qi2_rang
         print('Found trial delta_2theta and xi')
 
     #all this eq. 43,44,45 in Poulsen 2021, or from S
-    qrock = ((-zeta_v/2) - (delta_2theta/2)) 
+    qrock = ((-zeta_v/2) - (delta_2theta/2)) + dphi
     qroll = (-zeta_h/(2*np.sin(theta)) -  xi/(2*np.sin(theta))) 
     qpar = (eps + (1/np.tan(theta))*(-zeta_v/2 + delta_2theta/2))
     print('Converted to crystal system coordinates')
@@ -104,8 +107,6 @@ def reciprocal_res_func(Nrays, npoints1, npoints2, npoints3, qi1_range, qi2_rang
     
     #new beamstop
     qroll_plot = qroll.copy() #hopefully keep the full shape for plotting later
-    # beamstop = True
-    
     if beamstop == True:
         
         def bfp_x_to_alpha(x): #in mm 
@@ -142,18 +143,47 @@ def reciprocal_res_func(Nrays, npoints1, npoints2, npoints3, qi1_range, qi2_rang
             absorption = np.logical_or(x >= thick_tot, rand < chance)
 
             return absorption, x, chance
-        
+        def apply_aperture(alpha_x, alpha_y, square_length):
+            """
+            Square aperture version: absorb rays outside square_length
+            in either x or y direction.
+            """
+            x = bfp_alpha_to_x(alpha_x)
+            y = bfp_alpha_to_x(alpha_y)
+
+            # absorb everything outside the square
+            absorption = (np.abs(x) > square_length) | (np.abs(y) > square_length)
+            return ~absorption, x, y
         # bs_height = 0.06 # in mm, height of beamstop (diameter)
         delta2ThetaMin = bfp_x_to_alpha(bs_height) # in rad
         print("shapes before: "+str(qroll.shape)+str(qrock_prime.shape)+str(q2th.shape))
+        def sim_knife_edge(alpha, edge_pos, dx = 0.0):
+            '''
+            Vectorized version of adding the knife-edge, including it's movement along x.
+            '''
+            # Convert angle to x
+            x = bfp_alpha_to_x(alpha)
+            x += dx  # Apply the knife-edge shift
+
+            # Knife-edge absorbs everything beneath it
+            absorption = x < edge_pos
+
+            return absorption
         
         #version with absorption
         # mu = xrl.CS_Total(74, 17)  # Tungsten, 17 keV
-        absorption,x_res,chance_res = absorption_wire(np.abs(delta_2theta/2),bs_height/2)
+        if aperture == True and knife_edge == False:
+            absorption, x_res, y_res = apply_aperture(np.abs(delta_2theta/2), np.abs(xi/2), bs_height/2)
+        elif knife_edge == True and aperture == False:
+            absorption = sim_knife_edge(delta_2theta/2, bs_height/2)
+        elif aperture == False and knife_edge == False:
+            absorption, x_res, chance_res = absorption_wire(np.abs(delta_2theta/2),bs_height/2)
         # plt.figure(0) # just to check
         # plt.clf()
         # plt.plot(x_res,chance_res,'x')
+        qrock = qrock[absorption == 1][:Nrays]
         qroll = qroll[absorption == 1][:Nrays]
+        qpar = qpar[absorption == 1][:Nrays]
         qrock_prime = qrock_prime[absorption == 1][:Nrays]
         q2th = q2th[absorption == 1][:Nrays]    
         
@@ -162,47 +192,55 @@ def reciprocal_res_func(Nrays, npoints1, npoints2, npoints3, qi1_range, qi2_rang
 #        qrock_prime = qrock_prime[np.abs(delta_2theta/2)>=delta2ThetaMin/2][:Nrays]
 #        q2th = q2th[np.abs(delta_2theta/2)>=delta2ThetaMin/2][:Nrays]
         print("shapes after:  "+str(qroll.shape)+str(qrock_prime.shape)+str(q2th.shape))
-    
-    
-    # % Convert point cloud into local density function, Resq_i, normalised to 1
-    # % If the range is set too narrow such that some points falls outside ranges,
-    # %             the fraction of points outside is returned as ratio_outside
-    Resq_i = np.zeros([npoints1, npoints2, npoints3])
-    index1 = (np.floor((qrock_prime + (qi1_range / 2)) / qi1_range * npoints1)).astype(np.int16)
-    index2 = (np.floor((qroll       + (qi2_range / 2)) / qi2_range * npoints2)).astype(np.int16)
-    index3 = (np.floor((q2th        + (qi3_range / 2)) / qi3_range * npoints3)).astype(np.int16)
-    
-    # if mem_save == True:
-    #     del qrock, qroll, qpar, qrock_prime, q2th
-    #     gc.collect()
-    
-    idx = (index3 >=0)*(index2 >=0)*(index1 >=0)*(index1 < npoints1)*(index2 < npoints2)*(index3 < npoints3)
-    np.add.at(Resq_i, tuple([index1[idx],index2[idx],index3[idx]]), 1)
-    print('Resq_i filled')
-    plot_figs = 1
-    normResq_i = Resq_i/Resq_i.max() # normalise to 1 as max value
-    if plot_figs == 1:
-        plt.plot(np.linspace(-qi1_range,qi1_range,npoints1),normResq_i[:,npoints2//2, npoints3//2].squeeze())
-        plt.tight_layout()
-        plt.xlabel('$qi_{1}$ ')
-        plt.ylabel('Probability Density')
-        plt.title('Distribution of Resq_i (summing $2^{nd}$+$3^{rd}$ axis)')
-        plt.grid(True)
-        plt.show()
-    if plot_figs == 1:
-        plt.plot(np.linspace(-qi3_range,qi3_range,npoints3)*1000,np.apply_over_axes(np.sum, normResq_i, [0,1]).squeeze())
-        plt.tight_layout()
-        plt.xlabel('$qi_{3}$ * 1000')
-        plt.ylabel('Probability Density')
-        plt.title('Distribution of Resq_i (summing $1^{st}$+$2^{nd}$ axis)')
-        plt.grid(True)
-        plt.show()
-    if save_resqi == 1:
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+
+    def bin_once(qrock_prime_k, q2th_k):
+        index1 = np.floor((qrock_prime_k + (qi1_range/2)) / qi1_range * npoints1).astype(np.int16)
+        index2 = np.floor((qroll         + (qi2_range/2)) / qi2_range * npoints2).astype(np.int16)
+        index3 = np.floor((q2th_k        + (qi3_range/2)) / qi3_range * npoints3).astype(np.int16)
+        Res = np.zeros((npoints1, npoints2, npoints3), dtype=np.uint32)
+        idx = (index1>=0)&(index2>=0)&(index3>=0)&(index1<npoints1)&(index2<npoints2)&(index3<npoints3)
+        np.add.at(Res, (index1[idx], index2[idx], index3[idx]), 1)
+        return Res
+
+        # Single “position”
+    if beamstop == False:
+        qrock_prime = cos_t*qrock + sin_t*qpar
+        q2th        = -sin_t*qrock + cos_t*qpar
+    if beamstop == True:
+        qrock_prime = qrock_prime
+        q2th        = q2th
+
+    if save_resqi == True: 
+        Res = bin_once(qrock_prime, q2th)
+        normResq_i = Res/Res.max()
         output = open('pkl_files/Resq_i_{0}.pkl'.format(date), 'wb')
         pickle.dump(normResq_i, output)
         output.close()
         # np.savetxt('reciprocal space/Resq_i_{0}.csv'.format(date), normResq_i, delimiter=',')
         print('Resq_i saved as Resq_i_{0}.pkl'.format(date))
+    if return_qs == True:
+        return qrock, qroll, qpar, qrock_prime, q2th, delta_2theta
+        
+
+
+    # if plot_figs == 1:
+    #     plt.plot(np.linspace(-qi1_range,qi1_range,npoints1),normResq_i[:,npoints2//2, npoints3//2].squeeze())
+    #     plt.tight_layout()
+    #     plt.xlabel('$qi_{1}$ ')
+    #     plt.ylabel('Probability Density')
+    #     plt.title('Distribution of Resq_i (summing $2^{nd}$+$3^{rd}$ axis)')
+    #     plt.grid(True)
+    #     plt.show()
+    # if plot_figs == 1:
+    #     plt.plot(np.linspace(-qi3_range,qi3_range,npoints3)*1000,np.apply_over_axes(np.sum, normResq_i, [0,1]).squeeze())
+    #     plt.tight_layout()
+    #     plt.xlabel('$qi_{3}$ * 1000')
+    #     plt.ylabel('Probability Density')
+    #     plt.title('Distribution of Resq_i (summing $1^{st}$+$2^{nd}$ axis)')
+    #     plt.grid(True)
+    #     plt.show()
+
       
 
     # %%%%%%%%%%%%  For test purposes, plots %%%%%%%%%%%

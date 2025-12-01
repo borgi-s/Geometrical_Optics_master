@@ -13,7 +13,7 @@ from functions import (fast_inverse2, load_or_generate_Hg, rotatedU, Fd_find_mix
 fast_inverse2(np.random.random(size = (100,3,3))); # DO NOT OUTCOMMENT, this line jit compiles "fast_inverse2" function so performance on larger arrays are obtained
 # INPUT instrumental settings, related to direct space resolution function
 psize = 40E-9 # pixel size in units of m, in the object plane
-zl_rms = 0.6E-6/2.35  # rms value of Gaussian beam profile, in m, centered at 0
+zl_rms = 0.4E-6/2.35  # rms value of Gaussian beam profile, in m, centered at 0
 keV = 17
 wavelength = 1.239841984e-9 / keV  # kev to wavelength in m
 a = 4.0495e-10  # lattice parameter in m
@@ -33,7 +33,7 @@ NN3 = int(Npixels//30*Nsub)
 # Choose sys.path[0] or sys.path[1] depending on parent folder
 # Define the file paths for reciprocal array
 pkl_fpath = sys.path[0]+'/reciprocal_space/pkl_files/'
-pkl_fn = 'Resq_i_20250514_1458.pkl' # Change accordingly
+pkl_fn = 'Resq_i_25mu_aperture.pkl' # Change accordingly
 vars_fn = os.path.splitext(pkl_fn)[0] + '_vars.txt'
 print('Loading Resq_i.')
 # Load the pickle file
@@ -101,8 +101,8 @@ prob_z = np.exp(-0.5*(rl[2]/zl_rms)**2)
 # for dis 4, ndis >= 151
 
 
-ndis = 1 # number of dislocations
-dis = 5 # units of micrometer
+ndis = 7501 # number of dislocations
+dis = 0.25 # units of micrometer
 def Find_Hg(dis, ndis, psize, zl_rms, I = np.identity(3), h=-1, k=1, l=-1):
     Q_norm = np.sqrt(h * h + k * k + l * l) # We have assumed B_0 = I
     q_hkl = np.asarray([h, k, l]) / Q_norm
@@ -143,78 +143,140 @@ Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
 #                   [      0,        1,       0      ],
 #                   [-np.sin(theta), 0, np.cos(theta)]])
 
-
-
-def forward(Hg, phi = 0, chi = 0, TwoDeltaTheta = 0, qi_return = False):
-    '''
-    This function calculates the forward model image for a given set of angles on
-    the goniometer holding the sample, this is based on equations from a paper. 
-    It calculates the scattering vector in different spaces and uses it to generate 
-    a probability distribution, which is added to the forward model image.
-    -----------------------------------------------------------------------------
-    Parameters:
-    phi, chi, TwoDeltaTheta: float.
-        The radians off the Bragg condition in each rotation stage.
-    
-    Returns
-    -----------------------------------------------------------------------------
-    numpy.ndarray, numpy.ndarray
-        The scattering vector in imaging space, shape(3,X), X being NN1 * NN2 * NN3
-        The forward modelled image, shape (NN3,NN1)
-
-    '''
+def precompute_forward_static(Hg, TwoDeltaTheta=0.0):
+    """
+    Precompute pieces of the forward model that do not depend on phi/chi.
+    """
+    # Theta only depends on theta_0 and TwoDeltaTheta
     if TwoDeltaTheta != 0:
         theta = theta_0 + TwoDeltaTheta
-        Theta = np.array([[np.cos(theta), 0, np.sin(theta)],
-                  [0, 1, 0],
-                  [-np.sin(theta), 0, np.cos(theta)]])
     else:
-        Theta = np.array([[np.cos(theta_0), 0, np.sin(theta_0)],
-                  [0, 1, 0],
-                  [-np.sin(theta_0), 0, np.cos(theta_0)]])
+        theta = theta_0
 
-    # Initialize forward model image with zeros
-    im_1 = np.zeros([(NN2//Nsub), NN1//Nsub])
-    
-    # Define angles
-    ang_arr = np.asarray([[phi - TwoDeltaTheta/2], [chi], [(TwoDeltaTheta/2)/np.tan(theta_0)]])
-    
-    # Calculate scattering vector in sample space
-    # qs = np.zeros_like(rl.T)
-    # qs[negative_indices] = U_sr @ Hg[negative_indices] @ q_hkl # eq. 20 in GOF
-    # qs[positive_indices] = U_sl @ Hg[positive_indices] @ q_hkl # eq. 20 in GOF
-    qs = Us @ Hg @ q_hkl
-    
-    # Calculate scattering vector in crystal/grain space
-    qc = qs.squeeze().T + ang_arr
+    Theta = np.array([[np.cos(theta), 0, np.sin(theta)],
+                      [0,            1, 0            ],
+                      [-np.sin(theta), 0, np.cos(theta)]])
 
-    
-    
-    # Calculate scattering vector in imaging space and reshape it
-    qi = Theta @ qc
-    qi_field = qi.reshape(3,NN1,NN2,NN3)
-    
-    # Calculate indices for Resq_i that pass through the mask
-    index1 = np.floor( (qi[0] - qi1_start)/qi1_step).astype(np.int16)
-    index2 = np.floor( (qi[1] - qi2_start)/qi2_step).astype(np.int16)
-    index3 = np.floor( (qi[2] - qi3_start)/qi3_step).astype(np.int16)
-    
-    # Calculate index of values within bounds and extract corresponding values from Resq_i
-    idx = (index3 >=0)*(index2 >=0)*(index1 >=0)*(index1 < npoints1)*(index2 < npoints2)*(index3 < npoints3)
-    prob = Resq_i[index1[idx],index2[idx],index3[idx]] * prob_z[idx]
-    
-    # Initialize array for probability distribution
-    pro = np.zeros((NN1*NN2*NN3), dtype = np.float32)
-    
-    # Assign values to the probability distribution array for valid indices
+    # This is expensive and independent of phi/chi
+    qs = Us @ Hg @ q_hkl           # shape (3, Nvox) or similar
+    base_qc = qs.squeeze().T       # shape (3, Nvox)
+
+    return Theta, base_qc
+
+Theta, base_qc = precompute_forward_static(Hg, TwoDeltaTheta=0.0)
+
+def forward_from_static(Theta, base_qc, phi=0.0, chi=0.0, TwoDeltaTheta=0.0, qi_return=False):
+    """
+    Like forward(), but uses precomputed Theta and base_qc = (Us @ Hg @ q_hkl).squeeze().T
+    """
+    # forward image
+    im_1 = np.zeros([(NN2//Nsub), NN1//Nsub], dtype=np.float32)
+
+    # Angle offset vector (3, 1)
+    ang_arr = np.asarray([[phi - TwoDeltaTheta/2],
+                          [chi],
+                          [(TwoDeltaTheta/2)/np.tan(theta_0)]])   # same as before
+
+    # qc: 3 x Nvox
+    qc = base_qc + ang_arr      # broadcast over all voxels
+
+    qi = Theta @ qc             # 3 x Nvox
+    qi_field = qi.reshape(3, NN1, NN2, NN3)
+
+    index1 = np.floor((qi[0] - qi1_start)/qi1_step).astype(np.int16)
+    index2 = np.floor((qi[1] - qi2_start)/qi2_step).astype(np.int16)
+    index3 = np.floor((qi[2] - qi3_start)/qi3_step).astype(np.int16)
+
+    idx = ((index3 >= 0) &
+           (index2 >= 0) &
+           (index1 >= 0) &
+           (index1 < npoints1) &
+           (index2 < npoints2) &
+           (index3 < npoints3))
+
+    prob = Resq_i[index1[idx], index2[idx], index3[idx]] * prob_z[idx]
+
+    pro = np.zeros(NN1*NN2*NN3, dtype=np.float32)
     pro[idx] = prob
-    
-    # Add probability distribution to forward model image
+
     np.add.at(im_1, tuple(indices.T), pro)
-    if qi_return == True:
-        qi_field = qi.reshape(3,NN1,NN2,NN3)
-        # Return scattering vector in imaging space and forward model image
+
+    if qi_return:
         return im_1, qi_field
     else:
-        # Return the forward model image
         return im_1
+
+
+# def forward(Hg, phi = 0, chi = 0, TwoDeltaTheta = 0, qi_return = False):
+#     '''
+#     This function calculates the forward model image for a given set of angles on
+#     the goniometer holding the sample, this is based on equations from a paper. 
+#     It calculates the scattering vector in different spaces and uses it to generate 
+#     a probability distribution, which is added to the forward model image.
+#     -----------------------------------------------------------------------------
+#     Parameters:
+#     phi, chi, TwoDeltaTheta: float.
+#         The radians off the Bragg condition in each rotation stage.
+    
+#     Returns
+#     -----------------------------------------------------------------------------
+#     numpy.ndarray, numpy.ndarray
+#         The scattering vector in imaging space, shape(3,X), X being NN1 * NN2 * NN3
+#         The forward modelled image, shape (NN3,NN1)
+
+#     '''
+#     if TwoDeltaTheta != 0:
+#         theta = theta_0 + TwoDeltaTheta
+#         Theta = np.array([[np.cos(theta), 0, np.sin(theta)],
+#                   [0, 1, 0],
+#                   [-np.sin(theta), 0, np.cos(theta)]])
+#     else:
+#         Theta = np.array([[np.cos(theta_0), 0, np.sin(theta_0)],
+#                   [0, 1, 0],
+#                   [-np.sin(theta_0), 0, np.cos(theta_0)]])
+
+#     # Initialize forward model image with zeros
+#     im_1 = np.zeros([(NN2//Nsub), NN1//Nsub])
+    
+#     # Define angles
+#     ang_arr = np.asarray([[phi - TwoDeltaTheta/2], [chi], [(TwoDeltaTheta/2)/np.tan(theta_0)]])
+    
+#     # Calculate scattering vector in sample space
+#     # qs = np.zeros_like(rl.T)
+#     # qs[negative_indices] = U_sr @ Hg[negative_indices] @ q_hkl # eq. 20 in GOF
+#     # qs[positive_indices] = U_sl @ Hg[positive_indices] @ q_hkl # eq. 20 in GOF
+#     qs = Us @ Hg @ q_hkl
+    
+#     # Calculate scattering vector in crystal/grain space
+#     qc = qs.squeeze().T + ang_arr
+
+    
+    
+#     # Calculate scattering vector in imaging space and reshape it
+#     qi = Theta @ qc
+#     qi_field = qi.reshape(3,NN1,NN2,NN3)
+    
+#     # Calculate indices for Resq_i that pass through the mask
+#     index1 = np.floor( (qi[0] - qi1_start)/qi1_step).astype(np.int16)
+#     index2 = np.floor( (qi[1] - qi2_start)/qi2_step).astype(np.int16)
+#     index3 = np.floor( (qi[2] - qi3_start)/qi3_step).astype(np.int16)
+    
+#     # Calculate index of values within bounds and extract corresponding values from Resq_i
+#     idx = (index3 >=0)*(index2 >=0)*(index1 >=0)*(index1 < npoints1)*(index2 < npoints2)*(index3 < npoints3)
+#     prob = Resq_i[index1[idx],index2[idx],index3[idx]] * prob_z[idx]
+    
+#     # Initialize array for probability distribution
+#     pro = np.zeros((NN1*NN2*NN3), dtype = np.float32)
+    
+#     # Assign values to the probability distribution array for valid indices
+#     pro[idx] = prob
+    
+#     # Add probability distribution to forward model image
+#     np.add.at(im_1, tuple(indices.T), pro)
+#     if qi_return == True:
+#         qi_field = qi.reshape(3,NN1,NN2,NN3)
+#         # Return scattering vector in imaging space and forward model image
+#         return im_1, qi_field
+#     else:
+#         # Return the forward model image
+#         return im_1
