@@ -13,8 +13,9 @@ from matplotlib.ticker import ScalarFormatter
 from bokeh.events import PanStart, PanEnd
 from bokeh.plotting import figure, output_file, save
 from bokeh.layouts import row, column
-from bokeh.models import ColumnDataSource, CustomJS, LinearColorMapper, ColorBar
+from bokeh.models import ColumnDataSource, CustomJS, LinearColorMapper, ColorBar, Button
 from bokeh.palettes import Viridis256, Greys256
+
 
 
 
@@ -194,6 +195,22 @@ curve0 = rock_flat[pix0]         # (Nphi,)
 phi_index0 = Nphi // 2
 image0 = data_roi[phi_index0, :, :]  # (Ny, Nx)
 
+# state source for metadata (px, py, COM, FWHM, φ, line endpoints) ----
+com0 = com_phi_moment_roi[iy0, ix0]
+fwhm0 = fwhm_phi_roi[iy0, ix0]
+
+source_state = ColumnDataSource(data=dict(
+    px=[int(ix0)],
+    py=[int(iy0)],
+    com=[float(com0)],
+    fwhm=[float(fwhm0)],
+    phi=[float(Phi[phi_index0])],  # radians
+    start_px=[0],
+    start_py=[0],
+    end_px=[0],
+    end_py=[0],
+))
+
 # ----------------- Data sources -----------------
 # Top-left COM map
 source_img_com = ColumnDataSource(data=dict(
@@ -314,6 +331,177 @@ p_line = figure(
 p_line.line('s', 'intensity', source=source_line_profile)
 
 
+# ---------- SAVE BUTTONS ----------
+
+# Save COM map
+btn_save_com = Button(label="Save COM map CSV", button_type="primary", width=200)
+
+callback_save_com = CustomJS(args=dict(
+    source=source_img_com,
+    nx=Nx,
+    ny=Ny,
+    x_min=x_min,
+    x_max=x_max,
+    y_min=y_min,
+    y_max=y_max,
+), code="""
+    const data = source.data;
+    const img = data['image'][0];  // flat buffer length nx*ny
+
+    const nx_val = nx;
+    const ny_val = ny;
+    const dx = (x_max - x_min) / nx_val;
+    const dy = (y_max - y_min) / ny_val;
+
+    let csv = 'ix,iy,x_um,y_um,COM\\n';
+
+    for (let iy = 0; iy < ny_val; iy++) {
+        for (let ix = 0; ix < nx_val; ix++) {
+            const idx = iy * nx_val + ix;
+            const val = img[idx];
+            const x = x_min + (ix + 0.5) * dx;
+            const y = y_min + (iy + 0.5) * dy;
+            csv += `${ix},${iy},${x},${y},${val}\\n`;
+        }
+    }
+
+    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'com_map.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+""")
+btn_save_com.js_on_click(callback_save_com)
+
+# Save rocking curve
+btn_save_curve = Button(label="Save rocking curve CSV", button_type="primary", width=200)
+
+callback_save_curve = CustomJS(args=dict(
+    source=source_curve,
+    state=source_state,
+), code="""
+    const data = source.data;
+    const x = data['x'];
+    const y = data['y'];
+
+    const sdata = state.data;
+    const px   = sdata['px'][0];
+    const py   = sdata['py'][0];
+    const com  = sdata['com'][0];
+    const fwhm = sdata['fwhm'][0];
+
+    const com_str  = (isNaN(com)  ? 'NaN' : com.toExponential(2));
+    const fwhm_str = (isNaN(fwhm) ? 'NaN' : fwhm.toExponential(2));
+
+    let csv = 'phi_rad,intensity\\n';
+    for (let i = 0; i < x.length; i++) {
+        csv += `${x[i]},${y[i]}\\n`;
+    }
+
+    const filename = `COM_${com_str}_FWHM_${fwhm_str}_px_${px}_py_${py}.csv`;
+
+    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+""")
+btn_save_curve.js_on_click(callback_save_curve)
+
+# Save φ-image
+btn_save_image = Button(label="Save φ-image CSV", button_type="primary", width=200)
+
+callback_save_image = CustomJS(args=dict(
+    source=source_img_phi,
+    nx=Nx,
+    ny=Ny,
+    state=source_state,
+), code="""
+    const data = source.data;
+    const img = data['image'][0];  // flat buffer
+
+    const nx_val = nx;
+    const ny_val = ny;
+
+    const sdata = state.data;
+    const phi   = sdata['phi'][0];
+    const phi_str = (isNaN(phi) ? 'NaN' : phi.toExponential(2));
+
+    let csv = 'ix,iy,intensity\\n';
+
+    for (let iy = 0; iy < ny_val; iy++) {
+        for (let ix = 0; ix < nx_val; ix++) {
+            const idx = iy * nx_val + ix;
+            const val = img[idx];
+            csv += `${ix},${iy},${val}\\n`;
+        }
+    }
+
+    const filename = `image_phi_${phi_str}.csv`;
+
+    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+""")
+btn_save_image.js_on_click(callback_save_image)
+
+# Save line profile
+btn_save_profile = Button(label="Save line profile CSV", button_type="primary", width=200)
+
+callback_save_profile = CustomJS(args=dict(
+    source=source_line_profile,
+    state=source_state,
+), code="""
+    const data = source.data;
+    const s = data['s'];
+    const I = data['intensity'];
+
+    const sdata = state.data;
+    const start_px = sdata['start_px'][0];
+    const start_py = sdata['start_py'][0];
+    const end_px   = sdata['end_px'][0];
+    const end_py   = sdata['end_py'][0];
+    const phi      = sdata['phi'][0];
+    const phi_str  = (isNaN(phi) ? 'NaN' : phi.toExponential(2));
+
+    // Header with line endpoints and φ
+    let csv = 'start_px,start_py,end_px,end_py,phi_rad\\n';
+    csv += `${start_px},${start_py},${end_px},${end_py},${phi}\\n`;
+    csv += 'distance_pixels,intensity\\n';
+
+    for (let i = 0; i < s.length; i++) {
+        csv += `${s[i]},${I[i]}\\n`;
+    }
+
+    const filename = `line_profile_phi_${phi_str}.csv`;
+
+    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+""")
+btn_save_profile.js_on_click(callback_save_profile)
+
+
 # ----------------- Callback 1: click COM map -> update curve + FWHM + title -----------------
 callback_com = CustomJS(args=dict(
     src_curve=source_curve,
@@ -330,6 +518,7 @@ callback_com = CustomJS(args=dict(
     x_max=x_max,
     y_min=y_min,
     y_max=y_max,
+    state=source_state,  
 ), code="""
     const x = cb_obj.x;
     const y = cb_obj.y;
@@ -458,6 +647,14 @@ callback_com = CustomJS(args=dict(
     const com_str  = (isNaN(com_val)      ? "n/a" : com_val.toExponential(2)  + " rad");
     const fwhm_str = (isNaN(fwhm_map_val) ? "n/a" : fwhm_map_val.toExponential(2) + " rad");
 
+    // update state for save buttons
+    const sdata = state.data;
+    sdata['px'][0]   = ix;
+    sdata['py'][0]   = iy;
+    sdata['com'][0]  = com_val;
+    sdata['fwhm'][0] = fwhm_map_val;
+    state.change.emit();
+
     title.text = `COM = ${com_str},  FWHM = ${fwhm_str}`;
 """)
 
@@ -471,6 +668,7 @@ callback_curve = CustomJS(args=dict(
     title=p_img_phi.title,
     Nx=Nx,
     Ny=Ny,
+    state=source_state,   
 ), code="""
     const x = cb_obj.x;
     const PhiArr = Phi;
@@ -509,6 +707,11 @@ callback_curve = CustomJS(args=dict(
     // update title with chosen φ
     const phi_val = PhiArr[j];
     title.text = `Raw image at φ = ${phi_val.toExponential(2)} rad`;
+
+    // update φ in state (for filenames)
+    const sdata = state.data;
+    sdata['phi'][0] = phi_val;
+    state.change.emit();
 """)
 
 p_curve.js_on_event("tap", callback_curve)
@@ -535,6 +738,7 @@ callback_line_end = CustomJS(args=dict(
     src_line_profile=source_line_profile,
     Nx=Nx,
     Ny=Ny,
+    state=source_state,
 ), code="""
     // Drag end on bottom-left image
     const x1 = cb_obj.x;
@@ -549,6 +753,19 @@ callback_line_end = CustomJS(args=dict(
     overlay.xs = [x0, x1];
     overlay.ys = [y0, y1];
     src_line_overlay.change.emit();
+
+    // store start/end indices in state
+    const start_px = Math.round(x0);
+    const start_py = Math.round(y0);
+    const end_px   = Math.round(x1);
+    const end_py   = Math.round(y1);
+
+    const sdata = state.data;
+    sdata['start_px'][0] = start_px;
+    sdata['start_py'][0] = start_py;
+    sdata['end_px'][0]   = end_px;
+    sdata['end_py'][0]   = end_py;
+    state.change.emit();
 
     // Current image data (flat array of length Ny*Nx)
     const img_data = src_img_phi.data;
@@ -598,14 +815,17 @@ callback_line_end = CustomJS(args=dict(
 p_img_phi.js_on_event(PanEnd, callback_line_end)
 
  
-
-
 # ----------------- Layout and save -----------------
-top_row = row(p_img_com, p_curve)
-bottom_row = row(p_img_phi, p_line)
+top_left_col  = column(p_img_com, btn_save_com)
+top_right_col = column(p_curve,   btn_save_curve)
+bot_left_col  = column(p_img_phi, btn_save_image)
+bot_right_col = column(p_line,    btn_save_profile)
+
+top_row = row(top_left_col, top_right_col)
+bottom_row = row(bot_left_col, bot_right_col)
 layout = column(top_row, bottom_row)
 
-output_file("dist_0.25mu_25mu_aperture.html", title="Rocking Curve Viewer (Bokeh, 2x2)")
+output_file("savebutton_dist_0.25mu_25mu_aperture.html", title="COM - Rocking Curve - Image slice - Line Profile Viewer")
 save(layout)
 
 print("dist_0.25mu_25mu_aperture.html – open it in a browser and click around.")

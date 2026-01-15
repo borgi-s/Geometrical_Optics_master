@@ -6,7 +6,7 @@ from scipy.interpolate import griddata
 from functions import check_folder, check_path
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
-from direct_space.forward_model import forward, Find_Hg
+# from direct_space.forward_model import forward, Find_Hg
 import re
 import glob
 import imageio
