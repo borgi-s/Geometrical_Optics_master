@@ -45,11 +45,11 @@ def compute_chi_shift(
 
     The corner pixel of a strain-free crystal should peak at χ=0 in detector
     coordinates. Any offset is a systematic shift introduced by the finite
-    rocking grid; this function returns the shift in radians so downstream
+    rocking grid; this function returns the shift in degrees so downstream
     χ-axis calibration can correct it.
 
     Returns:
-        shift_rads — additive correction to apply to the χ axis when extracting COMs.
+        shift_deg — additive correction to apply to the χ axis when extracting COMs.
     """
 ```
 

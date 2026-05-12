@@ -28,12 +28,12 @@ class TestComputeChiShift:
         assert shift == pytest.approx(expected, rel=1e-9)
 
     def test_shift_grows_when_corner_pixel_shifts(self) -> None:
-        """Moving the corner-pixel peak by one chi cell increases |shift| by
-        exactly one oversample-step worth of degrees."""
+        """Moving the corner-pixel peak by one chi-grid cell increases |shift| by
+        exactly that one-cell width in degrees."""
         chi_steps = 11
         chi_range = 0.1
         oversample = 100
-        per_cell = oversample * (2 * chi_range / (chi_steps * oversample - 1))
+        one_cell_deg = oversample * (2 * chi_range / (chi_steps * oversample - 1))
 
         stack_centered = np.zeros((chi_steps, 5, 4, 4))
         stack_centered[5, :, -1, -1] = 1.0
@@ -42,4 +42,18 @@ class TestComputeChiShift:
 
         s_centered = compute_chi_shift(stack_centered, chi_steps, chi_range, oversample=oversample)
         s_shifted = compute_chi_shift(stack_shifted, chi_steps, chi_range, oversample=oversample)
-        assert (s_shifted - s_centered) == pytest.approx(per_cell, rel=1e-9)
+        assert (s_shifted - s_centered) == pytest.approx(one_cell_deg, rel=1e-9)
+
+    def test_sign_loss_peaks_above_center_collapse_to_baseline(self) -> None:
+        """The abs() sign-loss means a peak one step above center gives the
+        same magnitude as the centered baseline (shift_idx sign is discarded)."""
+        chi_steps, chi_range, oversample = 11, 0.1, 100
+        stack_centered = np.zeros((chi_steps, 5, 4, 4))
+        stack_centered[5, :, -1, -1] = 1.0
+        stack_above = np.zeros((chi_steps, 5, 4, 4))
+        stack_above[6, :, -1, -1] = 1.0  # one step above center
+        s_centered = compute_chi_shift(stack_centered, chi_steps, chi_range, oversample=oversample)
+        s_above = compute_chi_shift(stack_above, chi_steps, chi_range, oversample=oversample)
+        # Because the implementation does int(abs(shift_idx)), peaks at index 4
+        # and index 6 produce the same magnitude (mirror around the center).
+        assert s_above == pytest.approx(s_centered, rel=1e-9)
