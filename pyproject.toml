@@ -68,8 +68,6 @@ ignore = [
     "E501",   # line length handled by formatter
     "E741",   # single-letter physics names (l, I, O, b, ny) are conventional
     # Temporary — removed as cleanup phases land
-    "F403",   # wildcard import (plan Phase 5: replace `import *`)
-    "F405",   # name from wildcard (plan Phase 5)
     "F841",   # unused local (sweep in plan Phase 3.x)
     "E712",   # == True/False (sweep in plan Phase 3.x)
     "RET504", # unnecessary-assign (sweep in plan Phase 3.x)
