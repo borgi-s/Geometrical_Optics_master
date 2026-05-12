@@ -49,10 +49,25 @@ Homepage = "https://github.com/borgi-s/Geometrical_Optics_master"
 Paper = "https://journals.iucr.org/j/issues/2024/02/00/nb5370/"
 
 [tool.setuptools]
-# Flat layout for now — keeps top-level functions.py, image_processor.py, init_forward.py importable.
-# A future refactor (plan Phase 4) moves these into src/dfxm_geo/.
+# Transitional layout during Phase 4 cleanup. Both the new src/dfxm_geo/
+# package and the legacy flat modules ship together; legacy paths will
+# become deprecation shims that re-export from dfxm_geo.* until Phase 5.3
+# removes them.
 py-modules = ["functions", "image_processor", "init_forward"]
-packages = ["direct_space", "reciprocal_space"]
+packages = [
+    "direct_space",
+    "reciprocal_space",
+    "dfxm_geo",
+    "dfxm_geo.analysis",
+    "dfxm_geo.crystal",
+    "dfxm_geo.direct_space",
+    "dfxm_geo.io",
+    "dfxm_geo.reciprocal_space",
+    "dfxm_geo.viz",
+]
+
+[tool.setuptools.package-dir]
+"dfxm_geo" = "src/dfxm_geo"
 
 [tool.ruff]
 line-length = 100
