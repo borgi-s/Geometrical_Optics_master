@@ -26,3 +26,11 @@ ftype = ".npy"
 dislocs_dirname = "images10"
 perfect_dirname = "images10_perf_crystal"
 include_perfect_crystal = true
+
+[postprocess]
+enabled = true
+chi_oversample = 20
+phi_oversample = 20
+chi_oversample_for_shift = 100
+figures_dirname = "figures"
+data_dirname = "analysis"

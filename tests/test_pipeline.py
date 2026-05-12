@@ -53,6 +53,8 @@ class TestSimulationConfigFromToml:
         assert cfg.crystal.ndis == 151
         assert cfg.scan.phi_steps == 61
         assert cfg.scan.chi_steps == 61
+        assert cfg.postprocess.enabled is True
+        assert cfg.postprocess.chi_oversample == 20
 
     def test_omitted_optional_sections_use_defaults(self, tmp_path: Path) -> None:
         """[crystal] and [io] are optional; only [scan] is required."""
