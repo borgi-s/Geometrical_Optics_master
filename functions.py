@@ -292,10 +292,6 @@ def m_norm(list):
     return list / np.sqrt(np.sum(square(list)))
 
 
-def image_range(im_in, lower, upper):
-    return np.interp(im_in, (np.min(im_in), np.max(im_in)), (lower, upper))
-
-
 # def Fd_find(rl, Ud, Us, Theta, dis = 1, ndis = 1, b = 2.862*1e-4, ny = 0.334, sign = 1):
 #     xl, yl, zl = rl
 #     Fdd = np.zeros([len(xl), 3, 3])
