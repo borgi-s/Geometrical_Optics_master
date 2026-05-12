@@ -16,6 +16,5 @@ from dfxm_geo.io.images import (  # noqa: F401
     load_images_parallel,
     save_edfs,
     save_image,
-    save_images,
     save_images_parallel,
 )
