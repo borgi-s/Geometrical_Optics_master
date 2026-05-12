@@ -1,4 +1,5 @@
 """Pytest fixtures shared across the test suite."""
+
 from pathlib import Path
 
 import pytest

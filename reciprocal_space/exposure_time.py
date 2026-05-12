@@ -1,25 +1,25 @@
-#function absolute_rec_space
+# function absolute_rec_space
 # Auxiliary model for use with rec. space resolution function for DFXM paper.
 # THis allows for absolute comparison of intensities
 # The objective is modelled as an isotropic Gaussian with an NA and in addition
 # a square phyical aperture of d side length D.
- 
+
 # H.F. Poulsen, Sept 16, 2023, version 1.0
 
 import numpy as np
 
 # Input parameters
 Nrays = 1000000
-zeta_v_fwhm = 0.53E-3  # incoming divergence in vertical direction, in rad
+zeta_v_fwhm = 0.53e-3  # incoming divergence in vertical direction, in rad
 eps_rms = 0.014 / 2.35  # rms width of x-ray energy bandwidth
-NA_rms = 7.31E-4 / 2.35  # NA of objective, in rad
+NA_rms = 7.31e-4 / 2.35  # NA of objective, in rad
 energy0 = 17.00  # in keV
 
 lambda0 = 12.398 / energy0  # in Å
 d0 = 4.0495 / np.sqrt(3)  # in Å
 theta0 = np.arcsin(lambda0 / (2 * d0))  # in rad
 G = 2 * np.pi / d0 * np.asarray([-np.sin(theta0), np.cos(theta0)])
-D = 2 * np.sqrt(50E-6 * 1E-3)  # physical aperture of objective, in m
+D = 2 * np.sqrt(50e-6 * 1e-3)  # physical aperture of objective, in m
 d1 = 0.274  # sample-objective distance, in m
 phys_aper = D / d1
 

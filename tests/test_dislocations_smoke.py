@@ -3,6 +3,7 @@
 This guards against silent numerical regressions during refactors. Inputs
 are deliberately small and deterministic; we are not validating physics here.
 """
+
 import sys
 from pathlib import Path
 
