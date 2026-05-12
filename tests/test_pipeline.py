@@ -207,7 +207,10 @@ class TestRunPostprocess:
         assert (data_dir / "phi_list.npy").exists()
         assert (data_dir / "chi_list.npy").exists()
         assert (data_dir / "qi_field.npy").exists()
-        assert (data_dir / "chi_shift.txt").exists()
+        assert (data_dir / "chi_shift_deg.txt").exists()
+        # File contents must be a bare float for downstream parsing
+        chi_shift_value = float((data_dir / "chi_shift_deg.txt").read_text())
+        assert chi_shift_value == result["chi_shift"]
         # Figures
         fig_dir = output_dir / "figures"
         assert (fig_dir / "mosaicity_maps.svg").exists()
