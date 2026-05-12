@@ -48,6 +48,9 @@ dev = [
 Homepage = "https://github.com/borgi-s/Geometrical_Optics_master"
 Paper = "https://journals.iucr.org/j/issues/2024/02/00/nb5370/"
 
+[project.scripts]
+dfxm-forward = "dfxm_geo.pipeline:cli_main"
+
 [tool.setuptools]
 # Transitional layout during Phase 4 cleanup. Both the new src/dfxm_geo/
 # package and the legacy flat modules ship together; legacy paths will
