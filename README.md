@@ -61,17 +61,16 @@ on disk). See [`docs/reproducibility.md`](docs/reproducibility.md) for the
 config schema, pre-built variants for different dislocation densities,
 and what is not yet configurable.
 
-### Legacy demo: `init_forward.py`
+### Legacy demo (historical reference)
 
 ```bash
-python init_forward.py
+dfxm-forward --config configs/default.toml --output output/
 ```
 
-Still in place as a runnable demo that produces the per-pixel COM /
-mosaicity maps and SVG paper-style figures. The simulation portion of
-the demo is equivalent to `dfxm-forward --config configs/default.toml`;
-the analysis + plotting will move into `dfxm_geo.analysis` in a future
-phase (see plan, Phase 9).
+The original single-file entry point is preserved under `legacy/init_forward.py`
+as a historical reference. Use `dfxm-forward` for all new workflows; the
+post-processing (COM / mosaicity maps, SVG figures) is now handled by
+`dfxm_geo.analysis` and `dfxm_geo.viz` and is invoked automatically by the CLI.
 
 ## Project structure
 
@@ -79,7 +78,7 @@ phase (see plan, Phase 9).
 .
 ├── functions.py                  Crystal mechanics and dislocation fields
 ├── image_processor.py            Image I/O, moment/FWHM analysis, parallel rendering
-├── init_forward.py               Main simulation entry script
+├── legacy/init_forward.py        Pre-cleanup entry point (historical reference)
 ├── direct_space/
 │   └── forward_model.py          Direct-space forward simulator
 ├── reciprocal_space/
@@ -96,8 +95,8 @@ A future refactor (plan Phase 4) moves the physics modules into
 ## Reproducing the paper figures
 
 See [`docs/reproducibility.md`](docs/reproducibility.md) for the current
-recipe (CLI for the simulation, `init_forward.py` for the post-processing,
-pending the Phase 9 port of the analysis into `dfxm_geo.analysis`).
+recipe (`dfxm-forward --config configs/default.toml --output output/` runs
+both the simulation and post-processing end-to-end).
 Reference datasets are scheduled for Zenodo deposit; until then, contact
 the corresponding author.
 

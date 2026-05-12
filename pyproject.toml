@@ -57,7 +57,7 @@ dfxm-forward = "dfxm_geo.pipeline:cli_main"
 # package and the legacy flat modules ship together; legacy paths will
 # become deprecation shims that re-export from dfxm_geo.* until Phase 5.3
 # removes them.
-py-modules = ["functions", "image_processor", "init_forward"]
+py-modules = ["functions", "image_processor"]
 packages = [
     "direct_space",
     "reciprocal_space",
