@@ -172,6 +172,15 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
     correction, computes per-pixel COM maps, calls forward() for the qi field
     at z=0, then writes data products and SVGs under output_dir.
 
+    Warning:
+        When invoked via ``--postprocess-only`` against an output dir whose
+        stacks were produced with non-default ``dis`` / ``ndis``, the qi field
+        is computed against the *module-level* ``fm.Hg``. If no prior
+        ``run_simulation`` set ``fm.Hg`` in this process, it will fall back to
+        the default kernel auto-load — which may not match the saved stacks.
+        For correctness in that workflow, assign ``fm.Hg`` explicitly before
+        calling this function.
+
     Raises:
         FileNotFoundError: if either expected stack directory is absent.
         RuntimeError: from :func:`_ensure_kernel_loaded` if the reciprocal-
@@ -225,6 +234,7 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         config.scan.chi_steps,
         chi_shift=chi_shift,
         oversample=config.postprocess.phi_oversample,
+        chi_oversample=config.postprocess.chi_oversample,
     )
 
     # Stage 4: qi field at z=0 via a single forward() call. Uses module-level

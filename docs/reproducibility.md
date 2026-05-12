@@ -121,6 +121,13 @@ re-simulating (useful after tweaking `[postprocess]` parameters):
 
     dfxm-forward --config configs/default.toml --output output/ --postprocess-only
 
+> **Warning:** `--postprocess-only` against a directory produced with non-default
+> `[crystal]` parameters re-uses the module-level Hg from the default kernel
+> load, not the Hg used to produce the saved stacks. The qi-field output can
+> then be inconsistent with the rocking sweep. For correctness, set
+> `fm.Hg` explicitly in Python rather than via the CLI flag, or re-run the
+> full pipeline.
+
 The post-processing stage requires the reciprocal-space resolution kernel
 pickle (same as the simulation stage) to compute the qi field.
 

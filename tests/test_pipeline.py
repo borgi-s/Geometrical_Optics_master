@@ -235,6 +235,19 @@ class TestRunPostprocess:
         with pytest.raises(FileNotFoundError, match="dislocs"):
             run_postprocess(tmp_path, cfg)
 
+    def test_missing_perfect_dir_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """run_postprocess errors clearly if only the dislocs dir exists."""
+        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
+        cfg = SimulationConfig()
+        # Create only the dislocs dir; perfect dir is absent.
+        (tmp_path / cfg.io.dislocs_dirname).mkdir(parents=True)
+        with pytest.raises(FileNotFoundError, match="perfect-crystal"):
+            run_postprocess(tmp_path, cfg)
+
     def test_missing_hg_raises(
         self,
         tiny_simulation_output: tuple[Path, SimulationConfig],

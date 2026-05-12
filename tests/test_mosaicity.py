@@ -152,6 +152,47 @@ class TestComputeComMaps:
         assert phi_list.shape == (H, W)
         assert chi_list.shape == (H, W)
 
+    def test_independent_chi_and_phi_oversample(self) -> None:
+        """chi_oversample, when provided, can differ from oversample (phi)."""
+        chi_steps = 5
+        phi_steps = 5
+        chi_range = 0.1
+        phi_range = 0.1
+        stack = np.zeros((chi_steps, phi_steps, 1, 1))
+        stack[2, 2, 0, 0] = 1.0  # exact-grid peak
+
+        # Equal oversample
+        phi_eq, chi_eq = compute_com_maps(
+            stack,
+            phi_range=phi_range,
+            phi_steps=phi_steps,
+            chi_range=chi_range,
+            chi_steps=chi_steps,
+            chi_shift=0.0,
+            oversample=10,
+            chi_oversample=10,
+        )
+        # Different chi_oversample changes only the chi result
+        phi_diff, chi_diff = compute_com_maps(
+            stack,
+            phi_range=phi_range,
+            phi_steps=phi_steps,
+            chi_range=chi_range,
+            chi_steps=chi_steps,
+            chi_shift=0.0,
+            oversample=10,
+            chi_oversample=50,
+        )
+        # phi outputs should be identical (same oversample, same peak)
+        assert phi_eq[0, 0] == pytest.approx(phi_diff[0, 0])
+        # chi values should each match their respective refined-grid lookup
+        # value at COM index 2 (grid index 2 * chi_over).
+        expected_chi_10 = np.deg2rad(np.linspace(-chi_range, chi_range, chi_steps * 10))[2 * 10]
+        expected_chi_50 = np.deg2rad(np.linspace(-chi_range, chi_range, chi_steps * 50))[2 * 50]
+        assert chi_eq[0, 0] == pytest.approx(expected_chi_10, rel=1e-9)
+        assert chi_diff[0, 0] == pytest.approx(expected_chi_50, rel=1e-9)
+
+    @pytest.mark.filterwarnings("ignore:invalid value encountered in scalar divide:RuntimeWarning")
     def test_zero_intensity_pixel_produces_nan(self) -> None:
         """Dead detector pixels (all-zero rocking curve) must produce NaN in
         both phi and chi maps, not a ValueError from int(NaN)."""

@@ -62,12 +62,16 @@ def compute_com_maps(
     *,
     chi_shift: float = 0.0,
     oversample: int = 20,
+    chi_oversample: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-pixel center-of-mass extraction over the (φ, χ) rocking grid.
 
     For each detector pixel ``(i, j)``, computes the centroid of
     ``stack[:, :, i, j]`` (a ``chi_steps × phi_steps`` rocking-curve image)
-    and looks the (φ, χ) values up on a ``oversample``-times-refined grid.
+    and looks the (φ, χ) values up on a refined grid. The φ axis uses
+    ``oversample`` cells per original step; the χ axis uses ``chi_oversample``
+    when provided, else falls back to ``oversample`` (matching the original
+    ``init_forward.py`` convention of one shared factor).
 
     Args:
         stack: Shape ``(chi_steps, phi_steps, H, W)``. Detector frame of the
@@ -76,16 +80,20 @@ def compute_com_maps(
         chi_range, chi_steps: Half-range (degrees) and step count of χ.
         chi_shift: Additive shift to the χ axis (degrees), as returned by
             :func:`compute_chi_shift`.
-        oversample: High-resolution refinement factor for the (φ, χ) grids.
+        oversample: High-resolution refinement factor for the φ grid (and the
+            χ grid when ``chi_oversample`` is None).
+        chi_oversample: Optional χ-axis refinement factor; defaults to
+            ``oversample``.
 
     Returns:
         ``(phi_list, chi_list)`` mosaicity maps, both shape ``(H, W)`` and in
         radians. Pixels whose rocking-curve image is identically zero produce
         ``np.nan`` in both outputs (dead detector pixels, beamstop shadows).
     """
+    chi_over = chi_oversample if chi_oversample is not None else oversample
     phi_high = np.deg2rad(np.linspace(-phi_range, phi_range, phi_steps * oversample))
     chi_high = np.deg2rad(
-        np.linspace(-chi_range + chi_shift, chi_range + chi_shift, chi_steps * oversample)
+        np.linspace(-chi_range + chi_shift, chi_range + chi_shift, chi_steps * chi_over)
     )
 
     H, W = stack.shape[2], stack.shape[3]
@@ -100,6 +108,6 @@ def compute_com_maps(
                 chi_list[i, j] = np.nan
                 continue
             phi_list[i, j] = phi_high[int(round(phi_idx * oversample))]
-            chi_list[i, j] = chi_high[int(round(chi_idx * oversample))]
+            chi_list[i, j] = chi_high[int(round(chi_idx * chi_over))]
 
     return phi_list, chi_list
