@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying paper."
+title: "Geometrical Optics: forward modelling of Dark Field X-ray Microscopy"
+authors:
+  - family-names: Borgi
+    given-names: Sina
+    affiliation: "Technical University of Denmark (DTU)"
+    email: borgi@dtu.dk
+# TODO(borgi): replace the placeholder values below with the exact metadata
+#   from the IUCrJ 2024 article (title, full author list, volume, issue, pages, DOI).
+#   See https://journals.iucr.org/j/issues/2024/02/00/nb5370/
+preferred-citation:
+  type: article
+  title: "TODO: paper title from IUCrJ 2024 issue 2"
+  authors:
+    - family-names: Borgi
+      given-names: Sina
+  journal: "IUCrJ"
+  year: 2024
+  volume: 11
+  issue: 2
+  url: "https://journals.iucr.org/j/issues/2024/02/00/nb5370/"
