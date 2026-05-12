@@ -126,7 +126,7 @@ class TestFdFindBipolarWall:
         Fdd[:, 0, 0] = -rd[1] * (3 * sqx + sqy - nyfactor) / denom
         Fdd[:, 0, 1] = rd[0] * (3 * sqx + sqy - nyfactor) / denom
         Fdd[:, 1, 0] = -rd[0] * (3 * sqy + sqx - nyfactor) / denom
-        Fdd[:, 1, 1] = rd[1] * (sqx - sqy - nyfactor) / denom
+        Fdd[:, 1, 1] = rd[1] * (sqx - sqy + nyfactor) / denom
 
         # Bipolar wall contributions (no alpha regularization in the loop).
         for i in range(1, ndis):
@@ -143,7 +143,7 @@ class TestFdFindBipolarWall:
             Fdd[:, 0, 0] += -rd_n[1] * (3 * sqx + sqy - nyfactor) / denom
             Fdd[:, 0, 1] += rd_n[0] * (3 * sqx + sqy - nyfactor) / denom
             Fdd[:, 1, 0] += -rd_n[0] * (3 * sqy + sqx - nyfactor) / denom
-            Fdd[:, 1, 1] += rd_n[1] * (sqx - sqy - nyfactor) / denom
+            Fdd[:, 1, 1] += rd_n[1] * (sqx - sqy + nyfactor) / denom
 
         Fdd *= b / (4 * np.pi * (1 - ny))
         Fdd += np.identity(3)

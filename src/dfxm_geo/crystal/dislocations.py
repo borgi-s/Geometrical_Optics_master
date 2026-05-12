@@ -55,7 +55,7 @@ def multi_dislocs_parallel(chunk, rd, Fdd_shape, dis, ny: float = POISSON_RATIO)
         Fdd_chunk[:, 0, 0] += -rd_new[1] * (3 * sqx + sqy - nyfactor) / denom
         Fdd_chunk[:, 0, 1] += rd_new[0] * (3 * sqx + sqy - nyfactor) / denom
         Fdd_chunk[:, 1, 0] += -rd_new[0] * (3 * sqy + sqx - nyfactor) / denom
-        Fdd_chunk[:, 1, 1] += rd_new[1] * (sqx - sqy - nyfactor) / denom
+        Fdd_chunk[:, 1, 1] += rd_new[1] * (sqx - sqy + nyfactor) / denom
     return Fdd_chunk
 
 
@@ -125,10 +125,15 @@ def Fd_find(
     bfactor = b / (4 * np.pi * (1 - ny))
     nyfactor = 2 * ny * (sqx + sqy)
 
+    # The `+nyfactor` on [1,1] (vs `-nyfactor` on the other three components)
+    # applies the sign correction documented in Appendix A of
+    # Borgi et al., J. Appl. Cryst. 2024 (doi.org/10.1107/S1600576724001183).
+    # Pre-correction `main` had `-nyfactor` here; the fix was already in the
+    # CDD_Khaled / Beam_Stop branch and is the version used by the paper.
     Fdd[:, 0, 0] = -rd[1] * (3 * sqx + sqy - nyfactor) / denom
     Fdd[:, 0, 1] = rd[0] * (3 * sqx + sqy - nyfactor) / denom
     Fdd[:, 1, 0] = -rd[0] * (3 * sqy + sqx - nyfactor) / denom
-    Fdd[:, 1, 1] = rd[1] * (sqx - sqy - nyfactor) / denom
+    Fdd[:, 1, 1] = rd[1] * (sqx - sqy + nyfactor) / denom
 
     if ndis > 100:
         njobs = cpu_count()
@@ -173,7 +178,7 @@ def Fd_find(
             Fdd[:, 0, 0] += -rd_new[1] * (3 * sqx + sqy - nyfactor) / denom
             Fdd[:, 0, 1] += rd_new[0] * (3 * sqx + sqy - nyfactor) / denom
             Fdd[:, 1, 0] += -rd_new[0] * (3 * sqy + sqx - nyfactor) / denom
-            Fdd[:, 1, 1] += rd_new[1] * (sqx - sqy - nyfactor) / denom
+            Fdd[:, 1, 1] += rd_new[1] * (sqx - sqy + nyfactor) / denom
 
     Fdd *= bfactor
     Fdd += np.identity(3)
