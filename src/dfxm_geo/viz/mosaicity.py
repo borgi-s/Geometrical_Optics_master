@@ -12,6 +12,10 @@ from pathlib import Path
 
 import matplotlib
 
+# Force the non-interactive Agg backend before pyplot is loaded. Safe for
+# this module (SVG export only). NB: this is process-global — if another
+# module (e.g. reciprocal_space/resolution.py) wants an interactive backend
+# in the same process, it must be imported before this one.
 matplotlib.use("Agg")  # noqa: E402
 
 import matplotlib.pyplot as plt  # noqa: E402
@@ -34,6 +38,16 @@ def plot_mosaicity_maps(
     Port of ``init_forward.py:167-214``. Both panels are negated and
     transposed relative to the array layout (matching the original script's
     convention).
+
+    Args:
+        phi_list, chi_list: Mosaicity maps in radians, shape ``(H, W)``.
+        xl_start, yl_start: Expected to be negative (the module-level globals
+            from :mod:`dfxm_geo.direct_space.forward_model` are negative; pass
+            them directly). The image extent is built as
+            ``[xl_start, -xl_start, yl_start, -yl_start]``.
+        out_path: Where to save the SVG. Either a :class:`pathlib.Path` or a
+            string path is accepted.
+        vmin, vmax: Color limits in radians (default ±1e-4).
     """
     fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
@@ -62,5 +76,7 @@ def plot_mosaicity_maps(
         cbar.update_ticks()
 
     plt.tight_layout()
-    fig.savefig(out_path)
-    plt.close(fig)
+    try:
+        fig.savefig(out_path)
+    finally:
+        plt.close(fig)
