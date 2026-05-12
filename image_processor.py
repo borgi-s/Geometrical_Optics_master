@@ -65,7 +65,9 @@ def save_images_parallel(Hg, phi_range, phi_steps, chi_range, chi_steps, fpath, 
     ]
 
     with ThreadPoolExecutor() as executor:
-        results = list(tqdm(executor.map(save_image, args_list), total=len(args_list)))
+        # Consume the lazy executor.map iterator via list(...) so tqdm
+        # actually advances; the per-task return values are unused.
+        list(tqdm(executor.map(save_image, args_list), total=len(args_list)))
 
     return True
 
@@ -240,17 +242,9 @@ def fastgrainplot(imagestack, vlist, ulist):
     vfwhm = 2.355 * np.sqrt(vvar)
     ufwhm = 2.355 * np.sqrt(uvar)
 
-    # Skewness
-    vskew = (v3sum / inttot - 3 * vnorm * vvar - vnorm**3) / vvar ** (3 / 2)
-    uskew = (u3sum / inttot - 3 * unorm * uvar - unorm**3) / uvar ** (3 / 2)
-
-    # Kurtosis
-    vkurt = (
-        v4sum / inttot - 4 * vnorm * v3sum / inttot + 6 * vnorm**2 * v2sum / inttot - 3 * vnorm**4
-    ) / (vvar**2)
-    ukurt = (
-        u4sum / inttot - 4 * unorm * u3sum / inttot + 6 * unorm**2 * u2sum / inttot - 3 * unorm**4
-    ) / (uvar**2)
+    # Skewness and kurtosis were computed here but never returned or used.
+    # Removed during cleanup; reinstate via git history if you need them
+    # and route through the return tuple.
     # unormnn = unorm[~np.isnan(unorm)]
     # vnormnn = vnorm[~np.isnan(vnorm)]
     # sort1 = np.sort(unormnn.flatten())

@@ -96,13 +96,11 @@ qi_starts = qi_steps = None
 Hg = q_hkl = None
 
 
-def Find_Hg(dis, ndis, psize, zl_rms, I=np.identity(3), h=-1, k=1, l=-1):
+def Find_Hg(dis, ndis, psize, zl_rms, h=-1, k=1, l=-1):
     Q_norm = np.sqrt(h * h + k * k + l * l)  # We have assumed B_0 = I
     q_hkl = np.asarray([h, k, l]) / Q_norm
 
-    Fg_path = sys.path[
-        0
-    ] + "/direct_space/deformation_gradient_tensors/Fg_{0}_{1}nm_{2}nm.npy".format(
+    Fg_path = sys.path[0] + "/direct_space/deformation_gradient_tensors/Fg_{}_{}nm_{}nm.npy".format(
         str(dis).replace(".", ""), int(psize * 1e9), int(zl_rms * 2.35e9)
     )
     Hg = load_or_generate_Hg(rl, Ud, Us, Theta, dis, ndis, Fg_path)
@@ -256,7 +254,7 @@ def forward(Hg, phi=0, chi=0, TwoDeltaTheta=0, qi_return=False):
 
     # Add probability distribution to forward model image
     np.add.at(im_1, tuple(indices.T), pro)
-    if qi_return == True:
+    if qi_return:
         qi_field = qi.reshape(3, NN1, NN2, NN3)
         # Return scattering vector in imaging space and forward model image
         return im_1, qi_field

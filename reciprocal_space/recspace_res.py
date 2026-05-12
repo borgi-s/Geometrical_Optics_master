@@ -79,10 +79,6 @@ def reciprocal_res_func(
             zeta_v, bins=50, density=True, alpha=0.7, edgecolor="black", label="Histogram"
         )
 
-        # Normalize the histogram
-        bin_width = bins[1] - bins[0]
-        n_normalized = n / (np.sum(n) * bin_width)
-
         # Create a range of x values for the PDF
         x = np.linspace(lower * 2, upper * 2, 200)
 
@@ -173,9 +169,8 @@ def reciprocal_res_func(
         plt.grid(True)
         plt.show()
     if save_resqi == 1:
-        output = open(f"pkl_files/Resq_i_{date}.pkl", "wb")
-        pickle.dump(normResq_i, output)
-        output.close()
+        with open(f"pkl_files/Resq_i_{date}.pkl", "wb") as output:
+            pickle.dump(normResq_i, output)
         # np.savetxt('reciprocal space/Resq_i_{0}.csv'.format(date), normResq_i, delimiter=',')
         print(f"Resq_i saved as Resq_i_{date}.pkl")
 

@@ -68,13 +68,7 @@ ignore = [
     "E501",   # line length handled by formatter
     "E741",   # single-letter physics names (l, I, O, b, ny) are conventional
     # Temporary — removed as cleanup phases land
-    "F841",   # unused local (sweep in plan Phase 3.x)
-    "E712",   # == True/False (sweep in plan Phase 3.x)
-    "RET504", # unnecessary-assign (sweep in plan Phase 3.x)
-    "B008",   # function-call-in-default-argument (review case-by-case)
     "NPY002", # legacy np.random (separate modernization phase)
-    "SIM115", # file context manager (sweep in plan Phase 3.x)
-    "UP030",  # format literals (sweep in plan Phase 3.x)
 ]
 
 [tool.mypy]

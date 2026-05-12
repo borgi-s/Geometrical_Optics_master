@@ -37,9 +37,7 @@ def rotatedU(axis, alpha, U, coordtype):
             ],
         ]
     )
-    Urot = np.dot(R, U)
-
-    return Urot
+    return np.dot(R, U)
 
 
 def check_folder(path, folder_name):
@@ -141,7 +139,7 @@ def Fd_find(
         in grain space. Shape is (X, 3, 3).
     """
 
-    if misorientation == True:
+    if misorientation:
         m_ori = b / (dis * 1e-6)
         U_sr = rotatedU(t_vec, m_ori / 2, Us, 1)
         U_sl = rotatedU(t_vec, -m_ori / 2, Us, 1)
