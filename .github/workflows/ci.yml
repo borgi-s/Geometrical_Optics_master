@@ -35,17 +35,12 @@ jobs:
       - name: Ruff format check
         run: ruff format --check .
 
-      # Type-check is scoped only to the new package layout when it exists.
-      # The flat-layout legacy modules (functions.py, image_processor.py,
-      # init_forward.py, direct_space/, reciprocal_space/) are intentionally
-      # excluded until Phase 4 lands.
-      - name: Mypy (src/ only, skipped while empty)
-        run: |
-          if [ -d src ]; then
-            mypy src/
-          else
-            echo "src/ not present yet — skipping mypy (Phase 4 prerequisite)"
-          fi
+      # Type-check is scoped to the dfxm_geo package. The flat-layout legacy
+      # modules (functions.py, image_processor.py, init_forward.py,
+      # direct_space/, reciprocal_space/) are excluded — they will become
+      # deprecation re-export shims and go away in Phase 5.3.
+      - name: Mypy
+        run: mypy src/dfxm_geo/
 
       - name: Pytest
         run: pytest --cov=. --cov-report=term
