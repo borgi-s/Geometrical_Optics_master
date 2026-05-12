@@ -11,12 +11,11 @@ from functions import fast_inverse2, load_or_generate_Hg
 fast_inverse2(
     np.random.random(size=(100, 3, 3))
 )  # DO NOT OUTCOMMENT, this line jit compiles "fast_inverse2" function so performance on larger arrays are obtained
+
 # INPUT instrumental settings, related to direct space resolution function
 psize = 40e-9  # pixel size in units of m, in the object plane
 zl_rms = 0.15e-6 / 2.35  # rms value of Gaussian beam profile, in m, centered at 0
 theta_0 = 17.953 / 2 * np.pi / 180  # in rad
-# input reciprocal space resolution function (in the imaging system)
-# by loading an already generated version Resq_i and insertin q_i-ranges and steps here
 
 # INPUT FOV
 Npixels = 510  # nr of pixels on detector (same in both y and z) - sets the FOV.
@@ -25,26 +24,13 @@ NN1 = int(Npixels // 3 * Nsub)  # 3 is used as 1/sin(2*~18 deg) = 3.24
 NN2 = int(Npixels * Nsub)
 NN3 = int(Npixels // 30 * Nsub)
 
-# Choose sys.path[0] or sys.path[1] depending on parent folder
-# Define the file paths for reciprocal array
+# Default reciprocal-space resolution kernel paths.
+# These are loaded lazily by `_load_default_kernel()` only if the file exists,
+# so the module can be imported on a clean checkout that lacks the precomputed
+# pickle (e.g. CI, tests, fresh clones).
 pkl_fpath = sys.path[0] + "/reciprocal_space/pkl_files/"
 pkl_fn = "Resq_i_20230913_1308.pkl"  # Change accordingly
 vars_fn = os.path.splitext(pkl_fn)[0] + "_vars.txt"
-print("Loading Resq_i.")
-# Load the pickle file
-with open(os.path.join(pkl_fpath, pkl_fn), "rb") as pkl_file:
-    Resq_i = pickle.load(pkl_file)
-
-# Load the instrumental variables file
-with open(os.path.join(pkl_fpath, vars_fn)) as vars_file:
-    var_d = eval(vars_file.read())
-
-# Get the intstrumental variables from the dictionary
-qi1_range, npoints1 = var_d["qi1_range"], var_d["npoints1"]
-qi2_range, npoints2 = var_d["qi2_range"], var_d["npoints2"]
-qi3_range, npoints3 = var_d["qi3_range"], var_d["npoints3"]
-print("Resq_i loaded.")
-
 
 theta = theta_0
 yl_start = -psize * Npixels / 2 + psize / (
@@ -52,12 +38,6 @@ yl_start = -psize * Npixels / 2 + psize / (
 )  # start in yl direction, in unit of m, centered at 0
 xl_start = yl_start / np.tan(2 * theta) / 3  # start in xl direction, in m, for zl=0
 zl_start = -0.5 * zl_rms * 6  # start in zl direction, in m, for zl=0
-
-qi1_start, qi1_step = -qi1_range / 2, qi1_range / (npoints1 - 1)
-qi2_start, qi2_step = -qi2_range / 2, qi2_range / (npoints2 - 1)
-qi3_start, qi3_step = -qi3_range / 2, qi3_range / (npoints3 - 1)
-qi_starts = np.asarray([qi1_start, qi2_start, qi3_start])
-qi_steps = 1 / np.asarray([qi1_step, qi2_step, qi3_step])
 
 # CREATE MATRICES according to Eqs 2,3,7:
 Ud = np.array(
@@ -76,11 +56,9 @@ Us = np.array(
 ).T
 Theta = np.array([[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]])
 
-
 YI = (np.arange(NN1) // Nsub).repeat(NN3 * NN2)
 ZI = np.tile((np.arange(NN2) // Nsub).repeat(NN3), NN1)
 indices = np.vstack((ZI, YI)).T
-
 
 xl_range, xl_steps = -xl_start, NN1
 yl_range, yl_steps = -yl_start, NN2
@@ -93,7 +71,6 @@ rl = np.vstack(
     ]
 ).reshape(3, -1)
 
-
 prob_z = np.exp(-0.5 * (rl[2] / zl_rms) ** 2)
 
 # To avoid edge effects:
@@ -103,9 +80,20 @@ prob_z = np.exp(-0.5 * (rl[2] / zl_rms) ** 2)
 # for dis 2, ndis >= 251
 # for dis 4, ndis >= 151
 
-
 ndis = 151  # number of dislocations
 dis = 4  # units of micrometer
+
+# Pickle-dependent globals — populated by `_load_default_kernel()` if the
+# default pickle exists; otherwise these stay `None` and `forward()` will
+# raise a clear error at call time.
+Resq_i = None
+qi1_range = qi2_range = qi3_range = None
+npoints1 = npoints2 = npoints3 = None
+qi1_start = qi1_step = None
+qi2_start = qi2_step = None
+qi3_start = qi3_step = None
+qi_starts = qi_steps = None
+Hg = q_hkl = None
 
 
 def Find_Hg(dis, ndis, psize, zl_rms, I=np.identity(3), h=-1, k=1, l=-1):
@@ -147,7 +135,45 @@ def Find_Hg(dis, ndis, psize, zl_rms, I=np.identity(3), h=-1, k=1, l=-1):
     return Hg, q_hkl
 
 
-Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
+def _load_default_kernel(pkl_path=None, vars_path=None, compute_Hg=True):
+    """Load the reciprocal-space resolution kernel from disk into module state.
+
+    Called at import time iff the default pickle exists. Can be called
+    manually with an explicit path to bootstrap the module after a clean
+    import (e.g. from tests with a fixture kernel).
+
+    Sets module-level globals: `Resq_i`, `qi1_range`/`qi2_range`/`qi3_range`,
+    `npoints1`/`npoints2`/`npoints3`, `qi1_start`/`qi1_step`/etc.,
+    `qi_starts`, `qi_steps`. If `compute_Hg=True`, also computes the default
+    `Hg`/`q_hkl` by calling `Find_Hg(dis, ndis, psize, zl_rms)`.
+    """
+    global Resq_i, qi1_range, qi2_range, qi3_range, npoints1, npoints2, npoints3
+    global qi1_start, qi2_start, qi3_start, qi1_step, qi2_step, qi3_step
+    global qi_starts, qi_steps, Hg, q_hkl
+
+    if pkl_path is None:
+        pkl_path = os.path.join(pkl_fpath, pkl_fn)
+    if vars_path is None:
+        vars_path = os.path.join(pkl_fpath, vars_fn)
+
+    print("Loading Resq_i.")
+    with open(pkl_path, "rb") as f:
+        Resq_i = pickle.load(f)
+    with open(vars_path) as f:
+        var_d = eval(f.read())
+    qi1_range, npoints1 = var_d["qi1_range"], var_d["npoints1"]
+    qi2_range, npoints2 = var_d["qi2_range"], var_d["npoints2"]
+    qi3_range, npoints3 = var_d["qi3_range"], var_d["npoints3"]
+    print("Resq_i loaded.")
+
+    qi1_start, qi1_step = -qi1_range / 2, qi1_range / (npoints1 - 1)
+    qi2_start, qi2_step = -qi2_range / 2, qi2_range / (npoints2 - 1)
+    qi3_start, qi3_step = -qi3_range / 2, qi3_range / (npoints3 - 1)
+    qi_starts = np.asarray([qi1_start, qi2_start, qi3_start])
+    qi_steps = 1 / np.asarray([qi1_step, qi2_step, qi3_step])
+
+    if compute_Hg:
+        Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
 
 
 def forward(Hg, phi=0, chi=0, TwoDeltaTheta=0, qi_return=False):
@@ -168,6 +194,12 @@ def forward(Hg, phi=0, chi=0, TwoDeltaTheta=0, qi_return=False):
         The forward modelled image, shape (NN3,NN1)
 
     """
+    if Resq_i is None:
+        raise RuntimeError(
+            "forward_model state is not initialized. Call "
+            "_load_default_kernel(pkl_path, vars_path) before calling forward()."
+        )
+
     if TwoDeltaTheta != 0:
         theta = theta_0 + TwoDeltaTheta
         Theta = np.array(
@@ -191,9 +223,6 @@ def forward(Hg, phi=0, chi=0, TwoDeltaTheta=0, qi_return=False):
     )
 
     # Calculate scattering vector in sample space
-    # qs = np.zeros_like(rl.T)
-    # qs[negative_indices] = U_sr @ Hg[negative_indices] @ q_hkl # eq. 20 in GOF
-    # qs[positive_indices] = U_sl @ Hg[positive_indices] @ q_hkl # eq. 20 in GOF
     qs = Us @ Hg @ q_hkl
 
     # Calculate scattering vector in crystal/grain space
@@ -233,3 +262,15 @@ def forward(Hg, phi=0, chi=0, TwoDeltaTheta=0, qi_return=False):
         return im_1, qi_field
     # Return the forward model image
     return im_1
+
+
+# Auto-load the default kernel iff it exists on disk. Preserves the
+# pre-cleanup behavior for callers (e.g. init_forward.py) that expect
+# `Resq_i`, `Hg`, `q_hkl`, etc. to be ready at import time.
+if os.path.exists(os.path.join(pkl_fpath, pkl_fn)):
+    _load_default_kernel()
+else:
+    print(
+        f"NOTE: default kernel pickle not found at {os.path.join(pkl_fpath, pkl_fn)!r}; "
+        f"call _load_default_kernel(pkl_path, vars_path) before forward()."
+    )
