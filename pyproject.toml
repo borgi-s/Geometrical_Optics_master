@@ -60,8 +60,25 @@ target-version = "py311"
 extend-exclude = ["legacy/", "notebooks/"]
 
 [tool.ruff.lint]
+# Lint is intentionally permissive while cleanup is in progress.
+# Each "temporary" ignore is annotated with the plan phase that removes it.
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RET", "NPY"]
-ignore = ["E501"]  # line length handled by formatter
+ignore = [
+    # Permanent — match research-code conventions
+    "E501",   # line length handled by formatter
+    "E741",   # single-letter physics names (l, I, O, b, ny) are conventional
+    # Temporary — removed as cleanup phases land
+    "F403",   # wildcard import (plan Phase 5: replace `import *`)
+    "F405",   # name from wildcard (plan Phase 5)
+    "F811",   # redefined-while-unused (plan Phase 3.1: duplicate image_range)
+    "F841",   # unused local (sweep in plan Phase 3.x)
+    "E712",   # == True/False (sweep in plan Phase 3.x)
+    "RET504", # unnecessary-assign (sweep in plan Phase 3.x)
+    "B008",   # function-call-in-default-argument (review case-by-case)
+    "NPY002", # legacy np.random (separate modernization phase)
+    "SIM115", # file context manager (sweep in plan Phase 3.x)
+    "UP030",  # format literals (sweep in plan Phase 3.x)
+]
 
 [tool.mypy]
 python_version = "3.11"
