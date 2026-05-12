@@ -8,15 +8,9 @@ A future test (Phase 7) will add numerical pinning by generating a tiny
 fixture kernel and parameterizing the module geometry to small grids.
 """
 
-import sys
-from pathlib import Path
-
 import pytest
 
-REPO_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(REPO_ROOT))
-
-import direct_space.forward_model as fm  # noqa: E402
+import dfxm_geo.direct_space.forward_model as fm
 
 
 def test_module_imports_with_required_symbols():
