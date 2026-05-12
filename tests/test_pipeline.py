@@ -22,6 +22,7 @@ from dfxm_geo.pipeline import (
     ScanConfig,
     SimulationConfig,
     _ensure_kernel_loaded,
+    cli_main,
     run_postprocess,
     run_simulation,
 )
@@ -242,3 +243,105 @@ class TestRunPostprocess:
         monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
         with pytest.raises(RuntimeError, match="fm.Hg is not set"):
             run_postprocess(output_dir, config)
+
+
+class TestCliMainFlags:
+    def test_default_runs_sim_then_postprocess(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config_path = tmp_path / "cfg.toml"
+        config_path.write_text("[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n")
+        calls: list[str] = []
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.run_simulation",
+            lambda cfg, out: calls.append("sim") or {},
+        )
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.run_postprocess",
+            lambda out, cfg: calls.append("pp") or {},
+        )
+
+        cli_main(["--config", str(config_path), "--output", str(tmp_path / "out")])
+        assert calls == ["sim", "pp"]
+
+    def test_no_postprocess_flag(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config_path = tmp_path / "cfg.toml"
+        config_path.write_text("[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n")
+        calls: list[str] = []
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.run_simulation",
+            lambda cfg, out: calls.append("sim") or {},
+        )
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.run_postprocess",
+            lambda out, cfg: calls.append("pp") or {},
+        )
+
+        cli_main(
+            [
+                "--config",
+                str(config_path),
+                "--output",
+                str(tmp_path / "out"),
+                "--no-postprocess",
+            ]
+        )
+        assert calls == ["sim"]
+
+    def test_postprocess_only_flag(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config_path = tmp_path / "cfg.toml"
+        config_path.write_text("[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n")
+        calls: list[str] = []
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.run_simulation",
+            lambda cfg, out: calls.append("sim") or {},
+        )
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.run_postprocess",
+            lambda out, cfg: calls.append("pp") or {},
+        )
+
+        cli_main(
+            [
+                "--config",
+                str(config_path),
+                "--output",
+                str(tmp_path / "out"),
+                "--postprocess-only",
+            ]
+        )
+        assert calls == ["pp"]
+
+    def test_postprocess_disabled_in_config(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """[postprocess].enabled = false skips the stage even without --no-postprocess."""
+        config_path = tmp_path / "cfg.toml"
+        config_path.write_text(
+            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n"
+            "\n[postprocess]\nenabled = false\n"
+        )
+        calls: list[str] = []
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.run_simulation",
+            lambda cfg, out: calls.append("sim") or {},
+        )
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.run_postprocess",
+            lambda out, cfg: calls.append("pp") or {},
+        )
+
+        cli_main(["--config", str(config_path), "--output", str(tmp_path / "out")])
+        assert calls == ["sim"]

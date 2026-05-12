@@ -275,14 +275,34 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
 
 
 def cli_main(argv: list[str] | None = None) -> int:
-    """Entry point for `dfxm-forward` and `python scripts/run_forward.py`."""
+    """Entry point for ``dfxm-forward`` and ``python scripts/run_forward.py``.
+
+    Default behavior: run simulation, then post-processing.
+    """
     parser = argparse.ArgumentParser(description="DFXM forward simulation")
     parser.add_argument("--config", type=Path, required=True, help="Path to TOML config")
     parser.add_argument("--output", type=Path, required=True, help="Output directory")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--no-postprocess",
+        action="store_true",
+        help="Run simulation only; skip post-processing (Phase 6 behavior).",
+    )
+    mode.add_argument(
+        "--postprocess-only",
+        action="store_true",
+        help="Skip simulation; run post-processing against an existing output dir.",
+    )
     args = parser.parse_args(argv)
 
     config = SimulationConfig.from_toml(args.config)
-    run_simulation(config, args.output)
+
+    if args.postprocess_only:
+        run_postprocess(args.output, config)
+    else:
+        run_simulation(config, args.output)
+        if config.postprocess.enabled and not args.no_postprocess:
+            run_postprocess(args.output, config)
     return 0
 
 
