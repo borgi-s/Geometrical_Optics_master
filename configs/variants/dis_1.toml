@@ -1,0 +1,19 @@
+# dis = 1 µm dislocation spacing. ndis=501 is the minimum recommended
+# by init_forward.py to avoid edge effects at this density.
+
+[crystal]
+dis = 1
+ndis = 501
+
+[scan]
+phi_range = 0.034377467707849395
+phi_steps = 61
+chi_range = 0.11459155902616465
+chi_steps = 61
+
+[io]
+fn_prefix = "/mosa_test_0000_"
+ftype = ".npy"
+dislocs_dirname = "images_dis1"
+perfect_dirname = "images_dis1_perf_crystal"
+include_perfect_crystal = true

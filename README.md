@@ -43,26 +43,35 @@ pytest                             # smoke tests should pass
 
 ## Running a simulation
 
-The current entry point is `init_forward.py`. It expects a pickled
-reciprocal-space resolution function at
-`reciprocal_space/pkl_files/Resq_i_<timestamp>.pkl`, which you must generate
-first:
+Both entry points expect a pickled reciprocal-space resolution function at
+`reciprocal_space/pkl_files/Resq_i_<timestamp>.pkl`, generated once with:
 
 ```bash
-# 1. Generate the reciprocal-space resolution kernel
 python reciprocal_space/generate_Resq_i.py
+```
 
-# 2. Run the forward simulation
+### Recommended: config-driven CLI
+
+```bash
+dfxm-forward --config configs/default.toml --output ./out
+```
+
+The CLI runs the forward simulation only (rocking sweep → image stacks
+on disk). See [`docs/reproducibility.md`](docs/reproducibility.md) for the
+config schema, pre-built variants for different dislocation densities,
+and what is not yet configurable.
+
+### Legacy demo: `init_forward.py`
+
+```bash
 python init_forward.py
 ```
 
-A future cleanup phase (see plan, Phase 6) replaces `init_forward.py` with a
-config-driven CLI:
-
-```bash
-# Planned, not yet available:
-dfxm-forward --config configs/default.toml --output ./out
-```
+Still in place as a runnable demo that produces the per-pixel COM /
+mosaicity maps and SVG paper-style figures. The simulation portion of
+the demo is equivalent to `dfxm-forward --config configs/default.toml`;
+the analysis + plotting will move into `dfxm_geo.analysis` in a future
+phase (see plan, Phase 9).
 
 ## Project structure
 
@@ -86,11 +95,11 @@ A future refactor (plan Phase 4) moves the physics modules into
 
 ## Reproducing the paper figures
 
-A dedicated notebook for this is being prepared
-(`notebooks/99_paper_figures.ipynb`, plan Phase 9). For now, the figures in
-the *J. Appl. Cryst.* 2024 article were produced by running `init_forward.py`
-against a specific set of input dislocation geometries — contact the
-corresponding author for the reference dataset.
+See [`docs/reproducibility.md`](docs/reproducibility.md) for the current
+recipe (CLI for the simulation, `init_forward.py` for the post-processing,
+pending the Phase 9 port of the analysis into `dfxm_geo.analysis`).
+Reference datasets are scheduled for Zenodo deposit; until then, contact
+the corresponding author.
 
 ## Citing
 
