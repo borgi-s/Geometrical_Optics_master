@@ -17,6 +17,7 @@ import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     CrystalConfig,
     IOConfig,
+    PostprocessConfig,
     ScanConfig,
     SimulationConfig,
     _ensure_kernel_loaded,
@@ -77,6 +78,41 @@ class TestSimulationConfigFromToml:
             cfg = SimulationConfig.from_toml(path)
             assert cfg.crystal.ndis > 0, f"{path.name} has bad ndis"
             assert cfg.scan.phi_steps > 0, f"{path.name} has bad phi_steps"
+
+
+class TestPostprocessConfigDefaults:
+    def test_default_values(self) -> None:
+        pc = PostprocessConfig()
+        assert pc.enabled is True
+        assert pc.chi_oversample == 20
+        assert pc.phi_oversample == 20
+        assert pc.chi_oversample_for_shift == 100
+        assert pc.figures_dirname == "figures"
+        assert pc.data_dirname == "analysis"
+
+    def test_simulation_config_includes_postprocess_field(self) -> None:
+        cfg = SimulationConfig()
+        assert cfg.postprocess == PostprocessConfig()
+
+
+class TestPostprocessConfigFromToml:
+    def test_section_present(self, tmp_path: Path) -> None:
+        p = tmp_path / "with_pp.toml"
+        p.write_text(
+            "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n"
+            "\n[postprocess]\nenabled = false\nchi_oversample = 5\n"
+        )
+        cfg = SimulationConfig.from_toml(p)
+        assert cfg.postprocess.enabled is False
+        assert cfg.postprocess.chi_oversample == 5
+        # Unspecified keys retain their default
+        assert cfg.postprocess.phi_oversample == 20
+
+    def test_section_absent_uses_defaults(self, tmp_path: Path) -> None:
+        p = tmp_path / "no_pp.toml"
+        p.write_text("[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n")
+        cfg = SimulationConfig.from_toml(p)
+        assert cfg.postprocess == PostprocessConfig()
 
 
 class TestPreflight:

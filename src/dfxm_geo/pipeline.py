@@ -51,6 +51,21 @@ class IOConfig:
 
 
 @dataclass
+class PostprocessConfig:
+    """Knobs for the post-processing stage (Phase 9.2).
+
+    See ``docs/superpowers/specs/2026-05-12-phase-9-2-postprocessing-design.md``.
+    """
+
+    enabled: bool = True
+    chi_oversample: int = 20
+    phi_oversample: int = 20
+    chi_oversample_for_shift: int = 100
+    figures_dirname: str = "figures"
+    data_dirname: str = "analysis"
+
+
+@dataclass
 class SimulationConfig:
     crystal: CrystalConfig = field(default_factory=CrystalConfig)
     scan: ScanConfig = field(
@@ -62,6 +77,7 @@ class SimulationConfig:
         )
     )
     io: IOConfig = field(default_factory=IOConfig)
+    postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -71,7 +87,8 @@ class SimulationConfig:
         crystal = CrystalConfig(**raw.get("crystal", {}))
         scan = ScanConfig(**raw["scan"])
         io = IOConfig(**raw.get("io", {}))
-        return cls(crystal=crystal, scan=scan, io=io)
+        postprocess = PostprocessConfig(**raw.get("postprocess", {}))
+        return cls(crystal=crystal, scan=scan, io=io, postprocess=postprocess)
 
 
 def _ensure_kernel_loaded() -> None:
