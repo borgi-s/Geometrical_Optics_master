@@ -70,7 +70,6 @@ ignore = [
     # Temporary — removed as cleanup phases land
     "F403",   # wildcard import (plan Phase 5: replace `import *`)
     "F405",   # name from wildcard (plan Phase 5)
-    "F811",   # redefined-while-unused (plan Phase 3.1: duplicate image_range)
     "F841",   # unused local (sweep in plan Phase 3.x)
     "E712",   # == True/False (sweep in plan Phase 3.x)
     "RET504", # unnecessary-assign (sweep in plan Phase 3.x)
