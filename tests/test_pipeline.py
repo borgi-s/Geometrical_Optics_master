@@ -141,6 +141,101 @@ class TestPreflight:
         assert not (tmp_path / "images10_perf_crystal").exists()
 
 
+class TestRunSimulation:
+    def test_golden_path_writes_both_stacks(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """run_simulation calls save_images_parallel for both dislocs and
+        perfect-crystal directories, and synchronises fm.Hg / fm.q_hkl."""
+        config = SimulationConfig(
+            crystal=CrystalConfig(dis=2.0, ndis=4),
+            scan=ScanConfig(phi_range=0.05, phi_steps=5, chi_range=0.05, chi_steps=5),
+            io=IOConfig(),
+        )
+        output_dir = tmp_path / "out"
+
+        fake_Hg = np.ones((3, 3, 4, 4, 4))
+        fake_q = np.array([0.0, 0.0, 1.0])
+        find_hg_called = {"count": 0}
+
+        def fake_find_hg(dis, ndis, psize, zl_rms):
+            find_hg_called["count"] += 1
+            return fake_Hg, fake_q
+
+        save_calls: list[dict] = []
+
+        def fake_save_images_parallel(Hg, *args, **kwargs):
+            save_calls.append({"is_zero": bool(np.all(Hg == 0)), "args": args})
+            return True
+
+        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.Find_Hg", fake_find_hg)
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.save_images_parallel",
+            fake_save_images_parallel,
+        )
+        # forward_model module-level globals expected by the implementation
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.psize", 0.1)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_rms", 1.0)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.q_hkl", None)
+
+        result = run_simulation(config, output_dir)
+
+        # Find_Hg was called once with the config values
+        assert find_hg_called["count"] == 1
+        # Two calls to save_images_parallel: dislocs then perfect-crystal
+        assert len(save_calls) == 2
+        assert save_calls[0]["is_zero"] is False  # dislocs uses real Hg
+        assert save_calls[1]["is_zero"] is True  # perfect-crystal uses zeros
+        # Module globals are synced to the new Hg
+        import dfxm_geo.direct_space.forward_model as _fm
+
+        assert _fm.Hg is fake_Hg
+        assert _fm.q_hkl is fake_q
+        # Output dir was created and result dict carries the expected keys
+        assert output_dir.is_dir()
+        assert result["dislocs_path"] == output_dir / config.io.dislocs_dirname
+        assert result["perfect_path"] == output_dir / config.io.perfect_dirname
+        assert result["Hg"] is fake_Hg
+
+    def test_skip_perfect_crystal(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When io.include_perfect_crystal=False, only one stack is written
+        and result['perfect_path'] is None."""
+        config = SimulationConfig(
+            io=IOConfig(include_perfect_crystal=False),
+        )
+        output_dir = tmp_path / "out"
+
+        save_count = {"n": 0}
+
+        def fake_save(*a, **kw):
+            save_count["n"] += 1
+            return True
+
+        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.fm.Find_Hg",
+            lambda *a, **kw: (np.ones((3, 3, 4, 4, 4)), np.array([0.0, 0.0, 1.0])),
+        )
+        monkeypatch.setattr("dfxm_geo.pipeline.save_images_parallel", fake_save)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.psize", 0.1)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_rms", 1.0)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.q_hkl", None)
+
+        result = run_simulation(config, output_dir)
+
+        assert save_count["n"] == 1
+        assert result["perfect_path"] is None
+
+
 @pytest.fixture
 def tiny_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
     """Write tiny synthetic stacks that mimic save_images_parallel output.
