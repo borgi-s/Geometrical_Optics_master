@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from dfxm_geo.analysis.mosaicity import compute_chi_shift, compute_com_maps
+from dfxm_geo.viz.mosaicity import plot_mosaicity_maps
 
 
 class TestComputeChiShift:
@@ -179,3 +182,25 @@ class TestComputeComMaps:
         assert np.isnan(chi_list[1, 0])
         assert np.isnan(phi_list[1, 1])
         assert np.isnan(chi_list[1, 1])
+
+
+class TestPlotMosaicityMaps:
+    def test_writes_valid_svg(self, tmp_path: Path) -> None:
+        """Smoke test: the plot function produces a non-empty SVG file."""
+        H, W = 4, 4
+        phi_list = np.random.default_rng(0).normal(0, 1e-5, size=(H, W))
+        chi_list = np.random.default_rng(1).normal(0, 1e-5, size=(H, W))
+        out = tmp_path / "mosaicity_maps.svg"
+
+        plot_mosaicity_maps(
+            phi_list,
+            chi_list,
+            xl_start=-1e-5,
+            yl_start=-1e-5,
+            out_path=out,
+        )
+
+        assert out.exists()
+        content = out.read_text()
+        assert len(content) > 0
+        assert content.lstrip().startswith("<?xml") or "<svg" in content
