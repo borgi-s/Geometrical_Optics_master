@@ -101,26 +101,42 @@ the detector ray grid (`rl`) and the `q_hkl` module global at runtime
 rather than at import. This is tracked for a future refactor (Phase 8
 revisit).
 
+## Post-processing outputs
+
+`dfxm-forward` runs post-processing by default after the simulation. Outputs land under:
+
+- `<output>/analysis/phi_list.npy` — mosaicity-in-φ map (radians)
+- `<output>/analysis/chi_list.npy` — mosaicity-in-χ map (radians)
+- `<output>/analysis/qi_field.npy` — qi field at the (x, y) plane, z = 0 included
+- `<output>/analysis/chi_shift_deg.txt` — scalar χ-axis correction (bare float, degrees)
+- `<output>/figures/mosaicity_maps.svg` — "Extreme Phi" / "Extreme Chi" 2-panel figure
+- `<output>/figures/qi_cross_section.svg` — qi_1 / qi_2 (x, y) cross-section
+
+Skip post-processing for a sim-only run:
+
+    dfxm-forward --config configs/default.toml --output output/ --no-postprocess
+
+Re-run post-processing against an existing simulation directory without
+re-simulating (useful after tweaking `[postprocess]` parameters):
+
+    dfxm-forward --config configs/default.toml --output output/ --postprocess-only
+
+The post-processing stage requires the reciprocal-space resolution kernel
+pickle (same as the simulation stage) to compute the qi field.
+
 ## Reproducing paper figures
 
 The figures in
 [Borgi et al., *J. Appl. Cryst.* (2024)](https://doi.org/10.1107/S1600576724001183)
 were produced by `init_forward.py` against specific dislocation
-configurations. The CLI reproduces the forward simulation portion of
-that workflow; the post-simulation analysis (per-pixel center-of-mass,
-phi/chi mosaicity maps, and SVG figure generation) still lives in
-`init_forward.py` for now. **To reproduce a paper figure end-to-end as
-of this release:**
+configurations. The CLI reproduces the full workflow end-to-end:
 
 1. Run the appropriate `dfxm-forward --config configs/<variant>.toml`
-   to produce the image stacks.
-2. Adapt `init_forward.py` to load those stacks (set `DFXM_DATA_DIR` and
-   adjust the hardcoded `images10*` directory names if needed) and run
-   from the analysis section onward.
-
-A future phase (currently tracked as Phase 9 follow-up) will port the
-analysis + plotting into `dfxm_geo.analysis` so that a single CLI
-invocation produces both the data and the figures.
+   to produce the image stacks and post-processing outputs.
+2. The per-pixel center-of-mass, phi/chi mosaicity maps, and SVG figures
+   are written automatically under `<output>/analysis/` and
+   `<output>/figures/` (see [Post-processing outputs](#post-processing-outputs)
+   above).
 
 ## Archived reference datasets
 
