@@ -82,8 +82,6 @@ ignore = [
     # Permanent — match research-code conventions
     "E501",   # line length handled by formatter
     "E741",   # single-letter physics names (l, I, O, b, ny) are conventional
-    # Temporary — removed as cleanup phases land
-    "NPY002", # legacy np.random (separate modernization phase)
 ]
 
 [tool.mypy]

@@ -86,13 +86,14 @@ def reciprocal_res_func(
         plt.grid(True)
         plt.legend()
         plt.show()
-    zeta_h = np.random.normal(size=Nrays) * zeta_h_fwhm / 2.35
-    eps = np.random.normal(size=Nrays) * eps_rms
+    rng = np.random.default_rng()
+    zeta_h = rng.normal(size=Nrays) * zeta_h_fwhm / 2.35
+    eps = rng.normal(size=Nrays) * eps_rms
 
     print("Properties of rays defined")
 
-    x1 = np.random.normal(size=int(1.01 * Nrays)) * NA_rms
-    x2 = np.random.normal(size=int(1.01 * Nrays)) * NA_rms
+    x1 = rng.normal(size=int(1.01 * Nrays)) * NA_rms
+    x2 = rng.normal(size=int(1.01 * Nrays)) * NA_rms
     delta_2theta = x1[np.abs(x1) < phys_aper / 2][:Nrays]
     xi = x2[np.abs(x2) < phys_aper / 2][:Nrays]
     if len(xi) < Nrays:

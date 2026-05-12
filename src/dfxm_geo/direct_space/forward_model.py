@@ -23,7 +23,7 @@ from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
 fast_inverse2(
-    np.random.random(size=(100, 3, 3))
+    np.random.default_rng().random(size=(100, 3, 3))
 )  # DO NOT OUTCOMMENT, this line jit compiles "fast_inverse2" function so performance on larger arrays are obtained
 
 # INPUT instrumental settings, related to direct space resolution function

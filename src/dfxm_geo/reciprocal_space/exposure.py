@@ -8,6 +8,8 @@
 
 import numpy as np
 
+rng = np.random.default_rng()
+
 # Input parameters
 Nrays = 1000000
 zeta_v_fwhm = 0.53e-3  # incoming divergence in vertical direction, in rad
@@ -29,8 +31,8 @@ transmit = np.zeros(Nrays)
 # Ray tracing in lab system
 for ii in range(Nrays):
     # Make ray tracing for one ray
-    zeta_v = np.random.randn() * zeta_v_fwhm / 2.35  # Gaussian
-    energy = energy0 * (1 + np.random.randn() * eps_rms)
+    zeta_v = rng.standard_normal() * zeta_v_fwhm / 2.35  # Gaussian
+    energy = energy0 * (1 + rng.standard_normal() * eps_rms)
 
     wavelength = 12.398 / energy  # in Å
     k0 = 2 * np.pi / wavelength
@@ -45,7 +47,7 @@ for ii in range(Nrays):
     if abs(xi) > (phys_aper / 2):
         transmit[ii] = 0
     else:
-        test = np.random.randn() * NA_rms
+        test = rng.standard_normal() * NA_rms
         if abs(xi) > test:
             transmit[ii] = 0
         else:
