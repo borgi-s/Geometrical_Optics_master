@@ -132,6 +132,32 @@ figures in the paper.
 > **Status:** not yet deposited. Until then, contact
 > [borgi@dtu.dk](mailto:borgi@dtu.dk) for access to the reference dataset.
 
+## Numerical changes vs. older `main`
+
+Two corrections landed during the Phase-6/7 cleanup that change the
+numerics of `Fd_find` (and therefore every downstream simulation). If
+you need to reproduce paper results bit-for-bit, you'll need an older
+snapshot of `main` — the figures in the *J. Appl. Cryst.* 2024 paper
+were generated against pre-correction code.
+
+1. **`Fdd[1,1]` sign correction** (commit `3b71b33`, follows Appendix A
+   of the paper). Pre-correction:
+   `F_d[1,1] ∝ y_d (x_d² - y_d² - 2ν(x_d² + y_d²))`. Post-correction
+   (current): `F_d[1,1] ∝ y_d (x_d² - y_d² + 2ν(x_d² + y_d²))`. This is
+   *physics correctness* — the corrected version had been in the
+   `CDD_Khaled` / `Beam_Stop` branch all along; `main` carried the
+   early-days sign error and the cleanup pulled it through Phase 4.
+
+2. **Bipolar wall consistency across the `ndis > 100` boundary**
+   (commit `c07dea4`). Pre-fix, `multi_dislocs_parallel` summed walls
+   at monotone offsets `{-1·dis, -2·dis, …}` while the sequential
+   branch summed bipolar offsets `{+1, -1, +2, -2, …}·dis`. Both
+   converge to the same infinite wall as `ndis → ∞` so this is an
+   *edge-effect* difference rather than a physics-correctness one
+   (the wall is meant to be infinite; finite `ndis` is a numerical
+   approximation). The fix makes the two branches consistent so the
+   regression-test net covers both.
+
 ## Reproducibility checklist
 
 When publishing or sharing a simulation run, record:

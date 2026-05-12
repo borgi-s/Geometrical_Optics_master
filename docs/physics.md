@@ -66,7 +66,7 @@ dislocation coords is
 F_d[0,0] = -y_d (3 x_d² + y_d² - 2ν (x_d² + y_d²)) / ((x_d² + y_d²)²) · b / (4π(1-ν))
 F_d[0,1] =  x_d (3 x_d² + y_d² - 2ν (x_d² + y_d²)) / ((x_d² + y_d²)²) · b / (4π(1-ν))
 F_d[1,0] = -x_d (3 y_d² + x_d² - 2ν (x_d² + y_d²)) / ((x_d² + y_d²)²) · b / (4π(1-ν))
-F_d[1,1] =  y_d (x_d² - y_d² - 2ν (x_d² + y_d²)) / ((x_d² + y_d²)²) · b / (4π(1-ν))
+F_d[1,1] =  y_d (x_d² - y_d² + 2ν (x_d² + y_d²)) / ((x_d² + y_d²)²) · b / (4π(1-ν))
 ```
 
 with `b` the Burgers vector magnitude (default `BURGERS_VECTOR = 2.862e-4 µm`
@@ -74,10 +74,21 @@ for Al) and `ν` the Poisson ratio (`POISSON_RATIO = 0.334`). The full
 gradient tensor is `F = I + F_d`. A small `α = 1e-20` is added in the
 denominator to keep `F` finite at the dislocation core itself.
 
+> **Sign convention on `F_d[1,1]`**: the `+2ν` on the `[1,1]` component
+> (vs `-2ν` on the other three) follows the correction documented in
+> Appendix A of [Borgi et al., *J. Appl. Cryst.* (2024)](https://doi.org/10.1107/S1600576724001183).
+> Pre-correction versions of the code (including stale `main` snapshots)
+> used `-2ν` on `[1,1]` — see commit `3b71b33` in this branch.
+
 `Fd_find` builds this field on the lab-coordinate grid `rl`, optionally
 summing contributions from multiple parallel dislocations stacked in a
-wall along `y_d`. For >100 dislocations the loop is sharded across a
-`ThreadPoolExecutor` (one chunk per CPU); for ≤100 it runs serially.
+wall along `y_d`. The wall is bipolar — for index `i ∈ [1, ndis)` the
+offsets are `+1·dis, -1·dis, +2·dis, -2·dis, …` so the wall is centered
+on the origin. For `ndis > 100` the loop is sharded across a
+`ThreadPoolExecutor` (one chunk per CPU); for `≤100` it runs serially.
+Both branches use the same deterministic per-`i` offset formula, so
+results are identical (up to floating-point order-of-summation) across
+the branch boundary.
 
 The function returns `Fg = Ud @ F_d @ Ud.T`, the gradient field rotated
 back into the *grain* frame (so downstream code can use the same
