@@ -80,7 +80,8 @@ def compute_com_maps(
 
     Returns:
         ``(phi_list, chi_list)`` mosaicity maps, both shape ``(H, W)`` and in
-        radians.
+        radians. Pixels whose rocking-curve image is identically zero produce
+        ``np.nan`` in both outputs (dead detector pixels, beamstop shadows).
     """
     phi_high = np.deg2rad(np.linspace(-phi_range, phi_range, phi_steps * oversample))
     chi_high = np.deg2rad(
@@ -94,6 +95,10 @@ def compute_com_maps(
     for i in range(H):
         for j in range(W):
             chi_idx, phi_idx = center_of_mass(stack[:, :, i, j])
+            if np.isnan(chi_idx) or np.isnan(phi_idx):
+                phi_list[i, j] = np.nan
+                chi_list[i, j] = np.nan
+                continue
             phi_list[i, j] = phi_high[int(round(phi_idx * oversample))]
             chi_list[i, j] = chi_high[int(round(chi_idx * oversample))]
 

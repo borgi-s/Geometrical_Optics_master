@@ -126,7 +126,7 @@ class TestComputeComMaps:
             oversample=oversample,
         )
         # delta on the chi grid equals deg2rad(0.02)
-        assert (chi_shifted[0, 0] - chi_zero[0, 0]) == pytest.approx(np.deg2rad(0.02), rel=1e-3)
+        assert (chi_shifted[0, 0] - chi_zero[0, 0]) == pytest.approx(np.deg2rad(0.02), rel=1e-9)
 
     def test_non_square_grid(self) -> None:
         """COM extraction must not assume H == W (regression guard for the
@@ -148,3 +148,34 @@ class TestComputeComMaps:
         )
         assert phi_list.shape == (H, W)
         assert chi_list.shape == (H, W)
+
+    def test_zero_intensity_pixel_produces_nan(self) -> None:
+        """Dead detector pixels (all-zero rocking curve) must produce NaN in
+        both phi and chi maps, not a ValueError from int(NaN)."""
+        chi_steps = 5
+        phi_steps = 5
+        H, W = 2, 2
+        stack = np.zeros((chi_steps, phi_steps, H, W))
+        # Plant a peak at one pixel only; the rest stay zero (dead pixels).
+        stack[2, 2, 0, 0] = 1.0
+
+        phi_list, chi_list = compute_com_maps(
+            stack,
+            phi_range=0.1,
+            phi_steps=phi_steps,
+            chi_range=0.1,
+            chi_steps=chi_steps,
+            chi_shift=0.0,
+            oversample=10,
+        )
+
+        # Live pixel is finite
+        assert np.isfinite(phi_list[0, 0])
+        assert np.isfinite(chi_list[0, 0])
+        # Dead pixels are NaN, not a crash
+        assert np.isnan(phi_list[0, 1])
+        assert np.isnan(chi_list[0, 1])
+        assert np.isnan(phi_list[1, 0])
+        assert np.isnan(chi_list[1, 0])
+        assert np.isnan(phi_list[1, 1])
+        assert np.isnan(chi_list[1, 1])
