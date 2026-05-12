@@ -1,9 +1,13 @@
 """Unit tests for dfxm_geo.io.images (round-trip save/load) and io.strain_cache."""
 
+import os
+
+import fabio
 import numpy as np
 import pytest
 
-from dfxm_geo.io.images import load_image, load_images, load_images_parallel
+from dfxm_geo.io import check_folder
+from dfxm_geo.io.images import load_image, load_images, load_images_parallel, save_edfs
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
 
@@ -144,3 +148,62 @@ def test_load_or_generate_Hg_in_memory_path_matches_cached(rotation_matrices, tm
     Hg_in_memory = load_or_generate_Hg(rl, Ud, Us, Theta, dis=2.0, ndis=1)
     Hg_cached = load_or_generate_Hg(rl, Ud, Us, Theta, dis=2.0, ndis=1, file_path=str(cache))
     np.testing.assert_allclose(Hg_in_memory, Hg_cached, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# check_folder
+# ---------------------------------------------------------------------------
+
+
+def test_check_folder_creates_missing_dir(tmp_path):
+    """check_folder mkdirs the target if it does not exist."""
+    target = "new_subfolder"
+    assert not (tmp_path / target).exists()
+    check_folder(str(tmp_path), target)
+    assert (tmp_path / target).is_dir()
+
+
+def test_check_folder_no_op_when_exists(tmp_path):
+    """check_folder is idempotent — calling on an existing dir does not raise."""
+    target = "preexisting"
+    (tmp_path / target).mkdir()
+    # Should not raise.
+    check_folder(str(tmp_path), target)
+    assert (tmp_path / target).is_dir()
+
+
+# ---------------------------------------------------------------------------
+# save_edfs (round-trip through fabio)
+# ---------------------------------------------------------------------------
+
+
+def test_save_edfs_writes_one_file_per_uv_pair(tmp_path):
+    """save_edfs writes u_steps * v_steps .edf files into the target directory."""
+    u_steps, v_steps, h, w = 2, 3, 5, 4
+    rng = np.random.default_rng(0)
+    # imstack is indexed as imstack[j, i] for j in [0, u_steps), i in [0, v_steps).
+    imstack = rng.integers(0, 1000, size=(u_steps, v_steps, h, w)).astype(np.float64)
+    v = np.linspace(0.1, 0.2, v_steps)
+    u = np.linspace(-0.05, 0.05, u_steps)
+
+    fpath = str(tmp_path)
+    fn_prefix = "/sim_"
+    result = save_edfs(imstack, v, u, fpath, fn_prefix)
+    assert result is True
+
+    edf_files = sorted(f for f in os.listdir(tmp_path) if f.endswith(".edf"))
+    assert len(edf_files) == u_steps * v_steps
+
+
+def test_save_edfs_round_trips_pixel_data(tmp_path):
+    """A saved EDF can be read back with fabio and yields the same pixel values."""
+    h, w = 4, 3
+    expected_img = np.arange(h * w).reshape(h, w).astype(np.float64)
+    imstack = expected_img[np.newaxis, np.newaxis, :, :]
+    v = np.array([0.1])
+    u = np.array([0.05])
+
+    save_edfs(imstack, v, u, str(tmp_path), "/sim_")
+    written = next(f for f in os.listdir(tmp_path) if f.endswith(".edf"))
+    loaded = fabio.open(str(tmp_path / written)).data
+    np.testing.assert_array_equal(loaded.astype(np.float64), expected_img)
