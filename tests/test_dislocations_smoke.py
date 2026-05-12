@@ -4,17 +4,12 @@ This guards against silent numerical regressions during refactors. Inputs
 are deliberately small and deterministic; we are not validating physics here.
 """
 
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-# Add repo root to import path so the flat-layout modules resolve.
-REPO_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(REPO_ROOT))
-
-from functions import Fd_find  # noqa: E402
+from dfxm_geo.crystal.dislocations import Fd_find
 
 
 def _build_inputs(n: int = 8):
