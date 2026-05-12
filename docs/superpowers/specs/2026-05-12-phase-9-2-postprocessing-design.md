@@ -1,6 +1,6 @@
 # Phase 9.2 — Post-Processing Pipeline (Design)
 
-**Status:** approved 2026-05-12
+**Status:** implemented 2026-05-12 on cleanup/main-modernization
 **Author:** Sina Borgi (DTU), with Claude Code
 **Plan reference:** `docs/superpowers/plans/2026-05-12-codebase-cleanup.md` (Phase 9)
 **PR:** #1 (draft) — `cleanup/main-modernization`
