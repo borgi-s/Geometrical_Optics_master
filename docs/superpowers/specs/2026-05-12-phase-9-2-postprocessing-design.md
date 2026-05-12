@@ -173,7 +173,7 @@ For an invocation `dfxm-forward --config X --output /path/out`:
     phi_list.npy                    # mosaicity map in φ (radians)
     chi_list.npy                    # mosaicity map in χ (radians)
     qi_field.npy                    # full qi field, shape (2 or 3, X, Y, Z)
-    chi_shift.txt                   # scalar shift in radians, ASCII
+    chi_shift.txt                   # scalar shift in degrees, ASCII
   figures/                          # NEW (Phase 9.2)
     mosaicity_maps.svg              # was: extrem_phi+chi2.svg
     qi_cross_section.svg            # was: qi1+qi2_fields1.svg

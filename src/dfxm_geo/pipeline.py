@@ -242,7 +242,7 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
     np.save(data_dir / "phi_list.npy", phi_list)
     np.save(data_dir / "chi_list.npy", chi_list)
     np.save(data_dir / "qi_field.npy", qi_field)
-    (data_dir / "chi_shift.txt").write_text(f"{chi_shift}\n")
+    (data_dir / "chi_shift.txt").write_text(f"{chi_shift}  # degrees\n")
 
     # Render figures.
     fig_dir = output_dir / config.postprocess.figures_dirname

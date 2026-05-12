@@ -215,6 +215,9 @@ class TestRunPostprocess:
         assert "phi_list" in result
         assert "chi_list" in result
         assert "chi_shift" in result
+        assert "qi_field" in result
+        assert "data_dir" in result
+        assert "figures_dir" in result
 
     def test_missing_dislocs_dir_raises(
         self,
@@ -225,3 +228,17 @@ class TestRunPostprocess:
         cfg = SimulationConfig()
         with pytest.raises(FileNotFoundError, match="dislocs"):
             run_postprocess(tmp_path, cfg)
+
+    def test_missing_hg_raises(
+        self,
+        tiny_simulation_output: tuple[Path, SimulationConfig],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If fm.Hg is None (no run_simulation, no kernel auto-load),
+        run_postprocess should fail fast with a clear error rather than
+        crashing inside fm.forward()."""
+        output_dir, config = tiny_simulation_output
+        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
+        with pytest.raises(RuntimeError, match="fm.Hg is not set"):
+            run_postprocess(output_dir, config)
