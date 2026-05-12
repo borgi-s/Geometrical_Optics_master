@@ -6,20 +6,28 @@ authors:
     given-names: Sina
     affiliation: "Technical University of Denmark (DTU)"
     email: borgi@dtu.dk
-# TODO(borgi): replace the placeholder values below with the exact metadata
-#   from the J. Appl. Cryst. 2024 article (full author list, volume, issue,
-#   pages, DOI). The DOI (10.1107/S1600576724001183) and the IUCr URL
-#   (journals.iucr.org/j/issues/2024/02/00/nb5370/) both resolve to
-#   J. Appl. Cryst., not IUCrJ — internal-consistency fix applied below.
 preferred-citation:
   type: article
-  title: "TODO: paper title from J. Appl. Cryst. 2024 issue 2"
+  title: "Simulations of dislocation contrast in dark-field X-ray microscopy"
   authors:
     - family-names: Borgi
       given-names: Sina
+    - family-names: Ræder
+      given-names: Trygve Magnus
+    - family-names: Carlsen
+      given-names: Mads Allerup
+    - family-names: Detlefs
+      given-names: Carsten
+    - family-names: Winther
+      given-names: Grethe
+    - family-names: Poulsen
+      given-names: Henning Friis
   journal: "Journal of Applied Crystallography"
   year: 2024
   volume: 57
   issue: 2
+  start: 358
+  end: 368
+  month: 4
   doi: "10.1107/S1600576724001183"
   url: "https://doi.org/10.1107/S1600576724001183"
