@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project — generated outputs
+*.npy
+*.pkl
+*.edf
+*.mp4
+output/
+results/
+rockingcurve*/
+mixed_ims*/
+final_figures/
+
+# Project — keep small reference data
+!tests/data/golden/*.npy
+!docs/figures/*.png
+
+# Environment
+.env
+.venv/
+venv/
