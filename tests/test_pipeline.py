@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import dfxm_geo.direct_space.forward_model as fm
@@ -21,6 +22,7 @@ from dfxm_geo.pipeline import (
     ScanConfig,
     SimulationConfig,
     _ensure_kernel_loaded,
+    run_postprocess,
     run_simulation,
 )
 
@@ -134,3 +136,92 @@ class TestPreflight:
         # image-stack subdirectories were created.
         assert not (tmp_path / "images10").exists()
         assert not (tmp_path / "images10_perf_crystal").exists()
+
+
+@pytest.fixture
+def tiny_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
+    """Write tiny synthetic stacks that mimic save_images_parallel output.
+
+    Names match the (j, i) convention in save_image: ``<prefix><i:04d>_<j:04d>.npy``.
+    """
+    chi_steps, phi_steps = 5, 5
+    H, W = 4, 4
+    config = SimulationConfig(
+        crystal=CrystalConfig(dis=1.0, ndis=2),
+        scan=ScanConfig(phi_range=0.05, phi_steps=phi_steps, chi_range=0.05, chi_steps=chi_steps),
+        io=IOConfig(),
+    )
+    output_dir = tmp_path / "out"
+    dislocs_dir = output_dir / config.io.dislocs_dirname
+    perfect_dir = output_dir / config.io.perfect_dirname
+    dislocs_dir.mkdir(parents=True)
+    perfect_dir.mkdir(parents=True)
+
+    rng = np.random.default_rng(42)
+    for i in range(chi_steps):
+        for j in range(phi_steps):
+            suffix = f"{i:04d}_{j:04d}.npy"
+            np.save(
+                dislocs_dir / f"{config.io.fn_prefix.lstrip('/')}{suffix}",
+                rng.normal(1.0, 0.01, size=(H, W)),
+            )
+            np.save(
+                perfect_dir / f"{config.io.fn_prefix.lstrip('/')}{suffix}",
+                rng.normal(1.0, 0.01, size=(H, W)),
+            )
+    return output_dir, config
+
+
+class TestRunPostprocess:
+    def test_golden_path(
+        self,
+        tiny_simulation_output: tuple[Path, SimulationConfig],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        output_dir, config = tiny_simulation_output
+
+        # Mock forward() to avoid needing the kernel pickle.
+        fake_qi = np.zeros((3, 4, 4, 4))
+        fake_im = np.zeros((4, 4))
+        monkeypatch.setattr(
+            "dfxm_geo.pipeline.fm.forward",
+            lambda Hg, phi=0, chi=0, qi_return=False: (
+                (fake_im, fake_qi) if qi_return else (fake_im, None)
+            ),
+        )
+        # Bypass the kernel preflight.
+        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
+        # Sidestep the geometry globals — provide defaults that match the fake qi shape.
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.xl_start", 1e-5)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.yl_start", 1e-5)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.xl_steps", 4)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.yl_steps", 4)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_steps", 4)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", np.zeros((3, 3, 4, 4, 4)))
+
+        result = run_postprocess(output_dir, config)
+
+        # Data products
+        data_dir = output_dir / "analysis"
+        assert (data_dir / "phi_list.npy").exists()
+        assert (data_dir / "chi_list.npy").exists()
+        assert (data_dir / "qi_field.npy").exists()
+        assert (data_dir / "chi_shift.txt").exists()
+        # Figures
+        fig_dir = output_dir / "figures"
+        assert (fig_dir / "mosaicity_maps.svg").exists()
+        assert (fig_dir / "qi_cross_section.svg").exists()
+        # Return dict carries the arrays
+        assert "phi_list" in result
+        assert "chi_list" in result
+        assert "chi_shift" in result
+
+    def test_missing_dislocs_dir_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
+        cfg = SimulationConfig()
+        with pytest.raises(FileNotFoundError, match="dislocs"):
+            run_postprocess(tmp_path, cfg)

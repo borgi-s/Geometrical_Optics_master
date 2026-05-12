@@ -24,7 +24,9 @@ from typing import Any
 import numpy as np
 
 import dfxm_geo.direct_space.forward_model as fm
-from dfxm_geo.io.images import save_images_parallel
+from dfxm_geo.analysis.mosaicity import compute_chi_shift, compute_com_maps
+from dfxm_geo.io.images import load_images, save_images_parallel
+from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
 
 @dataclass
@@ -160,6 +162,115 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         "perfect_path": perfect_path,
         "Hg": Hg,
         "q_hkl": q_hkl,
+    }
+
+
+def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any]:
+    """Stages 2-4 of init_forward.py against an existing output_dir.
+
+    Reads the perfect and dislocated stacks from disk, computes the χ-shift
+    correction, computes per-pixel COM maps, calls forward() for the qi field
+    at z=0, then writes data products and SVGs under output_dir.
+
+    Raises:
+        FileNotFoundError: if either expected stack directory is absent.
+        RuntimeError: from :func:`_ensure_kernel_loaded` if the reciprocal-
+            space kernel is missing.
+    """
+    _ensure_kernel_loaded()
+
+    dislocs_path = output_dir / config.io.dislocs_dirname
+    perfect_path = output_dir / config.io.perfect_dirname
+
+    if not dislocs_path.is_dir():
+        raise FileNotFoundError(
+            f"Expected dislocs stack at {dislocs_path}; run dfxm-forward "
+            "without --postprocess-only first."
+        )
+    if not perfect_path.is_dir():
+        raise FileNotFoundError(
+            f"Expected perfect-crystal stack at {perfect_path}; run "
+            "dfxm-forward without --postprocess-only first."
+        )
+
+    _, dis_reshape, _, _ = load_images(
+        str(dislocs_path),
+        config.scan.phi_steps,
+        config.scan.chi_steps,
+        file_ext=config.io.ftype,
+    )
+    _, perf_reshape, _, _ = load_images(
+        str(perfect_path),
+        config.scan.phi_steps,
+        config.scan.chi_steps,
+        file_ext=config.io.ftype,
+    )
+
+    # Stage 2: χ-shift
+    chi_shift = compute_chi_shift(
+        perf_reshape,
+        config.scan.chi_steps,
+        config.scan.chi_range,
+        oversample=config.postprocess.chi_oversample_for_shift,
+    )
+
+    # Stage 3: per-pixel COM maps. The original script uses the same oversample
+    # factor for both axes; we keep them independent in the API but they
+    # default to the same value.
+    phi_list, chi_list = compute_com_maps(
+        dis_reshape,
+        config.scan.phi_range,
+        config.scan.phi_steps,
+        config.scan.chi_range,
+        config.scan.chi_steps,
+        chi_shift=chi_shift,
+        oversample=config.postprocess.phi_oversample,
+    )
+
+    # Stage 4: qi field at z=0 via a single forward() call. Uses module-level
+    # Hg as left by run_simulation (or the default load).
+    if fm.Hg is None:
+        raise RuntimeError(
+            "fm.Hg is not set. Call run_simulation() first or assign fm.Hg "
+            "before calling run_postprocess()."
+        )
+    _, qi_field = fm.forward(fm.Hg, phi=0, qi_return=True)
+
+    # Persist data products.
+    data_dir = output_dir / config.postprocess.data_dirname
+    data_dir.mkdir(parents=True, exist_ok=True)
+    np.save(data_dir / "phi_list.npy", phi_list)
+    np.save(data_dir / "chi_list.npy", chi_list)
+    np.save(data_dir / "qi_field.npy", qi_field)
+    (data_dir / "chi_shift.txt").write_text(f"{chi_shift}\n")
+
+    # Render figures.
+    fig_dir = output_dir / config.postprocess.figures_dirname
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    plot_mosaicity_maps(
+        phi_list,
+        chi_list,
+        fm.xl_start,
+        fm.yl_start,
+        fig_dir / "mosaicity_maps.svg",
+    )
+    plot_qi_cross_section(
+        qi_field,
+        fm.xl_start,
+        fm.yl_start,
+        fm.xl_steps,
+        fm.yl_steps,
+        fm.zl_steps,
+        fig_dir / "qi_cross_section.svg",
+    )
+
+    return {
+        "phi_list": phi_list,
+        "chi_list": chi_list,
+        "qi_field": qi_field,
+        "chi_shift": chi_shift,
+        "data_dir": data_dir,
+        "figures_dir": fig_dir,
     }
 
 
