@@ -111,6 +111,36 @@ class TestFastgrainplot:
         for arr in results:
             assert arr.shape == (3, 5)
 
+    def test_rectangular_grid_correct_slow_motor_indexing(self) -> None:
+        """On a non-square (nv×nu) grid the slow-motor index must use len(vlist).
+
+        We build a stack of nv*nu frames where the u-motor ramps linearly and
+        v is fixed at 0. With symmetric v and a constant v=0 the per-pixel
+        vnorm should be 0 everywhere. More importantly, the per-pixel unorm
+        must equal the mean of ulist (0.5) — which only happens when the slow-
+        motor index is ``j // len(vlist)``, not ``j // len(ulist)``.
+        """
+        nv, nu = 3, 7  # deliberately non-square
+        h, w = 2, 2
+        vlist = np.linspace(-1.0, 1.0, nv)  # symmetric → mean = 0
+        ulist = np.linspace(0.0, 1.0, nu)  # asymmetric → mean = 0.5
+
+        # Build a stack where every image has uniform intensity 1.
+        # Frame ordering: outer loop over u (slow), inner over v (fast),
+        # matching the convention ``vv = vlist[j % len(vlist)]``,
+        #                          ``uu = ulist[j // len(vlist)]``.
+        stack = np.ones((nv * nu, h, w), dtype=float)
+
+        unorm, vnorm, _uf, _vf = fastgrainplot(stack, vlist, ulist)
+
+        # v is symmetric → per-pixel vnorm must be ~0
+        assert np.allclose(vnorm, 0.0, atol=1e-12), f"vnorm should be 0, got {vnorm}"
+        # u ranges 0..1 and each step is equally weighted → mean = mean(ulist)
+        expected_unorm = np.mean(ulist) / 2  # the /2 weighting in fastgrainplot
+        assert np.allclose(unorm, expected_unorm, atol=1e-6), (
+            f"unorm should be {expected_unorm}, got {unorm}"
+        )
+
 
 class TestInvPolefigureColors:
     def test_returns_array_shapes(self):
