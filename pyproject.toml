@@ -37,6 +37,7 @@ dependencies = [
 dev = [
     "pytest>=8",
     "pytest-cov>=4",
+    "pytest-benchmark>=4",
     "ruff>=0.6",
     "mypy>=1.10",
     "pre-commit>=3.7",
@@ -110,4 +111,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not bench'"
+markers = [
+    "bench: performance benchmarks (run with `pytest -m bench`); skipped by default",
+]
