@@ -51,3 +51,50 @@ def compute_chi_shift(
     chi_high = np.linspace(-chi_range, chi_range, chi_steps * oversample)
     shift_idx = com[0] * oversample - (chi_steps * oversample / 2)
     return float(chi_high[int(abs(shift_idx))] - chi_high[0])
+
+
+def compute_com_maps(
+    stack: np.ndarray,
+    phi_range: float,
+    phi_steps: int,
+    chi_range: float,
+    chi_steps: int,
+    *,
+    chi_shift: float = 0.0,
+    oversample: int = 20,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-pixel center-of-mass extraction over the (φ, χ) rocking grid.
+
+    For each detector pixel ``(i, j)``, computes the centroid of
+    ``stack[:, :, i, j]`` (a ``chi_steps × phi_steps`` rocking-curve image)
+    and looks the (φ, χ) values up on a ``oversample``-times-refined grid.
+
+    Args:
+        stack: Shape ``(chi_steps, phi_steps, H, W)``. Detector frame of the
+            dislocated rocking sweep.
+        phi_range, phi_steps: Half-range (degrees) and step count of φ.
+        chi_range, chi_steps: Half-range (degrees) and step count of χ.
+        chi_shift: Additive shift to the χ axis (degrees), as returned by
+            :func:`compute_chi_shift`.
+        oversample: High-resolution refinement factor for the (φ, χ) grids.
+
+    Returns:
+        ``(phi_list, chi_list)`` mosaicity maps, both shape ``(H, W)`` and in
+        radians.
+    """
+    phi_high = np.deg2rad(np.linspace(-phi_range, phi_range, phi_steps * oversample))
+    chi_high = np.deg2rad(
+        np.linspace(-chi_range + chi_shift, chi_range + chi_shift, chi_steps * oversample)
+    )
+
+    H, W = stack.shape[2], stack.shape[3]
+    phi_list = np.zeros((H, W))
+    chi_list = np.zeros((H, W))
+
+    for i in range(H):
+        for j in range(W):
+            chi_idx, phi_idx = center_of_mass(stack[:, :, i, j])
+            phi_list[i, j] = phi_high[int(round(phi_idx * oversample))]
+            chi_list[i, j] = chi_high[int(round(chi_idx * oversample))]
+
+    return phi_list, chi_list

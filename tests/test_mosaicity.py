@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dfxm_geo.analysis.mosaicity import compute_chi_shift
+from dfxm_geo.analysis.mosaicity import compute_chi_shift, compute_com_maps
 
 
 class TestComputeChiShift:
@@ -57,3 +57,94 @@ class TestComputeChiShift:
         # Because the implementation does int(abs(shift_idx)), peaks at index 4
         # and index 6 produce the same magnitude (mirror around the center).
         assert s_above == pytest.approx(s_centered, rel=1e-9)
+
+
+class TestComputeComMaps:
+    def test_planted_centroids_recovered(self) -> None:
+        """Each pixel has a planted intensity peak at a known (chi, phi) cell.
+        compute_com_maps must return the corresponding chi_high / phi_high
+        radian values."""
+        chi_steps = 11
+        phi_steps = 7
+        chi_range = 0.1
+        phi_range = 0.05
+        oversample = 20
+        H, W = 3, 4
+        stack = np.zeros((chi_steps, phi_steps, H, W))
+        # plant pixel (i, j) → peak at chi=i+1, phi=j+1 (modulo grid)
+        for i in range(H):
+            for j in range(W):
+                stack[(i + 1) % chi_steps, (j + 1) % phi_steps, i, j] = 1.0
+
+        phi_list, chi_list = compute_com_maps(
+            stack,
+            phi_range,
+            phi_steps,
+            chi_range,
+            chi_steps,
+            chi_shift=0.0,
+            oversample=oversample,
+        )
+
+        phi_high = np.deg2rad(np.linspace(-phi_range, phi_range, phi_steps * oversample))
+        chi_high = np.deg2rad(np.linspace(-chi_range, chi_range, chi_steps * oversample))
+        assert phi_list.shape == (H, W)
+        assert chi_list.shape == (H, W)
+        for i in range(H):
+            for j in range(W):
+                expected_phi = phi_high[((j + 1) % phi_steps) * oversample]
+                expected_chi = chi_high[((i + 1) % chi_steps) * oversample]
+                assert phi_list[i, j] == pytest.approx(expected_phi)
+                assert chi_list[i, j] == pytest.approx(expected_chi)
+
+    def test_chi_shift_is_applied_additively(self) -> None:
+        """Passing chi_shift shifts the χ output by that amount (degrees → radians)."""
+        chi_steps = 11
+        phi_steps = 7
+        chi_range = 0.1
+        phi_range = 0.05
+        oversample = 20
+        stack = np.zeros((chi_steps, phi_steps, 1, 1))
+        stack[5, 3, 0, 0] = 1.0
+
+        _, chi_zero = compute_com_maps(
+            stack,
+            phi_range,
+            phi_steps,
+            chi_range,
+            chi_steps,
+            chi_shift=0.0,
+            oversample=oversample,
+        )
+        _, chi_shifted = compute_com_maps(
+            stack,
+            phi_range,
+            phi_steps,
+            chi_range,
+            chi_steps,
+            chi_shift=0.02,
+            oversample=oversample,
+        )
+        # delta on the chi grid equals deg2rad(0.02)
+        assert (chi_shifted[0, 0] - chi_zero[0, 0]) == pytest.approx(np.deg2rad(0.02), rel=1e-3)
+
+    def test_non_square_grid(self) -> None:
+        """COM extraction must not assume H == W (regression guard for the
+        latent fastgrainplot non-square-grid bug class)."""
+        chi_steps = 5
+        phi_steps = 5
+        H, W = 3, 7  # asymmetric
+        stack = np.zeros((chi_steps, phi_steps, H, W))
+        stack[2, 2, :, :] = 1.0
+
+        phi_list, chi_list = compute_com_maps(
+            stack,
+            phi_range=0.1,
+            phi_steps=phi_steps,
+            chi_range=0.1,
+            chi_steps=chi_steps,
+            chi_shift=0.0,
+            oversample=10,
+        )
+        assert phi_list.shape == (H, W)
+        assert chi_list.shape == (H, W)
