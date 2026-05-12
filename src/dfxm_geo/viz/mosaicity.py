@@ -80,3 +80,66 @@ def plot_mosaicity_maps(
         fig.savefig(out_path)
     finally:
         plt.close(fig)
+
+
+def plot_qi_cross_section(
+    qi_field: np.ndarray,
+    xl_start: float,
+    yl_start: float,
+    xl_steps: int,
+    yl_steps: int,
+    zl_steps: int,
+    out_path: Path | str,
+    *,
+    vmin: float = -1e-4,
+    vmax: float = 1e-4,
+) -> None:
+    """Save the two-panel qi_1 / qi_2 cross-section SVG at z = 0.
+
+    Port of ``init_forward.py:217-269``. The qi field is sliced at
+    ``zl_steps // 2`` (the z = 0 plane in symmetric coordinates).
+
+    Args:
+        qi_field: Shape ``(>=2, xl_steps, yl_steps, zl_steps)``. The first
+            axis indexes qi_1, qi_2, (qi_3); panels are drawn for indices 0
+            and 1.
+        xl_start, yl_start: Negative-valued module globals from
+            :mod:`dfxm_geo.direct_space.forward_model`; pass directly.
+        xl_steps, yl_steps, zl_steps: Sample counts along the three axes.
+            Used to derive the µm rulers and the z-midplane index.
+        out_path: SVG output path (:class:`pathlib.Path` or string).
+        vmin, vmax: Color limits (default ±1e-4).
+    """
+    X = np.linspace(-xl_start, xl_start, xl_steps) * 1e6  # µm rulers
+    Y = np.linspace(-yl_start, yl_start, yl_steps) * 1e6
+
+    fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+    panels = [
+        (0, "qi_1 for (x, y) plane, z=0", axs[0]),
+        (1, "qi_2 for (x, y) plane, z=0", axs[1]),
+    ]
+    for idx, title, ax in panels:
+        im = ax.imshow(
+            qi_field[idx, :, :, zl_steps // 2].squeeze(),
+            extent=[Y.min(), Y.max(), X.min(), X.max()],
+            vmin=vmin,
+            vmax=vmax,
+            cmap="viridis",
+            origin="lower",
+        )
+        ax.set_aspect("equal")
+        ax.set_title(title)
+        ax.set_xlabel(r"$y_{\ell}$ ($\mu$m)", fontsize=12)
+        ax.set_ylabel(r"$x_{\ell}$ ($\mu$m)", fontsize=12)
+        ax.grid(False)
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((-2, 2))
+        cbar = fig.colorbar(im, ax=ax, format=formatter)
+        cbar.update_ticks()
+
+    plt.tight_layout()
+    try:
+        fig.savefig(out_path)
+    finally:
+        plt.close(fig)

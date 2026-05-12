@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from dfxm_geo.analysis.mosaicity import compute_chi_shift, compute_com_maps
-from dfxm_geo.viz.mosaicity import plot_mosaicity_maps
+from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
 
 class TestComputeChiShift:
@@ -197,6 +197,28 @@ class TestPlotMosaicityMaps:
             chi_list,
             xl_start=-1e-5,
             yl_start=-1e-5,
+            out_path=out,
+        )
+
+        assert out.exists()
+        content = out.read_text()
+        assert len(content) > 0
+        assert content.lstrip().startswith("<?xml") or "<svg" in content
+
+
+class TestPlotQiCrossSection:
+    def test_writes_valid_svg(self, tmp_path: Path) -> None:
+        xl_steps, yl_steps, zl_steps = 8, 8, 4
+        qi_field = np.random.default_rng(2).normal(0, 1e-5, size=(3, xl_steps, yl_steps, zl_steps))
+        out = tmp_path / "qi_cross_section.svg"
+
+        plot_qi_cross_section(
+            qi_field,
+            xl_start=-1e-5,
+            yl_start=-1e-5,
+            xl_steps=xl_steps,
+            yl_steps=yl_steps,
+            zl_steps=zl_steps,
             out_path=out,
         )
 
