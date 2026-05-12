@@ -7,16 +7,19 @@ authors:
     affiliation: "Technical University of Denmark (DTU)"
     email: borgi@dtu.dk
 # TODO(borgi): replace the placeholder values below with the exact metadata
-#   from the IUCrJ 2024 article (title, full author list, volume, issue, pages, DOI).
-#   See https://journals.iucr.org/j/issues/2024/02/00/nb5370/
+#   from the J. Appl. Cryst. 2024 article (full author list, volume, issue,
+#   pages, DOI). The DOI (10.1107/S1600576724001183) and the IUCr URL
+#   (journals.iucr.org/j/issues/2024/02/00/nb5370/) both resolve to
+#   J. Appl. Cryst., not IUCrJ — internal-consistency fix applied below.
 preferred-citation:
   type: article
-  title: "TODO: paper title from IUCrJ 2024 issue 2"
+  title: "TODO: paper title from J. Appl. Cryst. 2024 issue 2"
   authors:
     - family-names: Borgi
       given-names: Sina
-  journal: "IUCrJ"
+  journal: "Journal of Applied Crystallography"
   year: 2024
-  volume: 11
+  volume: 57
   issue: 2
-  url: "https://journals.iucr.org/j/issues/2024/02/00/nb5370/"
+  doi: "10.1107/S1600576724001183"
+  url: "https://doi.org/10.1107/S1600576724001183"
