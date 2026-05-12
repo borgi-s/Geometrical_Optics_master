@@ -1,5 +1,8 @@
 # Import necessary libraries
 
+import os
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import ScalarFormatter
@@ -9,17 +12,22 @@ from tqdm import tqdm
 from direct_space.forward_model import *
 from image_processor import *
 
+# Output directory for simulated images and plots. Override with the
+# DFXM_DATA_DIR environment variable for runs on a shared machine; default
+# is `<repo>/output/` so a fresh clone has a sensible writable location.
+DATA_DIR = Path(os.environ.get("DFXM_DATA_DIR", Path(__file__).resolve().parent / "output"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 # Define the range and number of steps for phi and chi
 phi_range, phi_steps = 0.0006 * 180 / np.pi, 61
 chi_range, chi_steps = 0.002 * 180 / np.pi, 61
 
-# Define the filepath and filename prefix for the output images
-fpath = r"C:\Users\borgi\Documents\Production\images10_perf_crystal"
+# Output paths for the two image stacks (perfect crystal vs. with dislocations).
+fpath = str(DATA_DIR / "images10_perf_crystal")
 fn_prefix = r"/mosa_test_0000_"
 ftype = ".npy"
 
-# Define the filepath and filename prefix for the output images
-fpath1 = r"C:\Users\borgi\Documents\Production\images10"
+fpath1 = str(DATA_DIR / "images10")
 fn_prefix1 = r"/mosa_test_0000_"
 ftype1 = ".npy"
 
@@ -27,12 +35,7 @@ ftype1 = ".npy"
 Phi = np.linspace(-phi_range, phi_range, phi_steps)
 Chi = np.linspace(-chi_range, chi_range, chi_steps)
 
-# # Out comment to save images of new results
-# save_images(phi_range, phi_steps,
-#             chi_range, chi_steps,
-#             fpath, fn_prefix, ftype)
-
-# Out comment to save many images of new results
+# Save many images of new results
 save_images_parallel(
     np.zeros_like(Hg), phi_range, phi_steps, chi_range, chi_steps, fpath, fn_prefix, ftype
 )
@@ -220,8 +223,6 @@ im1 = axs[0].imshow(
     cmap="viridis",
     origin="lower",
 )
-# axs[0].set_xlim((-6,-4))
-# axs[0].set_ylim((1.5,3.5))
 axs[0].set_aspect("equal")
 axs[0].set_title("qi_1 for (x, y) plane, z=0")
 axs[0].set_xlabel(r"$y_{\ell}$ ($\mu$m)", fontsize=12)
