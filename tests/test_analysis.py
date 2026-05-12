@@ -3,7 +3,7 @@
 import numpy as np
 
 from dfxm_geo.analysis.colormaps import inv_polefigure_colors
-from dfxm_geo.analysis.moments import calc_moments
+from dfxm_geo.analysis.moments import calc_moments, fastgrainplot
 
 
 class TestCalcMoments:
@@ -50,6 +50,66 @@ class TestCalcMoments:
         # mean_u corresponds to the u-axis offset (0.4) — confirm sign and rough magnitude.
         assert 0.3 < m["mean_u"] < 0.5
         assert abs(m["mean_v"]) < 0.05
+
+
+class TestFastgrainplot:
+    """Tests for the per-pixel moment/FWHM map computation.
+
+    Note: `fastgrainplot` mutates its input stack in place
+    (`img[img < 0] = 0`). Tests build a fresh stack each time.
+    """
+
+    def _square_uniform_stack(self, n: int = 8, h: int = 4, w: int = 4) -> np.ndarray:
+        """Stack of (n*n) identical positive images on a square (n, n) grid."""
+        return np.ones((n * n, h, w), dtype=float)
+
+    def test_uniform_intensity_zero_mean_for_symmetric_motors(self) -> None:
+        """For symmetric motor ranges, identical images → per-pixel mean = 0."""
+        n = 8
+        stack = self._square_uniform_stack(n=n, h=4, w=4)
+        # vlist/ulist symmetric about 0 so the centroid lands on 0.
+        vlist = np.linspace(-1, 1, n)
+        ulist = np.linspace(-1, 1, n)
+        unorm, vnorm, ufwhm, vfwhm = fastgrainplot(stack, vlist, ulist)
+        assert unorm.shape == (4, 4) == vnorm.shape == ufwhm.shape == vfwhm.shape
+        assert np.allclose(unorm, 0, atol=1e-12)
+        assert np.allclose(vnorm, 0, atol=1e-12)
+
+    def test_uniform_intensity_shifted_motor_gives_nonzero_mean(self) -> None:
+        """An offset motor range shifts the per-pixel centroid."""
+        n = 8
+        stack = self._square_uniform_stack(n=n, h=2, w=2)
+        # Both motors centered on +0.5, so per-pixel mean should be ~+0.25
+        # (the /2 in the function is a legacy weighting; we just check sign + sanity).
+        vlist = np.linspace(0, 1, n)
+        ulist = np.linspace(0, 1, n)
+        unorm, vnorm, _, _ = fastgrainplot(stack, vlist, ulist)
+        assert (unorm > 0).all()
+        assert (vnorm > 0).all()
+
+    def test_negative_intensities_are_clipped(self) -> None:
+        """`fastgrainplot` zero-clips negative pixel values in place."""
+        n = 4
+        stack = np.full((n * n, 2, 2), -1.0)  # all negative
+        # After clipping, inttot=0 everywhere → moments produce NaN/inf; we just
+        # care that the function doesn't crash and that the input was modified.
+        vlist = np.linspace(-1, 1, n)
+        ulist = np.linspace(-1, 1, n)
+        # Suppress the expected divide-by-zero warning from the all-zero inttot.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            fastgrainplot(stack, vlist, ulist)
+        assert (stack >= 0).all(), "fastgrainplot should clip negatives to 0 in place"
+
+    def test_returns_four_maps_of_matching_shape(self) -> None:
+        """Each returned map has the per-pixel shape (H, W)."""
+        n = 4
+        stack = self._square_uniform_stack(n=n, h=3, w=5)
+        vlist = np.linspace(-1, 1, n)
+        ulist = np.linspace(-1, 1, n)
+        results = fastgrainplot(stack, vlist, ulist)
+        assert len(results) == 4
+        for arr in results:
+            assert arr.shape == (3, 5)
 
 
 class TestInvPolefigureColors:

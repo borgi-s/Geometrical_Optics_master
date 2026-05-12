@@ -42,7 +42,13 @@ def fastgrainplot(
         # For grain shape
         inttot += img
 
-        # For calculating moments
+        # For calculating moments.
+        # FIXME(non-square grid): the slow-motor index should be `j // len(vlist)`
+        # (number of fast-motor steps), not `j // len(ulist)`. This is only
+        # correct when len(vlist) == len(ulist), which is the case for the
+        # current demo (61x61) but would silently mis-index for rectangular
+        # rocking grids. Don't change without a regression run — see also
+        # the function's misnaming flagged in the cleanup plan.
         vv = vlist[j % len(vlist)]  # fast motor
         uu = ulist[j // len(ulist)]  # slow motor
 
