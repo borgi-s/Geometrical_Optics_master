@@ -25,8 +25,11 @@ src/dfxm_geo/
 │   └── strain_cache.py      load_or_generate_Hg with .npy caching
 ├── analysis/
 │   ├── moments.py           Image-stack moments / FWHM
-│   └── colormaps.py         Inverse pole-figure RGB mapping
-└── viz/                     (reserved — currently empty)
+│   ├── colormaps.py         Inverse pole-figure RGB mapping
+│   └── mosaicity.py         compute_chi_shift, compute_com_maps (Phase 9.2)
+├── viz/
+│   └── mosaicity.py         plot_mosaicity_maps, plot_qi_cross_section (Phase 9.2)
+└── pipeline.py              Config dataclasses, run_simulation, run_postprocess, CLI
 ```
 
 The top-level files `functions.py`, `image_processor.py`, `init_forward.py`,
@@ -35,9 +38,16 @@ generate_Resq_i, exposure_time}.py` are kept as **deprecation shims** that
 re-export from the new package. They will be removed once all known
 consumers have migrated; see the cleanup plan for the schedule.
 
+`pipeline.py` is the authoritative config-driven orchestrator. It exports the
+dataclasses `CrystalConfig`, `ScanConfig`, `IOConfig`, `PostprocessConfig`, and
+`SimulationConfig`, and the functions `run_simulation` and `run_postprocess`.
+The CLI entry point `dfxm-forward` (configured in `pyproject.toml`) calls
+`pipeline.cli_main`.
+
 ## Data flow for a simulation run
 
-The end-to-end forward simulation has three stages:
+The end-to-end pipeline has five stages. Stages 1–3 are the forward simulation
+(`run_simulation`); stages 4–5 are post-processing (`run_postprocess`).
 
 1. **Generate the reciprocal-space resolution kernel `Resq_i`** (one-off,
    slow — ~10⁸ Monte Carlo rays):
@@ -61,20 +71,37 @@ The end-to-end forward simulation has three stages:
    Hg, q_hkl = Find_Hg(dis=4, ndis=151, psize=40e-9, zl_rms=0.15e-6 / 2.35)
    ```
 
-3. **Run `forward()` for each (phi, chi) point** in the rocking scan:
+3. **Run `forward()` for each (phi, chi) point** in the rocking scan via
+   `dfxm_geo.io.images.save_images_parallel`. This parallelizes over a
+   `ThreadPoolExecutor` and writes one `.npy` per (phi_step, chi_step) into
+   `<output>/<io.dislocs_dirname>/`. If `io.include_perfect_crystal` is true,
+   a second sweep with `Hg=0` is written to `<output>/<io.perfect_dirname>/`.
 
-   ```python
-   from dfxm_geo.direct_space.forward_model import forward
-   image = forward(Hg, phi=0.0, chi=0.0)
-   ```
-
-   The output is a 2D image of shape `(NN2 // Nsub, NN1 // Nsub)`. With
-   `qi_return=True`, the function also returns the scattering-vector
+   The output image shape is `(NN2 // Nsub, NN1 // Nsub)`. With
+   `qi_return=True`, `forward()` also returns the scattering-vector
    field `qi` for diagnostics.
 
-For a sweep over (phi, chi), the convenience function
-`dfxm_geo.io.images.save_images_parallel` parallelizes step 3 over a
-`ThreadPoolExecutor` and writes each image to disk.
+4. **Compute mosaicity maps** (`analysis.mosaicity`, Phase 9.2). Reads both
+   stacks back from disk via `load_images`, corrects the χ axis with
+   `compute_chi_shift`, then extracts per-pixel center-of-mass positions
+   over the (φ, χ) grid with `compute_com_maps`. Outputs `phi_list` and
+   `chi_list` arrays (shape `(H, W)` each, in radians) plus
+   `chi_shift_deg.txt`, saved under `<output>/<io.data_dirname>/`.
+
+5. **Render SVG figures** (`viz.mosaicity`, Phase 9.2). `plot_mosaicity_maps`
+   produces the two-panel "extreme φ / χ" figure; `plot_qi_cross_section`
+   produces the qi-field cross-section figure. Both are saved as SVG under
+   `<output>/<io.figures_dirname>/`.
+
+The full five-stage flow can be driven from the CLI:
+
+```bash
+dfxm-forward --config configs/default.toml --output output/
+```
+
+Use `--no-postprocess` to stop after stage 3, or `--postprocess-only` to
+re-run stages 4–5 against an existing output directory (see "CLI entry point"
+below).
 
 ## Module-level state
 
@@ -122,25 +149,46 @@ io.strain_cache  -------------+
 direct_space.forward_model ---+
    ^
    |
-io.images        ---  used by --> init_forward.py / scripts
-analysis.moments
-analysis.colormaps
+io.images        ---  used by --> pipeline.run_simulation
+analysis.moments                  pipeline.run_postprocess
+analysis.colormaps                     ^             ^
+analysis.mosaicity ────────────────────┤             │
+viz.mosaicity      ────────────────────┘             │
+                                                     │
+                                             pipeline.cli_main
 ```
 
 `reciprocal_space.{resolution, kernel, exposure}` interact with
 `direct_space.forward_model` only through the pickle file produced by
 `kernel.py`. They have no Python-level imports of `direct_space`.
 
+`analysis.mosaicity` depends only on `numpy` and `scipy.ndimage`; it has no
+imports from `direct_space` or `io`. `viz.mosaicity` depends only on
+`matplotlib`; it takes plain `numpy` arrays and a `pathlib.Path`.
+
+## CLI entry point
+
+`pipeline.cli_main` is registered as the `dfxm-forward` console script in
+`pyproject.toml`. It accepts:
+
+| Flag | Effect |
+|---|---|
+| _(none)_ | Default: run simulation then post-processing |
+| `--no-postprocess` | Simulation only; skip stages 4–5 |
+| `--postprocess-only` | Skip simulation; re-run stages 4–5 against an existing output dir |
+
+Both `--no-postprocess` and `--postprocess-only` are mutually exclusive. When
+`[postprocess].enabled = false` is set in the TOML config, post-processing is
+also skipped even without `--no-postprocess`.
+
 ## Adding a new entry point
 
 Most "what if I run a new variant?" questions become:
 
-1. Write a new top-level script (recommended: `scripts/your_run.py`)
-   that imports `dfxm_geo.direct_space.forward_model.Find_Hg` and
-   `forward`, builds an `Hg` for the configuration you care about, and
-   iterates `forward()` over your scan.
-2. Drop output paths into `<DFXM_DATA_DIR>/...` so other users get
-   sensible defaults — see `init_forward.py` for the pattern.
+1. Write a new TOML config under `configs/variants/` and run
+   `dfxm-forward --config configs/variants/your_variant.toml --output output/`.
+2. For a fully scripted workflow, write a `scripts/your_run.py` that imports
+   `dfxm_geo.pipeline.run_simulation` (or `run_postprocess`) directly.
 3. If your run needs different physics (e.g., screw dislocations,
    different Bragg reflection), parameterize `Find_Hg` with the relevant
    arguments rather than editing module state.
@@ -151,6 +199,30 @@ Add a new function under `dfxm_geo/analysis/`. The pattern is: take a
 NumPy array (image or stack), return another NumPy array (or a dict of
 named summary statistics). Avoid file I/O — that belongs in
 `dfxm_geo/io/`.
+
+See `analysis/mosaicity.py` for the Phase 9.2 example: `compute_chi_shift`
+takes a stack and scalar grid parameters; `compute_com_maps` returns two
+`(H, W)` maps.
+
+## Adding a new viz function
+
+Add a new function under `dfxm_geo/viz/`. The pattern is:
+
+```python
+def plot_<name>(data: np.ndarray, ..., out_path: Path, **kwargs) -> None:
+    import matplotlib
+    matplotlib.use("Agg")  # no display required
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(...)
+    # ... render
+    fig.savefig(out_path)
+    plt.close(fig)
+```
+
+Viz functions should accept plain NumPy arrays and write to disk via a
+`Path`; they must not call `plt.show()` or hold figure state. Color limits
+and other tuning knobs should be surfaced as keyword arguments with
+documented defaults.
 
 ## Adding a new I/O format
 
