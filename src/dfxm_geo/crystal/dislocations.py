@@ -34,7 +34,18 @@ def multi_dislocs_parallel(chunk, rd, Fdd_shape, dis, ny: float = POISSON_RATIO)
     Fdd_chunk = np.zeros(Fdd_shape)
     for i in tqdm(chunk, desc=f"Running: {chunk}"):
         rd_new = np.copy(rd[:2])
-        rd_new[1] -= i * dis
+        # Bipolar wall pattern matching the sequential branch in Fd_find:
+        #   odd i  (1, 3, 5, ...)  → walls at +1*dis, +2*dis, +3*dis, ...
+        #   even i (2, 4, 6, ...)  → walls at -1*dis, -2*dis, -3*dis, ...
+        # Prior to 2026-05-12 this loop did `rd_new[1] -= i * dis`, producing a
+        # one-sided wall that disagreed with the sequential branch by ~22% in
+        # Fdd Frobenius norm. Production sims with ndis>100 hit this path, so
+        # any reference results predating the fix were generated with a
+        # one-sided wall configuration.
+        if i % 2 == 1:
+            rd_new[1] += ((i + 1) // 2) * dis
+        else:
+            rd_new[1] -= (i // 2) * dis
 
         sqx = rd_new[0] * rd_new[0]
         sqy = rd_new[1] * rd_new[1]
