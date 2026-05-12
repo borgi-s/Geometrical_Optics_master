@@ -91,6 +91,20 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 exclude = ["legacy/", "notebooks/", "tests/"]
 
+# Third-party libraries without inline type info or sibling stub packages.
+# We don't try to type-check their internals; they pass through as Any.
+[[tool.mypy.overrides]]
+module = [
+    "numba",
+    "tqdm.*",
+    "fabio",
+    "fabio.*",
+    "joblib",
+    "scipy",
+    "scipy.*",
+]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"

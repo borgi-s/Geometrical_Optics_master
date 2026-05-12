@@ -82,13 +82,22 @@ def Fd_find(
     from dfxm_geo.crystal.rotations import rotatedU
 
     if misorientation:
+        if t_vec is None:
+            raise ValueError("misorientation=True requires t_vec (dislocation tangent vector)")
         m_ori = b / (dis * 1e-6)
-        U_sr = rotatedU(t_vec, m_ori / 2, Us, 1)
-        U_sl = rotatedU(t_vec, -m_ori / 2, Us, 1)
+        # Pre-cleanup version passed the int 1 here; rotatedU's `coordtype == "cryst"`
+        # check meant any non-"cryst" value falls through to sample interpretation.
+        # "sample" preserves that behavior with the correct type.
+        U_sr = rotatedU(t_vec, m_ori / 2, Us, "sample")
+        U_sl = rotatedU(t_vec, -m_ori / 2, Us, "sample")
 
         rs = Theta @ rl
         left_half1 = (rs[0] < 0) & (rs[1] > 0)
         right_half1 = (rs[0] >= 0) & (rs[1] > 0)
+        # FIXME: the `&` here is bitwise AND between two matmul results, almost
+        # certainly NOT what was intended. This branch is unreachable via every
+        # current caller (misorientation defaults to False). Left as-is to avoid
+        # changing untested behavior; revisit if anyone enables misorientation.
         rc = U_sl.T @ rs[:, left_half1] & U_sr.T @ rs[:, right_half1]
         rd = Ud.T @ rc
 

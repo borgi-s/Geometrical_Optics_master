@@ -30,24 +30,24 @@ check_folder("", "pkl_files")
 
 
 def reciprocal_res_func(
-    Nrays,
-    npoints1,
-    npoints2,
-    npoints3,
-    qi1_range,
-    qi2_range,
-    qi3_range,
-    plot_figs,
-    save_resqi,
-    zeta_v_fwhm,
-    zeta_h_fwhm,
-    NA_rms,
-    eps_rms,
-    theta,
-    phys_aper,
-    date,
-    mem_save=True,
-):
+    Nrays: int,
+    npoints1: int,
+    npoints2: int,
+    npoints3: int,
+    qi1_range: float,
+    qi2_range: float,
+    qi3_range: float,
+    plot_figs: bool,
+    save_resqi: bool,
+    zeta_v_fwhm: float,
+    zeta_h_fwhm: float,
+    NA_rms: float,
+    eps_rms: float,
+    theta: float,
+    phys_aper: float,
+    date: str,
+    mem_save: bool = True,
+) -> None:
     print("Defining properties of rays")
     # Define the properties of one ray
 

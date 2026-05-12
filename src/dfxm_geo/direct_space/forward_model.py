@@ -77,7 +77,7 @@ indices = np.vstack((ZI, YI)).T
 xl_range, xl_steps = -xl_start, NN1
 yl_range, yl_steps = -yl_start, NN2
 zl_range, zl_steps = -zl_start, NN3
-rl = np.vstack(
+rl = np.vstack(  # type: ignore[call-overload]
     np.mgrid[
         -xl_range : xl_range : complex(xl_steps),
         -yl_range : yl_range : complex(yl_steps),

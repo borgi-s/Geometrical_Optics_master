@@ -4,7 +4,11 @@ import numpy as np
 from scipy.interpolate import griddata
 
 
-def inv_polefigure_colors(o_grid, test_grid, float_bit=np.float16):
+def inv_polefigure_colors(
+    o_grid: tuple[np.ndarray, np.ndarray],
+    test_grid: tuple[np.ndarray, np.ndarray],
+    float_bit: type = np.float16,
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Maps the RGB values for a color gradient onto a grid of points.
     ------------------------------------------------------------------------------------------------------------------
@@ -18,7 +22,7 @@ def inv_polefigure_colors(o_grid, test_grid, float_bit=np.float16):
         xydata (numpy.ndarray): Array containing the coordinate data for each point in the original grid.
     """
     # Define the RGB values for the color gradient
-    key_xy_RGBs = np.array(
+    key_xy_RGBs: np.ndarray = np.array(
         [
             [1, 1, 1, 1],  # White
             [0, 1, 1, 1],  # Cyan
@@ -36,7 +40,7 @@ def inv_polefigure_colors(o_grid, test_grid, float_bit=np.float16):
     test_chi, test_diffry = test_grid[0], test_grid[1]
 
     # Define the coordinates for the RGB values
-    key_xy_points = np.array(
+    key_xy_points: np.ndarray = np.array(
         [
             [0, 0],  # White center
             [0, np.min(test_diffry)],  # Cyan min y-axis center x-axis
@@ -50,7 +54,7 @@ def inv_polefigure_colors(o_grid, test_grid, float_bit=np.float16):
     )
 
     # Create a 2D array of all coordinate combinations
-    xydata = np.array([(x, y) for x in o_chi for y in o_diffry], dtype=float_bit)
+    xydata: np.ndarray = np.array([(x, y) for x in o_chi for y in o_diffry], dtype=float_bit)
 
     # Map the RGB values onto the 2D array of coordinates using griddata
     reds = griddata(key_xy_points, key_xy_RGBs.T[0], xydata)

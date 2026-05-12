@@ -3,7 +3,11 @@
 import numpy as np
 
 
-def fastgrainplot(imagestack, vlist, ulist):
+def fastgrainplot(
+    imagestack: np.ndarray,
+    vlist: np.ndarray,
+    ulist: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Direct translation from original MATLAB code to python calculating the moments of a pixel in angular space.
     ------------------------------------------------------------------------------------------------------------
@@ -77,7 +81,13 @@ def fastgrainplot(imagestack, vlist, ulist):
     return unorm, vnorm, ufwhm, vfwhm
 
 
-def calc_moments(image, u_range, v_range, u_steps, v_steps):
+def calc_moments(
+    image: np.ndarray,
+    u_range: float,
+    v_range: float,
+    u_steps: int,
+    v_steps: int,
+) -> dict[str, float]:
     """
     Calculate raw, central, and standardized moments of a given image.
     The image should be a single pixel's orientation spread, in e.g. chi and phi.
