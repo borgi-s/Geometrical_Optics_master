@@ -7,10 +7,26 @@ from numba import jit
 from tqdm import tqdm
 
 
-def rotatedU(axis, alpha, U, coordtype):
-    # rotates U according to rotation vector defined in either sample or cryst coords as specified by coordtype
-    # angle in degrees
+def rotatedU(
+    axis: np.ndarray,
+    alpha: float,
+    U: np.ndarray,
+    coordtype: str,
+) -> np.ndarray:
+    """Rotate U around `axis` by `alpha` radians.
 
+    `axis` is interpreted in sample coords unless `coordtype == "cryst"`,
+    in which case it is first transformed into sample coords via U.
+
+    Args:
+        axis: 3-vector rotation axis.
+        alpha: rotation angle in radians (despite legacy comments).
+        U: 3x3 rotation matrix to rotate.
+        coordtype: "cryst" or "sample".
+
+    Returns:
+        Rotated 3x3 matrix.
+    """
     if coordtype == "cryst":
         axis = np.dot(U, axis)  # convert to sample
     # alpha = angle * np.pi / 180 # rotating angle
@@ -40,7 +56,8 @@ def rotatedU(axis, alpha, U, coordtype):
     return np.dot(R, U)
 
 
-def check_folder(path, folder_name):
+def check_folder(path: str, folder_name: str) -> None:
+    """Create `path/folder_name` if it does not exist. Print a status message."""
     folder_path = os.path.join(path, folder_name)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -100,8 +117,17 @@ def multi_dislocs_parallel(chunk, rd, Fdd_shape, dis, ny=0.334):
 
 
 def Fd_find(
-    rl, Ud, Us, Theta, dis=1, ndis=1, b=2.862e-4, ny=0.334, misorientation=False, t_vec=None
-):
+    rl: np.ndarray,
+    Ud: np.ndarray,
+    Us: np.ndarray,
+    Theta: np.ndarray,
+    dis: float = 1,
+    ndis: int = 1,
+    b: float = 2.862e-4,
+    ny: float = 0.334,
+    misorientation: bool = False,
+    t_vec: np.ndarray | None = None,
+) -> np.ndarray:
     """
     Calculates the displacement field due to multiple edge dislocations in a
     crystal lattice, given the lab coordinates and accompanying rotation matrices.
@@ -239,7 +265,21 @@ def Fd_find(
     return Ud @ Fdd @ Ud.T  # Return the rotated Fdd -> Fg
 
 
-def load_or_generate_Hg(rl, Ud, Us, Theta, dis, ndis, file_path=None):
+def load_or_generate_Hg(
+    rl: np.ndarray,
+    Ud: np.ndarray,
+    Us: np.ndarray,
+    Theta: np.ndarray,
+    dis: float,
+    ndis: int,
+    file_path: str | None = None,
+) -> np.ndarray:
+    """Return the displacement gradient field Hg, loading from disk if cached.
+
+    If `file_path` is given and the file exists, load Fg from it. Otherwise
+    compute Fg via `Fd_find` (or use identity if ndis == 0) and optionally
+    save it to `file_path`. Hg is derived from Fg by inversion and transpose.
+    """
     if file_path is not None:
         fname = file_path.rsplit("/", 1)[-1]
         try:

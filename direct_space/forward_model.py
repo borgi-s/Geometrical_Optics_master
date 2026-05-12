@@ -96,7 +96,31 @@ qi_starts = qi_steps = None
 Hg = q_hkl = None
 
 
-def Find_Hg(dis, ndis, psize, zl_rms, h=-1, k=1, l=-1):
+def Find_Hg(
+    dis: float,
+    ndis: int,
+    psize: float,
+    zl_rms: float,
+    h: int = -1,
+    k: int = 1,
+    l: int = -1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute the displacement gradient field Hg and reciprocal vector q_hkl.
+
+    Wraps `functions.load_or_generate_Hg`, caching Fg to disk at
+    `direct_space/deformation_gradient_tensors/`. Also writes a sidecar
+    `_vars.txt` describing the parameters used.
+
+    Args:
+        dis: Distance between dislocations (µm).
+        ndis: Number of dislocations.
+        psize: Detector pixel size (m).
+        zl_rms: RMS of the beam profile in zl (m).
+        h, k, l: Miller indices of the active reflection.
+
+    Returns:
+        (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
+    """
     Q_norm = np.sqrt(h * h + k * k + l * l)  # We have assumed B_0 = I
     q_hkl = np.asarray([h, k, l]) / Q_norm
 
@@ -133,7 +157,11 @@ def Find_Hg(dis, ndis, psize, zl_rms, h=-1, k=1, l=-1):
     return Hg, q_hkl
 
 
-def _load_default_kernel(pkl_path=None, vars_path=None, compute_Hg=True):
+def _load_default_kernel(
+    pkl_path: str | None = None,
+    vars_path: str | None = None,
+    compute_Hg: bool = True,
+) -> None:
     """Load the reciprocal-space resolution kernel from disk into module state.
 
     Called at import time iff the default pickle exists. Can be called
@@ -174,23 +202,28 @@ def _load_default_kernel(pkl_path=None, vars_path=None, compute_Hg=True):
         Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
 
 
-def forward(Hg, phi=0, chi=0, TwoDeltaTheta=0, qi_return=False):
-    """
-    This function calculates the forward model image for a given set of angles on
-    the goniometer holding the sample, this is based on equations from a paper.
-    It calculates the scattering vector in different spaces and uses it to generate
-    a probability distribution, which is added to the forward model image.
-    -----------------------------------------------------------------------------
-    Parameters:
-    phi, chi, TwoDeltaTheta: float.
-        The radians off the Bragg condition in each rotation stage.
+def forward(
+    Hg: np.ndarray,
+    phi: float = 0,
+    chi: float = 0,
+    TwoDeltaTheta: float = 0,
+    qi_return: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Compute the DFXM forward-model image for the given goniometer angles.
 
-    Returns
-    -----------------------------------------------------------------------------
-    numpy.ndarray, numpy.ndarray
-        The scattering vector in imaging space, shape(3,X), X being NN1 * NN2 * NN3
-        The forward modelled image, shape (NN3,NN1)
+    Reads module-level state populated by `_load_default_kernel()` (Resq_i,
+    qi*_start/step, etc.). Raises `RuntimeError` if state is not initialized.
 
+    Args:
+        Hg: Displacement gradient field, shape (X, 3, 3) where X = NN1*NN2*NN3.
+        phi: Radians off the Bragg condition (rotation around y_l axis).
+        chi: Radians off the Bragg condition (rotation around x_l axis).
+        TwoDeltaTheta: Radians off the Bragg angle (2θ shift).
+        qi_return: If True, also return the scattering vector field qi.
+
+    Returns:
+        Forward-model image of shape (NN2//Nsub, NN1//Nsub). If qi_return is
+        True, returns (image, qi_field) where qi_field has shape (3, NN1, NN2, NN3).
     """
     if Resq_i is None:
         raise RuntimeError(
