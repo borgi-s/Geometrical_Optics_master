@@ -195,3 +195,44 @@ def test_wire_beamstop_without_xraylib_raises_clear_error(monkeypatch):
             knife_edge=False,
             bs_height=25e-3,
         )
+
+
+def test_kernel_defaults_match_cdd_inc_generate_Resq_i_py():
+    """generate_kernel defaults reproduce the CDD_inc canonical recipe.
+
+    Reference: origin/CDD_inc:reciprocal_space/generate_Resq_i.py.
+    """
+    import inspect
+
+    from dfxm_geo.reciprocal_space import kernel
+
+    sig = inspect.signature(kernel.generate_kernel)
+    defaults = {p.name: p.default for p in sig.parameters.values()}
+
+    # Scalar params from CDD_inc generate_Resq_i.py
+    assert defaults["Nrays"] == int(1e8)
+    assert defaults["npoints1"] == 400
+    assert defaults["npoints2"] == 200
+    assert defaults["npoints3"] == 200
+    assert defaults["qi1_range"] == 5e-4
+    assert defaults["qi2_range"] == 0.75e-2
+    assert defaults["qi3_range"] == 0.75e-2
+    assert defaults["zeta_v_fwhm"] == 5.3e-04
+    assert defaults["zeta_h_fwhm"] == 0
+    # Beamstop / aperture switches
+    assert defaults["beamstop"] is True
+    assert defaults["aperture"] is True
+    assert defaults["knife_edge"] is False
+    assert defaults["bs_height"] == 25e-3
+    # Theta derived from 17 keV / Al 111, not the hardcoded 17.953/2 deg
+    expected_a = 4.0495e-10
+    expected_wavelength = 1.239841984e-9 / 17
+    expected_d_111 = expected_a / np.sqrt(3)
+    expected_theta = np.arcsin(expected_wavelength / (2 * expected_d_111))
+    assert defaults["theta"] == pytest.approx(expected_theta, rel=1e-12)
+    # Remaining scalar params that complete the CDD_inc canonical recipe.
+    assert defaults["NA_rms"] == pytest.approx(7.31e-4 / 2.35, rel=1e-12)
+    assert defaults["eps_rms"] == pytest.approx(1.41e-4 / 2.35, rel=1e-12)
+    assert defaults["D"] == pytest.approx(2 * np.sqrt(50e-6 * 1.6e-3), rel=1e-12)
+    assert defaults["d1"] == 0.274
+    assert defaults["dphi_range"] == 0.0
