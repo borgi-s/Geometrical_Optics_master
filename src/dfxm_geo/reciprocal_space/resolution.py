@@ -45,6 +45,7 @@ def reciprocal_res_func(
     mem_save: bool = True,
     rng: np.random.Generator | None = None,
     return_qs: bool = False,
+    dphi_range: float = 0.0,
 ) -> tuple[np.ndarray, ...] | None:
     print("Defining properties of rays")
     if rng is None:
@@ -89,6 +90,9 @@ def reciprocal_res_func(
         plt.show()
     zeta_h = rng.normal(size=Nrays) * zeta_h_fwhm / 2.35
     eps = rng.normal(size=Nrays) * eps_rms
+    dphi: np.ndarray | float = (
+        rng.uniform(-dphi_range / 2, dphi_range / 2, Nrays) if dphi_range > 0.0 else 0.0
+    )
 
     print("Properties of rays defined")
 
@@ -103,7 +107,7 @@ def reciprocal_res_func(
     if len(delta_2theta) == Nrays and len(xi) == Nrays:
         print("Found trial delta_2theta and xi")
 
-    qrock = (-zeta_v / 2) - (delta_2theta / 2)
+    qrock = (-zeta_v / 2) - (delta_2theta / 2) + dphi
     qroll = -zeta_h / (2 * np.sin(theta)) - xi / (2 * np.sin(theta))
     qpar = eps + (1 / np.tan(theta)) * (-zeta_v / 2 + delta_2theta / 2)
     print("Converted to crystal system coordinates")

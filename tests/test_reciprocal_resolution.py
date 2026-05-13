@@ -75,3 +75,31 @@ def test_no_beamstop_baseline_matches_golden(golden_dir):
     np.testing.assert_array_equal(qrock_prime, golden["qrock_prime"])
     np.testing.assert_array_equal(q2th, golden["q2th"])
     np.testing.assert_array_equal(delta_2theta, golden["delta_2theta"])
+
+
+def test_dphi_range_zero_matches_baseline():
+    """dphi_range=0 must reproduce the no-beamstop baseline exactly."""
+    rng = np.random.default_rng(20260513)
+    result = _call(rng=rng, return_qs=True, dphi_range=0.0)
+    assert result is not None
+    qrock, *_ = result
+    rng_baseline = np.random.default_rng(20260513)
+    baseline = _call(rng=rng_baseline, return_qs=True)
+    assert baseline is not None
+    qrock_baseline, *_ = baseline
+    np.testing.assert_array_equal(qrock, qrock_baseline)
+
+
+def test_dphi_range_positive_broadens_qrock():
+    """Positive dphi_range adds a uniform offset, broadening qrock std."""
+    rng1 = np.random.default_rng(7)
+    out_narrow = _call(rng=rng1, return_qs=True, dphi_range=0.0)
+    rng2 = np.random.default_rng(7)
+    out_wide = _call(rng=rng2, return_qs=True, dphi_range=1e-3)
+    assert out_narrow is not None and out_wide is not None
+    qrock_narrow = out_narrow[0]
+    qrock_wide = out_wide[0]
+    # Adding U(-5e-4, 5e-4) adds variance (1e-3)^2/12 ~= 8.3e-8 to qrock.
+    # Narrow std is dominated by zeta_v and delta_2theta (both ~few e-5 rad)
+    # so the relative widening should be substantial.
+    assert qrock_wide.std() > qrock_narrow.std() * 1.5
