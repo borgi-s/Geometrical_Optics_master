@@ -1,4 +1,9 @@
-"""Colormap helpers for DFXM orientation visualizations."""
+"""Colormap helpers for DFXM orientation visualizations.
+
+Provides :func:`inv_polefigure_colors`, an inverse-pole-figure colour gradient
+keyed to seven anchor points (white/cyan/green/orange/red/blue/magenta)
+interpolated by :func:`scipy.interpolate.griddata`.
+"""
 
 import numpy as np
 from scipy.interpolate import griddata
@@ -9,17 +14,28 @@ def inv_polefigure_colors(
     test_grid: tuple[np.ndarray, np.ndarray],
     float_bit: type = np.float16,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Maps the RGB values for a color gradient onto a grid of points.
-    ------------------------------------------------------------------------------------------------------------------
-    Parameters:
-        o_grid (numpy array, dtype: object): Np.array containing the angular data for the original grid (2D).
-        test_grid (numpy array, dtype: object): Np.array containing the angular data for the test grid (2D).
-        float_bit (numpy dtype, optional): Floating point precision for RGB values.
-    ------------------------------------------------------------------------------------------------------------------
+    """Map an inverse-pole-figure RGB+alpha gradient onto a grid of points.
+
+    The colour gradient is anchored at seven points in ``(chi, diffry)`` space
+    derived from the ``test_grid`` extents; RGBA values at the ``o_grid``
+    sample points are interpolated from those anchors and clipped to ``[0, 1]``.
+
+    Args:
+        o_grid: ``(chi, diffry)`` tuple of 1D arrays defining the points to
+            be coloured.
+        test_grid: ``(chi, diffry)`` tuple of 1D arrays defining the extents
+            used to place the seven colour anchors (white centre, cyan/red on
+            the ``diffry`` extrema, etc.).
+        float_bit: NumPy float dtype for the RGB/coordinate arrays. Default
+            ``np.float16`` (small memory, ample precision for 8-bit display).
+
     Returns:
-        xy_colors_griddata (numpy.ndarray): Array containing the RGB and alpha values for each point in the original grid.
-        xydata (numpy.ndarray): Array containing the coordinate data for each point in the original grid.
+        ``(xy_colors_griddata, xydata)``:
+
+        - ``xy_colors_griddata``: shape ``(N, 4)``, the RGBA value at each
+          ``o_grid`` sample point, clipped to ``[0, 1]``.
+        - ``xydata``: shape ``(N, 2)``, the matching coordinate pairs in
+          ``(chi, diffry)`` space.
     """
     # Define the RGB values for the color gradient
     key_xy_RGBs: np.ndarray = np.array(

@@ -1,4 +1,15 @@
-"""Moments and FWHM analysis of DFXM image stacks."""
+"""First- and second-moment analysis of DFXM rocking-curve image stacks.
+
+Two entry points:
+
+- :func:`fastgrainplot`: per-pixel COM (1st moment) and FWHM (from 2nd moment)
+  over an image stack acquired on a (u, v) angular grid. Despite the legacy
+  name, this function does *not* plot — it returns four ``(H, W)`` arrays.
+- :func:`calc_moments`: scalar moment dictionary for a single image, intended
+  for single-pixel orientation spreads.
+
+A direct port of the original MATLAB analysis used in ``init_forward.py``.
+"""
 
 import numpy as np
 
@@ -8,19 +19,32 @@ def fastgrainplot(
     vlist: np.ndarray,
     ulist: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Direct translation from original MATLAB code to python calculating the moments of a pixel in angular space.
-    ------------------------------------------------------------------------------------------------------------
-    Parameters:
-        imagestack (ndarray): stack of images as a 3D numpy array.
-        vlist (ndarray): range of first angular dimension as 2D numpy array.
-        ulist (ndarray): range of second angular dimension as 2D numpy array.
-    ------------------------------------------------------------------------------------------------------------
+    """Per-pixel center-of-mass and FWHM maps over a (u, v) rocking grid.
+
+    Iterates a flat ``imagestack`` of length ``len(ulist) * len(vlist)``,
+    treating ``vlist`` as the fast (inner) motor and ``ulist`` as the slow
+    (outer) motor — index ``j`` maps to ``v = vlist[j % len(vlist)]`` and
+    ``u = ulist[j // len(vlist)]``. The MATLAB original computed skewness
+    and kurtosis as well; those terms were dead and were removed during the
+    Phase 3.2 cleanup.
+
+    Note:
+        The legacy name is a misnomer — this returns arrays, not plots.
+        Renamed only at the import-shim level for now to avoid breaking
+        downstream callers.
+
+    Args:
+        imagestack: Shape ``(len(ulist) * len(vlist), H, W)`` flat stack of
+            detector images, ordered ``v``-major (fast motor inner).
+        vlist: Fast-motor angles (1D), length ``v_steps``.
+        ulist: Slow-motor angles (1D), length ``u_steps``.
+
     Returns:
-        unorm (ndarray): Center of mass map in u made from stack
-        vnorm (ndarray): Center of mass map in v made from stack
-        ufwhm (ndarray): FWHM map in u made from stack
-        vfwhm (ndarray): FWHM map in v made from stack
+        ``(unorm, vnorm, ufwhm, vfwhm)``, each of shape ``(H, W)``:
+
+        - ``unorm``, ``vnorm``: per-pixel center of mass in ``u`` / ``v``.
+        - ``ufwhm``, ``vfwhm``: per-pixel FWHM (``2.355 * sqrt(variance)``);
+          pixels with non-positive variance are returned as ``NaN``.
     """
     imglist = imagestack
 
@@ -89,19 +113,27 @@ def calc_moments(
     u_steps: int,
     v_steps: int,
 ) -> dict[str, float]:
-    """
-    Calculate raw, central, and standardized moments of a given image.
-    The image should be a single pixel's orientation spread, in e.g. chi and phi.
-    --------------------------------------------------------------------------------------------------------
-    Parameters:
-        image (ndarray): Input image as a 2D NumPy array.
-        u_range (float): Range of u values to use for moment calculation. Default is phi_range.
-        v_range (float): Range of v values to use for moment calculation. Default is chi_range.
-        u_steps (int): Number of steps to use for u values. Default is phi_steps.
-        v_steps (int): Number of steps to use for v values. Default is chi_steps.
-    --------------------------------------------------------------------------------------------------------
+    """Raw, central, and standardized moments of a single 2D image.
+
+    Intended for single-pixel orientation spreads — pass a single pixel's
+    rocking-curve image of shape ``(u_steps, v_steps)`` and the corresponding
+    grid extents. The ``(u, v)`` grid is reconstructed internally via
+    ``np.mgrid``.
+
+    Args:
+        image: Shape ``(u_steps, v_steps)``. Typically a single pixel's
+            rocking-curve sampled on a phi/chi grid.
+        u_range: Half-range of the ``u`` axis (radians by convention; same
+            unit as ``init_forward.py``'s ``phi_range``).
+        v_range: Half-range of the ``v`` axis (radians).
+        u_steps: Number of samples along ``u``.
+        v_steps: Number of samples along ``v``.
+
     Returns:
-        moments (dict): Dictionary of calculated moments.
+        A dict with keys ``mean_u``, ``mean_v`` (1st moments / COM);
+        ``m00`` … ``m20`` (raw spatial moments); ``mu02`` … ``mu30``
+        (central moments); ``nu03`` and ``nu30`` (standardized 3rd-order
+        moments / skewness proxies).
     """
     u, v = np.mgrid[-u_range : u_range : complex(u_steps), -v_range : v_range : complex(v_steps)]
 
