@@ -89,28 +89,21 @@ def Fd_find(
     Returns:
         ndarray of shape (X, 3, 3): Fg in grain space.
     """
-    # Lazy import to avoid a circular-import risk during package init.
-    from dfxm_geo.crystal.rotations import rotatedU
-
     if misorientation:
-        if t_vec is None:
-            raise ValueError("misorientation=True requires t_vec (dislocation tangent vector)")
-        m_ori = b / (dis * 1e-6)
-        # Pre-cleanup version passed the int 1 here; rotatedU's `coordtype == "cryst"`
-        # check meant any non-"cryst" value falls through to sample interpretation.
-        # "sample" preserves that behavior with the correct type.
-        U_sr = rotatedU(t_vec, m_ori / 2, Us, "sample")
-        U_sl = rotatedU(t_vec, -m_ori / 2, Us, "sample")
-
-        rs = Theta @ rl
-        left_half1 = (rs[0] < 0) & (rs[1] > 0)
-        right_half1 = (rs[0] >= 0) & (rs[1] > 0)
-        # FIXME: the `&` here is bitwise AND between two matmul results, almost
-        # certainly NOT what was intended. This branch is unreachable via every
-        # current caller (misorientation defaults to False). Left as-is to avoid
-        # changing untested behavior; revisit if anyone enables misorientation.
-        rc = U_sl.T @ rs[:, left_half1] & U_sr.T @ rs[:, right_half1]
-        rd = Ud.T @ rc
+        # The misorientation=True path has never worked. Two independent bugs
+        # exist in pre-cleanup `main` and the CDD_Khaled clone:
+        #   1. The piecewise rotation `rc = U_sl.T @ rs[:, left] & U_sr.T @ rs[:, right]`
+        #      uses bitwise `&` on float matmul results, which raises TypeError
+        #      before reaching anything downstream.
+        #   2. Even if (1) is fixed, the unconditional fall-through below overwrites
+        #      `rs`, `rc`, and `rd`, so any misorientation-derived state is discarded.
+        # No reference behaviour exists. If this path is needed, open an issue with
+        # the intended physics formulation (and a clear definition of what the lower
+        # half-space rs[1] <= 0 should do — the current masks don't cover it).
+        raise NotImplementedError(
+            "Fd_find(misorientation=True) is not implemented — the pre-cleanup "
+            "branch was dead-broken and has no reference behaviour to preserve."
+        )
 
     rs = Theta @ rl
     rc = Us.T @ rs

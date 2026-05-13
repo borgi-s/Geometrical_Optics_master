@@ -186,3 +186,32 @@ class TestFdFindBipolarWall:
             f"{diff_norm / signal_norm:.4f}. Did multi_dislocs_parallel "
             f"regress to the monotone wall pattern?"
         )
+
+
+class TestFdFindMisorientation:
+    """The misorientation=True path was dead-broken on pre-cleanup main and
+    in CDD_Khaled (bitwise `&` on float matmuls + unconditional fall-through
+    overwrite). It now raises NotImplementedError so a future caller gets a
+    clear signal instead of a confusing TypeError mid-computation."""
+
+    def test_raises_not_implemented(self):
+        rl = _make_grid(n=4)
+        t_vec = np.array([1.0, 0.0, 0.0])
+        with pytest.raises(NotImplementedError, match="misorientation"):
+            Fd_find(
+                rl,
+                np.eye(3),
+                np.eye(3),
+                np.eye(3),
+                dis=1,
+                ndis=1,
+                misorientation=True,
+                t_vec=t_vec,
+            )
+
+    def test_misorientation_false_still_works(self):
+        """Default path (misorientation=False) is unaffected."""
+        rl = _make_grid(n=4)
+        out = Fd_find(rl, np.eye(3), np.eye(3), np.eye(3), dis=1, ndis=1)
+        assert out.shape == (rl.shape[1], 3, 3)
+        assert np.all(np.isfinite(out))
