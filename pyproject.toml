@@ -44,6 +44,9 @@ dev = [
     "ipykernel",
     "jupyterlab",
 ]
+beamstop-wire = [
+    "xraylib>=4.1",
+]
 
 [project.urls]
 Homepage = "https://github.com/borgi-s/Geometrical_Optics_master"
@@ -106,6 +109,7 @@ module = [
     "joblib",
     "scipy",
     "scipy.*",
+    "xraylib",
 ]
 ignore_missing_imports = true
 
