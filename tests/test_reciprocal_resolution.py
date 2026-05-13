@@ -236,3 +236,34 @@ def test_kernel_defaults_match_cdd_inc_generate_Resq_i_py():
     assert defaults["D"] == pytest.approx(2 * np.sqrt(50e-6 * 1.6e-3), rel=1e-12)
     assert defaults["d1"] == 0.274
     assert defaults["dphi_range"] == 0.0
+
+
+def test_truncnorm_chunked_matches_unchunked():
+    """Chunking the truncnorm sampling preserves bit-equality.
+
+    The helper feeds the same Generator into multiple smaller .rvs(size=...) calls.
+    Because scipy.stats.truncnorm.rvs internally consumes rng via a single
+    rng.uniform(size=...) call, chunked vs single-shot must produce identical
+    output for the same seeded rng.
+    """
+    from dfxm_geo.reciprocal_space.resolution import _chunked_truncnorm_rvs
+
+    rng1 = np.random.default_rng(42)
+    out_chunked = _chunked_truncnorm_rvs(
+        a=-1.0,
+        b=1.0,
+        loc=0.0,
+        scale=1.0,
+        size=10_000,
+        random_state=rng1,
+        chunk_size=1_000,
+    )
+
+    rng2 = np.random.default_rng(42)
+    import scipy.stats
+
+    out_single = scipy.stats.truncnorm.rvs(
+        -1.0, 1.0, loc=0.0, scale=1.0, size=10_000, random_state=rng2
+    )
+
+    np.testing.assert_array_equal(out_chunked, out_single)

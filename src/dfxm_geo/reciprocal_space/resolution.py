@@ -101,6 +101,53 @@ def _apply_aperture(alpha_x: np.ndarray, alpha_y: np.ndarray, square_half_mm: fl
     return ~absorbed
 
 
+def _chunked_truncnorm_rvs(
+    a: float,
+    b: float,
+    loc: float,
+    scale: float,
+    size: int,
+    random_state: np.random.Generator,
+    chunk_size: int = 1_000_000,
+) -> np.ndarray:
+    """Memory-safe wrapper around ``scipy.stats.truncnorm.rvs``.
+
+    scipy's redesigned ``truncnorm.rvs`` allocates intermediate arrays of
+    shape ``(1, size)`` inside ``logsumexp``. At ``size=1e8`` that's ~760
+    MiB per intermediate × several intermediates → OOM on machines with
+    moderate RAM.
+
+    This helper splits the request into ``size <= chunk_size`` calls; output
+    is bit-identical to a single-shot call with the same seeded Generator
+    because ``random_state.uniform(size=...)`` is consumed strictly
+    sequentially (see numpy Generator docs).
+
+    Args:
+        a, b, loc, scale: standard ``truncnorm`` parameters.
+        size: total number of samples.
+        random_state: numpy Generator (seedable).
+        chunk_size: max samples per inner ``truncnorm.rvs`` call.
+
+    Returns:
+        1-D ``np.ndarray`` of length ``size``.
+    """
+    if size <= chunk_size:
+        return np.asarray(
+            scipy.stats.truncnorm.rvs(
+                a, b, loc=loc, scale=scale, size=size, random_state=random_state
+            )
+        )
+    out = np.empty(size, dtype=float)
+    start = 0
+    while start < size:
+        n = min(chunk_size, size - start)
+        out[start : start + n] = scipy.stats.truncnorm.rvs(
+            a, b, loc=loc, scale=scale, size=n, random_state=random_state
+        )
+        start += n
+    return out
+
+
 def reciprocal_res_func(
     Nrays: int,
     npoints1: int,
@@ -137,9 +184,9 @@ def reciprocal_res_func(
     lower = -1.4e-4
     upper = 1.4e-4
     mu = 0
-    zeta_v = scipy.stats.truncnorm.rvs(
-        (lower - mu) / zeta_v_sigma,
-        (upper - mu) / zeta_v_sigma,
+    zeta_v = _chunked_truncnorm_rvs(
+        a=(lower - mu) / zeta_v_sigma,
+        b=(upper - mu) / zeta_v_sigma,
         loc=mu,
         scale=zeta_v_sigma,
         size=Nrays,
