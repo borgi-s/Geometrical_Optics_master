@@ -238,3 +238,35 @@ def test_save_edfs_round_trips_pixel_data(tmp_path):
     written = next(f for f in os.listdir(tmp_path) if f.endswith(".edf"))
     loaded = fabio.open(str(tmp_path / written)).data
     np.testing.assert_array_equal(loaded.astype(np.float64), expected_img)
+
+
+def test_save_image_does_not_misunpack_forward(tmp_path, monkeypatch):
+    """save_image unpacked forward() as a 2-tuple; this regression pins the single-array contract.
+
+    Mocks forward() to return a single np.ndarray (the default) and confirms
+    save_image writes the file without raising ValueError.
+    """
+    import dfxm_geo.io.images as images_mod
+
+    expected_array = np.arange(12, dtype=float).reshape(3, 4)
+
+    def fake_forward(Hg, phi=0.0, chi=0.0, *args, **kwargs):
+        return expected_array
+
+    monkeypatch.setattr(images_mod, "forward", fake_forward)
+    args = (
+        np.zeros((1, 3, 3)),  # Hg (unused by fake_forward)
+        0.0,  # phi
+        0.0,  # chi
+        0,  # j
+        0,  # i
+        str(tmp_path),  # fpath
+        "/test_",  # fn_prefix
+        ".npy",  # ftype
+    )
+    images_mod.save_image(args)
+
+    out_file = tmp_path / "test_0000_0000.npy"
+    assert out_file.is_file()
+    loaded = np.load(out_file)
+    np.testing.assert_array_equal(loaded, expected_array)
