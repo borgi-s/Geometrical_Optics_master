@@ -81,6 +81,18 @@ def test_load_images_raises_for_empty_dir(tmp_path):
         load_images(str(tmp_path), 2, 2)
 
 
+def test_load_images_parallel_raises_for_missing_dir(tmp_path):
+    """Parallel loader carries the same directory-missing guard as the serial one."""
+    with pytest.raises(ValueError, match="does not exist"):
+        load_images_parallel(str(tmp_path / "no_such_dir"), 2, 2)
+
+
+def test_load_images_parallel_raises_for_empty_dir(tmp_path):
+    """Parallel loader carries the same empty-dir guard as the serial one."""
+    with pytest.raises(ValueError, match="does not contain"):
+        load_images_parallel(str(tmp_path), 2, 2)
+
+
 # ---------------------------------------------------------------------------
 # load_or_generate_Hg
 # ---------------------------------------------------------------------------
@@ -136,6 +148,25 @@ def test_load_or_generate_Hg_caches_to_disk(rotation_matrices, tmp_path):
 
     Hg_b = load_or_generate_Hg(rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=str(cache))
     np.testing.assert_array_equal(Hg_a, Hg_b)
+
+
+def test_load_or_generate_Hg_ndis_zero_with_missing_cache_returns_zeros(
+    rotation_matrices, tmp_path
+):
+    """When file_path points to a non-existent file and ndis=0, the function
+    falls through the FileNotFoundError branch and returns the identity-minus-I
+    short-circuit (Hg = 0) without invoking Fd_find."""
+    Ud, Us, Theta = rotation_matrices
+    rl = np.zeros((3, 50))
+    rl[0] = np.linspace(-1, 1, 50) * 1e-6
+    missing = tmp_path / "does_not_exist_yet.npy"
+    assert not missing.exists()
+
+    Hg = load_or_generate_Hg(rl, Ud, Us, Theta, dis=1.0, ndis=0, file_path=str(missing))
+
+    assert Hg.shape == (50, 3, 3)
+    np.testing.assert_allclose(Hg, 0, atol=1e-12)
+    assert missing.exists(), "cache file should be written after generation"
 
 
 def test_load_or_generate_Hg_in_memory_path_matches_cached(rotation_matrices, tmp_path):
