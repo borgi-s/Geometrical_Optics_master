@@ -47,6 +47,9 @@ dev = [
 beamstop-wire = [
     "xraylib>=4.1",
 ]
+memory-aware = [
+    "psutil>=5",
+]
 
 [project.urls]
 Homepage = "https://github.com/borgi-s/Geometrical_Optics_master"
@@ -110,6 +113,7 @@ module = [
     "scipy",
     "scipy.*",
     "xraylib",
+    "psutil",
 ]
 ignore_missing_imports = true
 

@@ -1,6 +1,8 @@
 """Unit tests for dfxm_geo.io.images (round-trip save/load) and io.strain_cache."""
 
 import os
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from unittest.mock import patch
 
 import fabio
 import numpy as np
@@ -238,6 +240,91 @@ def test_save_edfs_round_trips_pixel_data(tmp_path):
     written = next(f for f in os.listdir(tmp_path) if f.endswith(".edf"))
     loaded = fabio.open(str(tmp_path / written)).data
     np.testing.assert_array_equal(loaded.astype(np.float64), expected_img)
+
+
+def test_save_images_parallel_uses_explicit_max_workers(tmp_path, monkeypatch):
+    """The max_workers kwarg overrides env var and auto-default."""
+    import dfxm_geo.io.images as images_mod
+
+    # Mock forward() so we don't need the real kernel.
+    monkeypatch.setattr(images_mod, "forward", lambda Hg, phi=0, chi=0: np.zeros((4, 4)))
+
+    captured = {}
+
+    class _SpyExecutor(_ThreadPoolExecutor):
+        def __init__(self, max_workers=None, **kwargs):
+            captured["max_workers"] = max_workers
+            super().__init__(max_workers=max_workers, **kwargs)
+
+    monkeypatch.setenv("DFXM_MAX_WORKERS", "99")  # env var should be ignored
+    with patch.object(images_mod, "ThreadPoolExecutor", _SpyExecutor):
+        images_mod.save_images_parallel(
+            Hg=np.zeros((1, 3, 3)),
+            phi_range=0.01,
+            phi_steps=2,
+            chi_range=0.01,
+            chi_steps=2,
+            fpath=str(tmp_path),
+            fn_prefix="/x_",
+            ftype=".npy",
+            max_workers=3,
+        )
+    assert captured["max_workers"] == 3
+
+
+def test_save_images_parallel_falls_back_to_env_var(tmp_path, monkeypatch):
+    """When max_workers is None, DFXM_MAX_WORKERS env var is honored."""
+    import dfxm_geo.io.images as images_mod
+
+    monkeypatch.setattr(images_mod, "forward", lambda Hg, phi=0, chi=0: np.zeros((4, 4)))
+
+    captured = {}
+
+    class _SpyExecutor(_ThreadPoolExecutor):
+        def __init__(self, max_workers=None, **kwargs):
+            captured["max_workers"] = max_workers
+            super().__init__(max_workers=max_workers, **kwargs)
+
+    monkeypatch.setenv("DFXM_MAX_WORKERS", "5")
+    with patch.object(images_mod, "ThreadPoolExecutor", _SpyExecutor):
+        images_mod.save_images_parallel(
+            Hg=np.zeros((1, 3, 3)),
+            phi_range=0.01,
+            phi_steps=2,
+            chi_range=0.01,
+            chi_steps=2,
+            fpath=str(tmp_path),
+            fn_prefix="/x_",
+            ftype=".npy",
+        )
+    assert captured["max_workers"] == 5
+
+
+def test_auto_max_workers_returns_positive_int(monkeypatch):
+    """_auto_max_workers must always return a positive int regardless of psutil presence."""
+    from dfxm_geo.io.images import _auto_max_workers
+
+    monkeypatch.delenv("DFXM_MAX_WORKERS", raising=False)
+    val = _auto_max_workers()
+    assert isinstance(val, int)
+    assert val >= 1
+
+
+def test_auto_max_workers_env_var_overrides(monkeypatch):
+    """DFXM_MAX_WORKERS env var takes precedence in _auto_max_workers."""
+    from dfxm_geo.io.images import _auto_max_workers
+
+    monkeypatch.setenv("DFXM_MAX_WORKERS", "7")
+    assert _auto_max_workers() == 7
+
+    # Invalid values fall back to the auto-computed default.
+    monkeypatch.setenv("DFXM_MAX_WORKERS", "not-an-int")
+    val = _auto_max_workers()
+    assert isinstance(val, int) and val >= 1
+
+    monkeypatch.setenv("DFXM_MAX_WORKERS", "0")
+    val = _auto_max_workers()
+    assert isinstance(val, int) and val >= 1  # zero/negative falls back
 
 
 def test_save_image_does_not_misunpack_forward(tmp_path, monkeypatch):

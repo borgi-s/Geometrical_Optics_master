@@ -26,6 +26,7 @@ ftype = ".npy"
 dislocs_dirname = "images10"
 perfect_dirname = "images10_perf_crystal"
 include_perfect_crystal = true
+# max_workers = 4  # uncomment to cap parallel forward() calls; None = auto
 
 [postprocess]
 enabled = true

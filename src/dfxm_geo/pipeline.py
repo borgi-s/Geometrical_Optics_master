@@ -50,6 +50,7 @@ class IOConfig:
     dislocs_dirname: str = "images10"
     perfect_dirname: str = "images10_perf_crystal"
     include_perfect_crystal: bool = True
+    max_workers: int | None = None
 
 
 @dataclass
@@ -141,6 +142,7 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         str(dislocs_path),
         config.io.fn_prefix,
         config.io.ftype,
+        max_workers=config.io.max_workers,
     )
 
     perfect_path: Path | None = None
@@ -155,6 +157,7 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
             str(perfect_path),
             config.io.fn_prefix,
             config.io.ftype,
+            max_workers=config.io.max_workers,
         )
 
     return {

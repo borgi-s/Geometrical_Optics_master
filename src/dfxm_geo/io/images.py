@@ -11,6 +11,42 @@ from dfxm_geo.direct_space.forward_model import forward
 from dfxm_geo.io import check_folder
 
 
+def _auto_max_workers() -> int:
+    """Cap thread-pool workers by both CPU count and free memory.
+
+    Each ``forward()`` call needs ~1 GiB of intermediates (``qs.squeeze().T``
+    and ``qi`` are each ~270 MiB float64 at the default 510-pixel detector,
+    plus the ``prob``/``pro``/``index`` arrays). We aim for ~1 GiB headroom
+    per worker.
+
+    Resolution order (highest precedence wins):
+      1. ``DFXM_MAX_WORKERS`` env var, if set to a positive int.
+      2. ``min(cpu_count, max(1, available_memory_gb - 2))`` if psutil is
+         installed (subtracting ~2 GiB reserved for persistent forward_model
+         state + OS).
+      3. ``min(cpu_count, 4)`` fixed conservative cap when psutil is missing.
+    """
+    env = os.environ.get("DFXM_MAX_WORKERS")
+    if env is not None:
+        try:
+            n = int(env)
+            if n >= 1:
+                return n
+        except ValueError:
+            pass  # fall through to auto-detect
+
+    cpu = os.cpu_count() or 1
+    try:
+        import psutil
+    except ImportError:
+        return min(cpu, 4)
+
+    avail_gb = psutil.virtual_memory().available / (1024**3)
+    usable_gb = max(1.0, avail_gb - 2.0)  # reserve 2 GiB for persistent state + OS
+    mem_cap = max(1, int(usable_gb // 1))
+    return min(cpu, mem_cap)
+
+
 def save_image(args: tuple) -> None:
     """
     Save an image with specified parameters.
@@ -44,6 +80,7 @@ def save_images_parallel(
     fpath: str,
     fn_prefix: str,
     ftype: str,
+    max_workers: int | None = None,
 ) -> bool:
     """
     Generate a grid of parameter combinations and save images in parallel.
@@ -57,6 +94,10 @@ def save_images_parallel(
         fpath (str): Path to a folder where the images will be saved.
         fn_prefix (str): Prefix for the image filenames.
         ftype (str): Filetype extension for the images (e.g., '.png').
+        max_workers (int | None): Maximum parallel workers for the thread
+            pool. None (default) uses the DFXM_MAX_WORKERS env var if set,
+            otherwise auto-detects based on CPU count and available memory
+            (see _auto_max_workers).
     ----------------------------------------------------------------------------------------------
     Returns:
         True (bool): True if the function completes successfully.
@@ -74,7 +115,8 @@ def save_images_parallel(
         for j in range(phi_steps)
     ]
 
-    with ThreadPoolExecutor() as executor:
+    workers = max_workers if max_workers is not None else _auto_max_workers()
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         # Consume the lazy executor.map iterator via list(...) so tqdm
         # actually advances; the per-task return values are unused.
         list(tqdm(executor.map(save_image, args_list), total=len(args_list)))
