@@ -162,7 +162,13 @@ def test_knife_edge_beamstop_drops_rays_below_edge():
 
 
 def test_wire_beamstop_drops_rays_through_wire():
-    """Wire mode uses xraylib for Tungsten absorption; some rays must absorb."""
+    """Wire mode uses xraylib for Tungsten absorption; some rays must absorb.
+
+    Uses a realistic 0.06 mm wire (CDD_inc's commented default) so the
+    stochastic Beer-Lambert ``exp(-mu*thick*rho/10)`` branch is the
+    dominant attenuation mechanism, not geometric occlusion at the wire
+    boundary.
+    """
     pytest.importorskip("xraylib")
     rng = np.random.default_rng(13)
     open_count = _call(rng=rng, return_qs=True)
@@ -173,7 +179,7 @@ def test_wire_beamstop_drops_rays_through_wire():
         beamstop=True,
         aperture=False,
         knife_edge=False,
-        bs_height=25e-3,
+        bs_height=0.06,  # ~realistic Tungsten wire diameter (mm)
     )
     assert open_count is not None and masked is not None
     # Some absorption must happen.
@@ -236,6 +242,19 @@ def test_kernel_defaults_match_cdd_inc_generate_Resq_i_py():
     assert defaults["D"] == pytest.approx(2 * np.sqrt(50e-6 * 1.6e-3), rel=1e-12)
     assert defaults["d1"] == 0.274
     assert defaults["dphi_range"] == 0.0
+
+
+def test_beamstop_aperture_and_knife_edge_both_true_raises():
+    """The dispatcher must reject aperture=True AND knife_edge=True as exclusive."""
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _call(
+            rng=rng,
+            beamstop=True,
+            aperture=True,
+            knife_edge=True,
+            bs_height=25e-3,
+        )
 
 
 def test_truncnorm_chunked_matches_unchunked():
