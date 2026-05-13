@@ -49,6 +49,50 @@ def _apply_knife_edge(alpha: np.ndarray, edge_pos_mm: float) -> np.ndarray:
     return np.asarray(x >= edge_pos_mm)
 
 
+# Tungsten properties for the wire-absorption beamstop model.
+_TUNGSTEN_Z = 74
+_TUNGSTEN_DENSITY = 19.254  # g/cm^3
+_BEAM_ENERGY_KEV = 17
+
+
+def _apply_wire(alpha: np.ndarray, half_thick_mm: float, rng: np.random.Generator) -> np.ndarray:
+    """Stochastic Tungsten-wire absorption mask using xraylib cross sections.
+
+    Returns True for rays that PASS (either miss the wire or survive
+    absorption stochastically). Raises RuntimeError if xraylib is not
+    installed (it is an optional dependency, install with
+    ``pip install dfxm-geo[beamstop-wire]``).
+
+    Note: the chord length used here is ``sqrt(r**2 - x**2)`` (half chord),
+    matching ``recspace_res.py`` on the ``CDD_inc`` branch. A geometrically
+    rigorous full-cylinder chord would be ``2*sqrt(r**2 - x**2)``; the
+    factor-of-2 difference means the modelled wire is ~exp(mu*rho*r/10)
+    more transparent than a real cylindrical Tungsten wire of radius
+    ``half_thick_mm``. This is preserved for parity with the reference
+    implementation that produced the published kernels; the standard
+    DFXM-paper recipe uses ``aperture=True`` and does not touch this
+    path. Audit before using ``_apply_wire`` to reproduce published
+    wire-beamstop data from other groups.
+    """
+    try:
+        import xraylib
+    except ImportError as e:
+        raise RuntimeError(
+            "Wire-absorption beamstop mode requires xraylib. "
+            "Install it with: pip install dfxm-geo[beamstop-wire]"
+        ) from e
+
+    x = _bfp_alpha_to_x(alpha)
+    x_arr = np.asarray(x)
+    inside = x_arr < half_thick_mm
+    thick = np.zeros_like(x_arr, dtype=float)
+    thick[inside] = np.sqrt(half_thick_mm**2 - x_arr[inside] ** 2)
+    mu = xraylib.CS_Total(_TUNGSTEN_Z, _BEAM_ENERGY_KEV)
+    survive_prob = np.exp(-mu * thick / 10 * _TUNGSTEN_DENSITY)
+    draws = rng.random(x_arr.size)
+    return np.asarray((x_arr >= half_thick_mm) | (draws < survive_prob))
+
+
 def _apply_aperture(alpha_x: np.ndarray, alpha_y: np.ndarray, square_half_mm: float) -> np.ndarray:
     """Square-aperture mask: True for rays that PASS the aperture."""
     x = _bfp_alpha_to_x(alpha_x)
@@ -160,7 +204,7 @@ def reciprocal_res_func(
         elif knife_edge and not aperture:
             keep = _apply_knife_edge(delta_2theta / 2, bs_height / 2)
         elif not aperture and not knife_edge:
-            raise NotImplementedError("wire mode added in Task 7")
+            keep = _apply_wire(np.abs(delta_2theta / 2), bs_height / 2, rng)
         else:
             raise ValueError("aperture and knife_edge are mutually exclusive")
         qrock = qrock[keep][:Nrays]

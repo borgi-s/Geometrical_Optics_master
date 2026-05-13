@@ -159,3 +159,39 @@ def test_knife_edge_beamstop_drops_rays_below_edge():
     delta_2theta_passed = masked[5]  # index 5 = delta_2theta
     bfp_x = _bfp_alpha_to_x(delta_2theta_passed / 2)
     assert (bfp_x >= 25e-3 / 2 - 1e-12).all()
+
+
+def test_wire_beamstop_drops_rays_through_wire():
+    """Wire mode uses xraylib for Tungsten absorption; some rays must absorb."""
+    pytest.importorskip("xraylib")
+    rng = np.random.default_rng(13)
+    open_count = _call(rng=rng, return_qs=True)
+    rng = np.random.default_rng(13)
+    masked = _call(
+        rng=rng,
+        return_qs=True,
+        beamstop=True,
+        aperture=False,
+        knife_edge=False,
+        bs_height=25e-3,
+    )
+    assert open_count is not None and masked is not None
+    # Some absorption must happen.
+    assert masked[0].size < open_count[0].size
+
+
+def test_wire_beamstop_without_xraylib_raises_clear_error(monkeypatch):
+    """If xraylib is not installed, wire mode raises a clear RuntimeError."""
+    import sys
+
+    # Simulate the import failing regardless of whether xraylib is installed.
+    monkeypatch.setitem(sys.modules, "xraylib", None)
+    rng = np.random.default_rng(0)
+    with pytest.raises((RuntimeError, ImportError), match="xraylib"):
+        _call(
+            rng=rng,
+            beamstop=True,
+            aperture=False,
+            knife_edge=False,
+            bs_height=25e-3,
+        )
