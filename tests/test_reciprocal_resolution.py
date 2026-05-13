@@ -43,7 +43,7 @@ def _call(rng=None, **overrides):
         eps_rms=EPS_RMS,
         theta=THETA,
         phys_aper=PHYS_APER,
-        date="test",
+        date="golden",
         rng=rng,
     )
     kwargs.update(overrides)
@@ -59,3 +59,19 @@ def test_seeded_rng_makes_output_reproducible():
     qrock1, _, _, _, _, _ = out1
     qrock2, _, _, _, _, _ = out2
     np.testing.assert_array_equal(qrock1, qrock2)
+
+
+def test_no_beamstop_baseline_matches_golden(golden_dir):
+    """Seeded no-beamstop run reproduces the pinned baseline to bit-equality."""
+    rng = np.random.default_rng(20260513)
+    result = _call(rng=rng, return_qs=True)
+    assert result is not None
+    qrock, qroll, qpar, qrock_prime, q2th, delta_2theta = result
+
+    golden = np.load(golden_dir / "reciprocal_baseline.npz")
+    np.testing.assert_array_equal(qrock, golden["qrock"])
+    np.testing.assert_array_equal(qroll, golden["qroll"])
+    np.testing.assert_array_equal(qpar, golden["qpar"])
+    np.testing.assert_array_equal(qrock_prime, golden["qrock_prime"])
+    np.testing.assert_array_equal(q2th, golden["q2th"])
+    np.testing.assert_array_equal(delta_2theta, golden["delta_2theta"])
