@@ -14,13 +14,19 @@ Default geometry constants match ID06 at the ESRF; see `dfxm_geo.constants`.
 
 import os
 import pickle
-import sys
+from pathlib import Path
 from pprint import pprint
 
 import numpy as np
 
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
+
+# Repo root: the directory containing pyproject.toml. Derived from this
+# file's location (src/dfxm_geo/direct_space/forward_model.py → 4 levels up).
+# Previously this was inferred from sys.path[0], which silently broke when
+# the module was imported via an installed entry point or via `python -c`.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 fast_inverse2(
     np.random.default_rng().random(size=(100, 3, 3))
@@ -42,7 +48,7 @@ NN3 = int(Npixels // 30 * Nsub)
 # These are loaded lazily by `_load_default_kernel()` only if the file exists,
 # so the module can be imported on a clean checkout that lacks the precomputed
 # pickle (e.g. CI, tests, fresh clones).
-pkl_fpath = sys.path[0] + "/reciprocal_space/pkl_files/"
+pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
 pkl_fn = "Resq_i_20230913_1308.pkl"  # Change accordingly
 vars_fn = os.path.splitext(pkl_fn)[0] + "_vars.txt"
 
@@ -138,8 +144,13 @@ def Find_Hg(
     Q_norm = np.sqrt(h * h + k * k + l * l)  # We have assumed B_0 = I
     q_hkl = np.asarray([h, k, l]) / Q_norm
 
-    Fg_path = sys.path[0] + "/direct_space/deformation_gradient_tensors/Fg_{}_{}nm_{}nm.npy".format(
-        str(dis).replace(".", ""), int(psize * 1e9), int(zl_rms * 2.35e9)
+    Fg_path = str(
+        _REPO_ROOT
+        / "direct_space"
+        / "deformation_gradient_tensors"
+        / "Fg_{}_{}nm_{}nm.npy".format(
+            str(dis).replace(".", ""), int(psize * 1e9), int(zl_rms * 2.35e9)
+        )
     )
     Hg = load_or_generate_Hg(rl, Ud, Us, Theta, dis, ndis, Fg_path)
 
