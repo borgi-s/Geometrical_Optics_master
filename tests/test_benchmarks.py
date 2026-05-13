@@ -90,3 +90,20 @@ def test_Fd_find_small_bench(
 ) -> None:
     # Single dislocation: hits the sequential path, not the parallel branch.
     benchmark(Fd_find, rl_small * 1e6, Ud, Us, Theta, 1.0, 1)
+
+
+@pytest.mark.bench
+def test_Fd_find_bipolar_wall_bench(
+    benchmark,
+    rl_small: np.ndarray,
+    Ud: np.ndarray,
+    Us: np.ndarray,
+    Theta: np.ndarray,
+) -> None:
+    """ndis=50 exercises the numba-JIT bipolar wall accumulator.
+
+    The first Fd_find call here compiles the JIT; we trigger that before the
+    timed region so the compile cost doesn't pollute the benchmark.
+    """
+    Fd_find(rl_small * 1e6, Ud, Us, Theta, 1.0, 2)  # warmup JIT
+    benchmark(Fd_find, rl_small * 1e6, Ud, Us, Theta, 1.0, 50)
