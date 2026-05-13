@@ -43,8 +43,12 @@ def reciprocal_res_func(
     phys_aper: float,
     date: str,
     mem_save: bool = True,
-) -> None:
+    rng: np.random.Generator | None = None,
+    return_qs: bool = False,
+) -> tuple[np.ndarray, ...] | None:
     print("Defining properties of rays")
+    if rng is None:
+        rng = np.random.default_rng()
     # Define the properties of one ray
 
     zeta_v_sigma = zeta_v_fwhm / 2.355
@@ -58,6 +62,7 @@ def reciprocal_res_func(
         loc=mu,
         scale=zeta_v_sigma,
         size=Nrays,
+        random_state=rng,
     )
     if plot_figs == 1:
         # Plot the histogram of zeta_v
@@ -82,7 +87,6 @@ def reciprocal_res_func(
         plt.grid(True)
         plt.legend()
         plt.show()
-    rng = np.random.default_rng()
     zeta_h = rng.normal(size=Nrays) * zeta_h_fwhm / 2.35
     eps = rng.normal(size=Nrays) * eps_rms
 
@@ -215,3 +219,7 @@ def reciprocal_res_func(
             ax1.view_init(200, 310)
             plt.title("Imaging coordinate system")
             plt.show()
+
+    if return_qs:
+        return qrock, qroll, qpar, qrock_prime, q2th, delta_2theta
+    return None
