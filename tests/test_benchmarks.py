@@ -107,3 +107,23 @@ def test_Fd_find_bipolar_wall_bench(
     """
     Fd_find(rl_small * 1e6, Ud, Us, Theta, 1.0, 2)  # warmup JIT
     benchmark(Fd_find, rl_small * 1e6, Ud, Us, Theta, 1.0, 50)
+
+
+@pytest.mark.bench
+def test_Fd_find_parallel_bench(
+    benchmark,
+    rl_small: np.ndarray,
+    Ud: np.ndarray,
+    Us: np.ndarray,
+    Theta: np.ndarray,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """ndis=151 (the production default) routes through the parallel branch.
+
+    Workers share the same numba-JIT'd `_accumulate_bipolar_walls` as the
+    sequential branch. We warm the JIT and stash the chunk debug print
+    before the timed region.
+    """
+    Fd_find(rl_small * 1e6, Ud, Us, Theta, 1.0, 151)  # warmup JIT + threads
+    capsys.readouterr()  # drop the "print(chunks)" output from the warmup
+    benchmark(Fd_find, rl_small * 1e6, Ud, Us, Theta, 1.0, 151)

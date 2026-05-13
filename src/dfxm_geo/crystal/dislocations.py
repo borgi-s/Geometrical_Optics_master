@@ -13,26 +13,30 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from joblib import cpu_count
 from numba import jit
-from tqdm import tqdm
 
 from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
 
 
 @jit(nopython=True, fastmath=True, cache=True)
 def _accumulate_bipolar_walls(
-    rd: np.ndarray, dis: float, ndis: int, ny: float
+    rd: np.ndarray, dis: float, i_start: int, i_end: int, ny: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Numba-JIT accumulator for the bipolar wall contributions to Fdd.
 
-    Sums the i ∈ [1, ndis) contributions of an infinite-wall convention
-    (odd i shifts +k*dis, even i shifts -k*dis, with k = ceil(i/2)). Returns
-    the four nonzero Fdd components ``(f00, f01, f10, f11)`` as ``(N,)``
-    arrays. Caller adds these to the central-wall (i=0) Fdd in-place.
+    Sums the i ∈ [i_start, i_end) contributions of an infinite-wall
+    convention (odd i shifts +k*dis, even i shifts -k*dis, with k =
+    ceil(i/2)). Returns the four nonzero Fdd components ``(f00, f01, f10,
+    f11)`` as ``(N,)`` arrays. Caller adds these to the central-wall (i=0)
+    Fdd in-place.
+
+    Used from both branches of Fd_find: the sequential branch passes
+    ``(1, ndis)`` to cover the whole wall, while the parallel branch's
+    workers pass ``(chunk.start, chunk.stop)`` for their slice.
 
     Compiled with ``fastmath=True`` so the compiler may reassociate the
-    accumulation; the result agrees with the Python loop to within ~1e-12
-    abs / ~1e-10 rel on identity-transform inputs (verified by
-    TestFdFindBipolarWall).
+    accumulation; the result agrees with the original Python loop to
+    within ~1e-12 abs / ~1e-10 rel on identity-transform inputs (verified
+    by TestFdFindBipolarWall).
     """
     N = rd.shape[1]
     f00 = np.zeros(N)
@@ -41,7 +45,7 @@ def _accumulate_bipolar_walls(
     f11 = np.zeros(N)
 
     sqx = rd[0] * rd[0]
-    for i in range(1, ndis):
+    for i in range(i_start, i_end):
         k = (i + 1) // 2
         offset = float(k) * dis if i % 2 == 1 else -float(k) * dis
         rd_y = rd[1] + offset
@@ -58,44 +62,46 @@ def _accumulate_bipolar_walls(
     return f00, f01, f10, f11
 
 
-def multi_dislocs_parallel(chunk, rd, Fdd_shape, dis, ny: float = POISSON_RATIO):
+def multi_dislocs_parallel(
+    chunk: range,
+    rd: np.ndarray,
+    Fdd_shape: tuple[int, int, int],
+    dis: float,
+    ny: float = POISSON_RATIO,
+) -> np.ndarray:
     """Worker for Fd_find's parallel branch (ndis > 100).
 
+    Delegates the per-i math to :func:`_accumulate_bipolar_walls` (numba-JIT)
+    so each ThreadPoolExecutor worker runs the inner loop in compiled code
+    with the GIL released. The chunk's index range is forwarded as
+    ``(chunk.start, chunk.stop)``.
+
+    Bipolar wall convention matches the sequential branch:
+        odd  i (1, 3, 5, …) → +ceil(i/2) * dis
+        even i (2, 4, 6, …) → -(i/2)    * dis
+    Prior to 2026-05-12 this worker used a monotone one-sided wall pattern
+    (``rd_new[1] -= i * dis``) that disagreed with the sequential branch
+    by ~22% in Fdd Frobenius norm; production sims with ndis>100 hit this
+    path, so reference results predating the fix used the one-sided wall.
+
     Args:
-        chunk: A chunk of dislocation indices to be processed.
-        rd: An array containing x/y/z coordinates in dislocation space.
-        Fdd_shape: Shape of the Fdd tensor to be accumulated.
+        chunk: ``range`` of dislocation indices to process. Only
+            ``chunk.start`` and ``chunk.stop`` are read.
+        rd: ``(3, N)`` coordinates in dislocation space.
+        Fdd_shape: Shape of the Fdd tensor to be accumulated; ``(N, 3, 3)``.
         dis: Spacing between dislocations in the wall (µm).
-        ny: Poisson ratio. Default = POISSON_RATIO.
+        ny: Poisson ratio. Default = :data:`POISSON_RATIO`.
 
     Returns:
-        ndarray: Fdd chunk with the accumulated tensor contributions.
+        ndarray of shape ``Fdd_shape`` with only the four nonzero
+        components (``[0,0]``, ``[0,1]``, ``[1,0]``, ``[1,1]``) filled in.
     """
+    f00, f01, f10, f11 = _accumulate_bipolar_walls(rd, dis, chunk.start, chunk.stop, ny)
     Fdd_chunk = np.zeros(Fdd_shape)
-    for i in tqdm(chunk, desc=f"Running: {chunk}"):
-        rd_new = np.copy(rd[:2])
-        # Bipolar wall pattern matching the sequential branch in Fd_find:
-        #   odd i  (1, 3, 5, ...)  → walls at +1*dis, +2*dis, +3*dis, ...
-        #   even i (2, 4, 6, ...)  → walls at -1*dis, -2*dis, -3*dis, ...
-        # Prior to 2026-05-12 this loop did `rd_new[1] -= i * dis`, producing a
-        # one-sided wall that disagreed with the sequential branch by ~22% in
-        # Fdd Frobenius norm. Production sims with ndis>100 hit this path, so
-        # any reference results predating the fix were generated with a
-        # one-sided wall configuration.
-        if i % 2 == 1:
-            rd_new[1] += ((i + 1) // 2) * dis
-        else:
-            rd_new[1] -= (i // 2) * dis
-
-        sqx = rd_new[0] * rd_new[0]
-        sqy = rd_new[1] * rd_new[1]
-        denom = (sqx + sqy) * (sqx + sqy)
-        nyfactor = 2 * ny * (sqx + sqy)
-
-        Fdd_chunk[:, 0, 0] += -rd_new[1] * (3 * sqx + sqy - nyfactor) / denom
-        Fdd_chunk[:, 0, 1] += rd_new[0] * (3 * sqx + sqy - nyfactor) / denom
-        Fdd_chunk[:, 1, 0] += -rd_new[0] * (3 * sqy + sqx - nyfactor) / denom
-        Fdd_chunk[:, 1, 1] += rd_new[1] * (sqx - sqy + nyfactor) / denom
+    Fdd_chunk[:, 0, 0] = f00
+    Fdd_chunk[:, 0, 1] = f01
+    Fdd_chunk[:, 1, 0] = f10
+    Fdd_chunk[:, 1, 1] = f11
     return Fdd_chunk
 
 
@@ -195,7 +201,7 @@ def Fd_find(
         # original Python loop at typical N; a NumPy-only vectorisation was
         # benchmarked and rejected — its (ndis-1, N) intermediates blew out
         # L2 cache and slowed things down by 3×).
-        f00, f01, f10, f11 = _accumulate_bipolar_walls(rd, dis, ndis, ny)
+        f00, f01, f10, f11 = _accumulate_bipolar_walls(rd, dis, 1, ndis, ny)
         Fdd[:, 0, 0] += f00
         Fdd[:, 0, 1] += f01
         Fdd[:, 1, 0] += f10
