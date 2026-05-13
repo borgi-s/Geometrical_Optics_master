@@ -8,6 +8,7 @@ shape, masking direction, kwargs plumbed through) are tight.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func
 
@@ -103,3 +104,34 @@ def test_dphi_range_positive_broadens_qrock():
     # Narrow std is dominated by zeta_v and delta_2theta (both ~few e-5 rad)
     # so the relative widening should be substantial.
     assert qrock_wide.std() > qrock_narrow.std() * 1.5
+
+
+def test_aperture_beamstop_drops_rays_in_corners():
+    """Square aperture absorbs rays whose |alpha_x|>bs/2 OR |alpha_y|>bs/2."""
+    rng = np.random.default_rng(99)
+    open_count = _call(rng=rng, save_resqi=False, return_qs=True)
+    rng = np.random.default_rng(99)
+    masked = _call(
+        rng=rng,
+        return_qs=True,
+        beamstop=True,
+        aperture=True,
+        knife_edge=False,
+        bs_height=25e-3,
+    )
+    assert open_count is not None and masked is not None
+    # Masked output should have strictly fewer rays than unmasked.
+    assert masked[0].size < open_count[0].size
+
+
+def test_aperture_beamstop_requires_bs_height():
+    """beamstop=True, aperture=True without bs_height should raise."""
+    rng = np.random.default_rng(0)
+    with pytest.raises((TypeError, ValueError)):
+        _call(
+            rng=rng,
+            beamstop=True,
+            aperture=True,
+            knife_edge=False,
+            bs_height=None,
+        )

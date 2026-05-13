@@ -24,6 +24,32 @@ import scipy.stats
 
 from dfxm_geo.io import check_folder
 
+# ID06 transfocator parameters (Simons 2017 eq. 22). These describe the
+# back-focal-plane geometry used for the optional beamstop / aperture
+# modelling in `reciprocal_res_func`. Hardcoded because they are properties
+# of the physical instrument, not user-tunable.
+_BFP_PHI = 0.008684440640353642  # unitless
+_BFP_F = 21214.67  # mm; single-lenslet focal distance
+_BFP_N = 88  # number of lenslets
+
+
+def _bfp_x_to_alpha(x: np.ndarray | float) -> np.ndarray | float:
+    """Convert BFP position (mm) to angle (rad)."""
+    return x * np.sin(_BFP_N * _BFP_PHI) / (_BFP_F * _BFP_PHI)
+
+
+def _bfp_alpha_to_x(alpha: np.ndarray | float) -> np.ndarray | float:
+    """Convert angle (rad) to BFP position (mm). Inverse of _bfp_x_to_alpha."""
+    return alpha / np.sin(_BFP_N * _BFP_PHI) * (_BFP_F * _BFP_PHI)
+
+
+def _apply_aperture(alpha_x: np.ndarray, alpha_y: np.ndarray, square_half_mm: float) -> np.ndarray:
+    """Square-aperture mask: True for rays that PASS the aperture."""
+    x = _bfp_alpha_to_x(alpha_x)
+    y = _bfp_alpha_to_x(alpha_y)
+    absorbed = (np.abs(x) > square_half_mm) | (np.abs(y) > square_half_mm)
+    return ~absorbed
+
 
 def reciprocal_res_func(
     Nrays: int,
@@ -46,6 +72,10 @@ def reciprocal_res_func(
     rng: np.random.Generator | None = None,
     return_qs: bool = False,
     dphi_range: float = 0.0,
+    beamstop: bool = False,
+    bs_height: float | None = None,
+    aperture: bool = False,
+    knife_edge: bool = False,
 ) -> tuple[np.ndarray, ...] | None:
     print("Defining properties of rays")
     if rng is None:
@@ -115,6 +145,23 @@ def reciprocal_res_func(
     qrock_prime = np.cos(theta) * qrock + np.sin(theta) * qpar
     q2th = -np.sin(theta) * qrock + np.cos(theta) * qpar
     print("Converted to image system system ")
+
+    if beamstop:
+        if bs_height is None:
+            raise ValueError("bs_height must be provided when beamstop=True")
+        if aperture and not knife_edge:
+            keep = _apply_aperture(np.abs(delta_2theta / 2), np.abs(xi / 2), bs_height / 2)
+        elif knife_edge and not aperture:
+            raise NotImplementedError("knife_edge mode added in Task 6")
+        elif not aperture and not knife_edge:
+            raise NotImplementedError("wire mode added in Task 7")
+        else:
+            raise ValueError("aperture and knife_edge are mutually exclusive")
+        qrock = qrock[keep][:Nrays]
+        qroll = qroll[keep][:Nrays]
+        qpar = qpar[keep][:Nrays]
+        qrock_prime = qrock_prime[keep][:Nrays]
+        q2th = q2th[keep][:Nrays]
 
     # % Convert point cloud into local density function, Resq_i, normalised to 1
     # % If the range is set too narrow such that some points falls outside ranges,
