@@ -24,10 +24,6 @@ import scipy.stats
 
 from dfxm_geo.io import check_folder
 
-# Side-effect: ensure pkl_files/ exists in the CWD before any save_resqi=True call.
-# (Preserves legacy behavior from `reciprocal_space/recspace_res.py`.)
-check_folder("", "pkl_files")
-
 
 def reciprocal_res_func(
     Nrays: int,
@@ -155,6 +151,11 @@ def reciprocal_res_func(
         plt.grid(True)
         plt.show()
     if save_resqi == 1:
+        # Ensure pkl_files/ exists in the CWD only when we're about to write
+        # to it. Previously this was done as a module-level side effect on
+        # import, which silently created a stray directory anywhere the
+        # module was imported.
+        check_folder("", "pkl_files")
         with open(f"pkl_files/Resq_i_{date}.pkl", "wb") as output:
             pickle.dump(normResq_i, output)
         print(f"Resq_i saved as Resq_i_{date}.pkl")
