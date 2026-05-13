@@ -135,3 +135,27 @@ def test_aperture_beamstop_requires_bs_height():
             knife_edge=False,
             bs_height=None,
         )
+
+
+def test_knife_edge_beamstop_drops_rays_below_edge():
+    """Knife-edge masks rays whose BFP x is below the edge position."""
+    from dfxm_geo.reciprocal_space.resolution import _bfp_alpha_to_x
+
+    rng = np.random.default_rng(11)
+    open_count = _call(rng=rng, return_qs=True)
+    rng = np.random.default_rng(11)
+    masked = _call(
+        rng=rng,
+        return_qs=True,
+        beamstop=True,
+        aperture=False,
+        knife_edge=True,
+        bs_height=25e-3,
+    )
+    assert open_count is not None and masked is not None
+    # Knife-edge removes ~half the rays on average.
+    assert masked[0].size < open_count[0].size
+    # Surviving rays should have BFP x of delta_2theta/2 at or above edge_pos.
+    delta_2theta_passed = masked[5]  # index 5 = delta_2theta
+    bfp_x = _bfp_alpha_to_x(delta_2theta_passed / 2)
+    assert (bfp_x >= 25e-3 / 2 - 1e-12).all()

@@ -43,6 +43,12 @@ def _bfp_alpha_to_x(alpha: np.ndarray | float) -> np.ndarray | float:
     return alpha / np.sin(_BFP_N * _BFP_PHI) * (_BFP_F * _BFP_PHI)
 
 
+def _apply_knife_edge(alpha: np.ndarray, edge_pos_mm: float) -> np.ndarray:
+    """Knife-edge mask: True for rays whose BFP x is at or above edge_pos."""
+    x = _bfp_alpha_to_x(alpha)
+    return np.asarray(x >= edge_pos_mm)
+
+
 def _apply_aperture(alpha_x: np.ndarray, alpha_y: np.ndarray, square_half_mm: float) -> np.ndarray:
     """Square-aperture mask: True for rays that PASS the aperture."""
     x = _bfp_alpha_to_x(alpha_x)
@@ -152,7 +158,7 @@ def reciprocal_res_func(
         if aperture and not knife_edge:
             keep = _apply_aperture(np.abs(delta_2theta / 2), np.abs(xi / 2), bs_height / 2)
         elif knife_edge and not aperture:
-            raise NotImplementedError("knife_edge mode added in Task 6")
+            keep = _apply_knife_edge(delta_2theta / 2, bs_height / 2)
         elif not aperture and not knife_edge:
             raise NotImplementedError("wire mode added in Task 7")
         else:
@@ -162,6 +168,8 @@ def reciprocal_res_func(
         qpar = qpar[keep][:Nrays]
         qrock_prime = qrock_prime[keep][:Nrays]
         q2th = q2th[keep][:Nrays]
+        delta_2theta = delta_2theta[keep][:Nrays]
+        xi = xi[keep][:Nrays]
 
     # % Convert point cloud into local density function, Resq_i, normalised to 1
     # % If the range is set too narrow such that some points falls outside ranges,
