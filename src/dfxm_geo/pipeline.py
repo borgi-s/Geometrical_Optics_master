@@ -15,6 +15,7 @@ today. Deferred.
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 import tomllib
 from dataclasses import dataclass, field
@@ -26,6 +27,14 @@ import numpy as np
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.analysis.mosaicity import compute_chi_shift, compute_com_maps
 from dfxm_geo.crystal.burgers import burgers_vectors as _burgers_vectors
+from dfxm_geo.crystal.burgers import (
+    rotated_t_vectors as _rotated_t_vectors,
+)
+from dfxm_geo.crystal.burgers import (
+    ud_matrices as _ud_matrices,
+)
+from dfxm_geo.crystal.dislocations import Fd_find_mixed
+from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.images import load_images, save_images_parallel
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
@@ -419,6 +428,151 @@ def cli_main(argv: list[str] | None = None) -> int:
         if config.postprocess.enabled and not args.no_postprocess:
             run_postprocess(args.output, config)
     return 0
+
+
+def _slip_plane_slug(n: tuple[int, int, int]) -> str:
+    """Convert (1, -1, 1) -> '1_m1_1' for directory names."""
+    return "_".join("m" + str(abs(c)) if c < 0 else str(c) for c in n)
+
+
+def _save_preview_png(arr: np.ndarray, png_path: Path) -> None:
+    """Quick matplotlib heatmap snapshot for spot-checking."""
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(4, 2))
+    ax.imshow(arr.T, aspect="auto", origin="lower", cmap="viridis")
+    ax.set_axis_off()
+    fig.tight_layout(pad=0)
+    fig.savefig(png_path, dpi=72, bbox_inches="tight", pad_inches=0)
+    plt.close(fig)
+
+
+def _passes_invisibility(
+    q_hkl: np.ndarray,
+    b_vec: np.ndarray,
+    threshold_deg: float,
+) -> bool:
+    """True if |G·b| / (|G| |b|) >= cos(90° - threshold) — NOT near-orthogonal.
+
+    Paper convention (Borgi 2025): a configuration is excluded if the Burgers
+    vector is within `threshold_deg` degrees of perpendicular to G.
+    cos(90° - 10°) = cos(80°) ≈ 0.174.
+    """
+    cos_angle = abs(np.dot(q_hkl, b_vec)) / (np.linalg.norm(q_hkl) * np.linalg.norm(b_vec))
+    return bool(cos_angle >= np.cos(np.deg2rad(90.0 - threshold_deg)))
+
+
+def _run_identification_single(
+    config: IdentificationConfig,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Deterministic Cartesian sweep: slip planes × Burgers vectors × angles."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    crystal_cfg = config.crystal
+    scan_cfg = config.scan
+
+    all_planes: list[tuple[int, int, int]] = [
+        (1, 1, 1),
+        (1, -1, 1),
+        (1, 1, -1),
+        (-1, 1, 1),
+    ]
+    planes = all_planes if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
+
+    angles_deg = np.arange(
+        crystal_cfg.angle_start_deg,
+        crystal_cfg.angle_stop_deg + crystal_cfg.angle_step_deg * 0.5,
+        crystal_cfg.angle_step_deg,
+    )
+
+    rng = np.random.default_rng(scan_cfg.rng_seed) if scan_cfg.poisson_noise else None
+    q_hkl = np.asarray(fm.q_hkl, dtype=float)
+
+    manifest_rows: list[dict[str, Any]] = []
+    n_written = 0
+
+    for plane in planes:
+        plane_slug = _slip_plane_slug(plane)
+        im_dir = output_dir / f"n_{plane_slug}" / "im_data"
+        png_dir = output_dir / f"n_{plane_slug}" / "images"
+        im_dir.mkdir(parents=True, exist_ok=True)
+        png_dir.mkdir(parents=True, exist_ok=True)
+
+        b_table = _burgers_vectors(plane)
+        b_indices = (
+            crystal_cfg.b_vector_indices
+            if crystal_cfg.b_vector_indices is not None
+            else list(range(len(b_table)))
+        )
+        b_subset = b_table[b_indices]
+        n_arr_unnorm = np.asarray(plane, dtype=float)
+        n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
+
+        rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
+        Ud_all = _ud_matrices(n_arr, rotated)  # (n_angles, n_b, 3, 3)
+
+        for j, b_idx in enumerate(b_indices):
+            if crystal_cfg.exclude_invisibility and not _passes_invisibility(
+                q_hkl, b_table[b_idx], crystal_cfg.invisibility_threshold_deg
+            ):
+                continue
+            for i, alpha in enumerate(angles_deg):
+                Ud_mix = Ud_all[i, j]
+                Fg = Fd_find_mixed(
+                    fm.rl,
+                    fm.Us,
+                    Ud_mix=Ud_mix,
+                    rotation_deg=float(alpha),
+                    Theta=fm.Theta,
+                )
+                Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
+                fm.Hg = Hg
+                fm.q_hkl = q_hkl
+
+                image_arr = fm.forward(Hg, phi=scan_cfg.phi_rad)
+                # forward() can return either an ndarray or a (image, qi) tuple
+                # depending on qi_return. We don't pass qi_return so it's always
+                # an ndarray here; assert for the type-checker.
+                assert isinstance(image_arr, np.ndarray)
+                image = image_arr * scan_cfg.intensity_scale
+                if scan_cfg.poisson_noise:
+                    assert rng is not None
+                    image = rng.poisson(np.clip(image, a_min=0.0, a_max=None)).astype(float)
+
+                stem = f"b{b_idx}_alpha{int(round(alpha)):03d}"
+                npy_path = im_dir / f"{stem}.npy"
+                png_path = png_dir / f"{stem}.png"
+                np.save(npy_path, image)
+                _save_preview_png(image, png_path)
+
+                manifest_rows.append(
+                    {
+                        "image_path": str(npy_path.relative_to(output_dir)),
+                        "n_h": plane[0],
+                        "n_k": plane[1],
+                        "n_l": plane[2],
+                        "b_idx": b_idx,
+                        "b_h": int(round(b_table[b_idx, 0] * np.sqrt(2))),
+                        "b_k": int(round(b_table[b_idx, 1] * np.sqrt(2))),
+                        "b_l": int(round(b_table[b_idx, 2] * np.sqrt(2))),
+                        "rotation_deg": float(alpha),
+                    }
+                )
+                n_written += 1
+
+    manifest_path = output_dir / "manifest.csv"
+    with open(manifest_path, "w", newline="") as fh:
+        if manifest_rows:
+            writer = csv.DictWriter(fh, fieldnames=list(manifest_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(manifest_rows)
+        else:
+            fh.write("")
+
+    return {"n_images": n_written, "output_dir": output_dir, "manifest_path": manifest_path}
 
 
 if __name__ == "__main__":

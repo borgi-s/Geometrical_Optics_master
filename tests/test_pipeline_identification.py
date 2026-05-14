@@ -1,13 +1,16 @@
 """Unit tests for dfxm-identify pipeline shape."""
 
+import numpy as np
 import pytest
 
+import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     IdentificationConfig,
     IdentificationCrystalConfig,
     IdentificationMonteCarloConfig,
     IdentificationScanConfig,
     IOConfig,
+    _run_identification_single,
     load_identification_config,
 )
 
@@ -188,3 +191,45 @@ def test_load_identification_config_missing_mode_raises(tmp_path):
     cfg_path.write_text("[crystal]\nslip_plane_normal = [1, 1, 1]\n")
     with pytest.raises(ValueError, match="missing top-level 'mode'"):
         load_identification_config(cfg_path)
+
+
+def _tiny_single_config(tmp_path):
+    return IdentificationConfig(
+        mode="single",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=(1, 1, 1),
+            angle_start_deg=0.0,
+            angle_stop_deg=90.0,
+            angle_step_deg=90.0,  # only 2 angles: 0 and 90
+            b_vector_indices=[0, 1],  # only 2 Burgers vectors
+            sweep_all_slip_planes=False,  # just one plane
+            exclude_invisibility=False,  # don't filter
+        ),
+        scan=IdentificationScanConfig(rng_seed=0, intensity_scale=1.0),
+        io=_make_io_config(),
+    )
+
+
+def test_run_identification_single_writes_expected_count(tmp_path, monkeypatch):
+    """Tiny sweep (1 slip plane × 2 b × 2 angles = 4 images) writes 4 .npy files
+    and 4 PNGs, and one manifest.csv with 4 rows.
+    """
+    expected_image = np.ones((170, 510))
+    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
+    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
+    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: expected_image)
+
+    output_dir = tmp_path / "out"
+    cfg = _tiny_single_config(tmp_path)
+
+    result = _run_identification_single(cfg, output_dir)
+
+    npys = sorted((output_dir / "n_1_1_1" / "im_data").glob("*.npy"))
+    assert len(npys) == 4
+    pngs = sorted((output_dir / "n_1_1_1" / "images").glob("*.png"))
+    assert len(pngs) == 4
+    manifest = output_dir / "manifest.csv"
+    assert manifest.is_file()
+    lines = manifest.read_text().strip().splitlines()
+    assert len(lines) == 5  # 1 header + 4 rows
+    assert result["n_images"] == 4
