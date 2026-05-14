@@ -17,32 +17,40 @@ def load_or_generate_Hg(
 ) -> np.ndarray:
     """Return the displacement gradient field Hg, loading from disk if cached.
 
-    If `file_path` is given and the file exists, load Fg from it. Otherwise
-    compute Fg via `Fd_find` (or identity if ndis == 0) and optionally save
-    it to `file_path`. Hg is derived from Fg by bulk inversion + transpose.
+    If `file_path` is given and the file exists *and* its leading dimension
+    matches `rl.shape[1]`, load Fg from it. A shape mismatch (e.g. cache was
+    written under a different detector ray grid) regenerates Fg and overwrites
+    the cache rather than silently corrupting the result. Hg is derived from
+    Fg by bulk inversion + transpose.
     """
+    expected_n = rl.shape[1]
+    Fg: np.ndarray | None = None
+
     if file_path is not None:
         fname = file_path.rsplit("/", 1)[-1]
         try:
-            Fg = np.load(file_path)
-            print(f"Loaded Fg from {fname}")
+            candidate = np.load(file_path)
         except FileNotFoundError:
             print(f"File '{fname}' not found. \nGenerating a new Fg array.")
-            if ndis == 0:
-                Fg = np.zeros([len(rl[-1]), 3, 3])
-                Fg += np.identity(Fg.shape[1])
+        else:
+            if candidate.shape[0] != expected_n:
+                print(
+                    f"Cached Fg in {fname} has shape[0]={candidate.shape[0]} "
+                    f"but rl needs {expected_n} rays; regenerating."
+                )
             else:
-                Fg = Fd_find(rl * 1e6, Ud, Us, Theta, dis, ndis)
+                print(f"Loaded Fg from {fname}")
+                Fg = candidate
 
-            if file_path is not None:
-                np.save(file_path, Fg)
-                print(f"Saved Fg to {fname}")
-    else:
+    if Fg is None:
         if ndis == 0:
-            Fg = np.zeros([len(rl[-1]), 3, 3])
+            Fg = np.zeros([expected_n, 3, 3])
             Fg += np.identity(Fg.shape[1])
         else:
             Fg = Fd_find(rl * 1e6, Ud, Us, Theta, dis, ndis)
+        if file_path is not None:
+            np.save(file_path, Fg)
+            print(f"Saved Fg to {file_path.rsplit('/', 1)[-1]}")
 
     Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1])
     Hg -= np.identity(3)

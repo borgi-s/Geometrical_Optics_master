@@ -144,12 +144,21 @@ def Find_Hg(
     Q_norm = np.sqrt(h * h + k * k + l * l)  # We have assumed B_0 = I
     q_hkl = np.asarray([h, k, l]) / Q_norm
 
+    # The cache key must include every parameter that affects the rl ray grid
+    # shape: dis/psize/zl_rms determine the physics, Npixels/Nsub determine the
+    # detector ray-grid dimensions. Without Npixels/Nsub, changing those
+    # module-level constants silently loaded a wrong-shape cache (see
+    # `load_or_generate_Hg`'s shape guard).
     Fg_path = str(
         _REPO_ROOT
         / "direct_space"
         / "deformation_gradient_tensors"
-        / "Fg_{}_{}nm_{}nm.npy".format(
-            str(dis).replace(".", ""), int(psize * 1e9), int(zl_rms * 2.35e9)
+        / "Fg_{}_{}nm_{}nm_px{}_sub{}.npy".format(
+            str(dis).replace(".", ""),
+            int(psize * 1e9),
+            int(zl_rms * 2.35e9),
+            Npixels,
+            Nsub,
         )
     )
     Hg = load_or_generate_Hg(rl, Ud, Us, Theta, dis, ndis, Fg_path)

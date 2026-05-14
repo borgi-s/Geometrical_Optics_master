@@ -183,6 +183,38 @@ def test_load_or_generate_Hg_in_memory_path_matches_cached(rotation_matrices, tm
     np.testing.assert_allclose(Hg_in_memory, Hg_cached, atol=1e-12)
 
 
+def test_load_or_generate_Hg_regenerates_on_shape_mismatch(rotation_matrices, tmp_path):
+    """A cached Fg whose shape[0] mismatches rl.shape[1] is discarded.
+
+    Regression guard: the on-disk cache key in `forward_model.Find_Hg` is keyed
+    by physics params (dis/psize/zl_rms) plus the ray-grid params (Npixels/Nsub).
+    If a stale cache from a different ray grid is found anyway — e.g. the user
+    deletes one of the new key tokens, or a path collision — the shape guard
+    inside `load_or_generate_Hg` must regenerate rather than silently load wrong
+    shape data.
+    """
+    Ud, Us, Theta = rotation_matrices
+    cache = tmp_path / "Fg_cache.npy"
+
+    # Plant a stale cache shaped for 200 rays.
+    rng = np.random.default_rng(2)
+    stale_Fg = rng.normal(size=(200, 3, 3))
+    np.save(cache, stale_Fg)
+    assert cache.exists()
+
+    # Call with rl of a *different* size (300 rays). The shape guard must
+    # discard the stale cache and regenerate so the returned Hg has the right
+    # leading dimension.
+    rl = rng.normal(size=(3, 300)) * 1e-6
+    Hg = load_or_generate_Hg(rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=str(cache))
+    assert Hg.shape == (300, 3, 3), "shape must match rl, not stale cache"
+
+    # The cache on disk should now be the regenerated 300-ray Fg, not the
+    # stale 200-ray one — so a second call with the same rl loads cleanly.
+    Hg2 = load_or_generate_Hg(rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=str(cache))
+    np.testing.assert_array_equal(Hg, Hg2)
+
+
 # ---------------------------------------------------------------------------
 # check_folder
 # ---------------------------------------------------------------------------
