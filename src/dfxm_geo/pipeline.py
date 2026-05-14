@@ -696,5 +696,45 @@ def _run_identification_multi(
     return {"n_samples": mc.n_samples, "output_dir": output_dir, "manifest_path": manifest_path}
 
 
+def run_identification(
+    config: IdentificationConfig,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Dispatch to single or multi runner based on config.mode."""
+    if config.mode == "single":
+        return _run_identification_single(config, output_dir)
+    return _run_identification_multi(config, output_dir)
+
+
+def cli_main_identify(argv: list[str] | None = None) -> int:
+    """Argparse-driven entry point for `dfxm-identify`."""
+    parser = argparse.ArgumentParser(description="DFXM dislocation identification simulation")
+    parser.add_argument(
+        "--config", type=Path, required=True, help="Path to identification TOML config"
+    )
+    parser.add_argument("--output", type=Path, required=True, help="Output directory")
+    parser.add_argument(
+        "--mode",
+        choices=["single", "multi"],
+        default=None,
+        help="Override the config's mode field",
+    )
+    args = parser.parse_args(argv)
+
+    cfg = load_identification_config(args.config)
+    if args.mode is not None and args.mode != cfg.mode:
+        from dataclasses import replace
+
+        cfg = replace(cfg, mode=args.mode)
+        cfg.__post_init__()  # re-run validation
+
+    result = run_identification(cfg, args.output)
+    if cfg.mode == "single":
+        print(f"Wrote {result['n_images']} images to {result['output_dir']}")
+    else:
+        print(f"Wrote {result['n_samples']} samples to {result['output_dir']}")
+    return 0
+
+
 if __name__ == "__main__":
     sys.exit(cli_main())

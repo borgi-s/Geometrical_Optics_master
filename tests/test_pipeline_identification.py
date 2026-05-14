@@ -12,7 +12,9 @@ from dfxm_geo.pipeline import (
     IOConfig,
     _run_identification_multi,
     _run_identification_single,
+    cli_main_identify,
     load_identification_config,
+    run_identification,
 )
 
 
@@ -300,3 +302,75 @@ def test_run_identification_multi_is_deterministic_for_seed(tmp_path, monkeypatc
     m1 = (out1 / "manifest.csv").read_text()
     m2 = (out2 / "manifest.csv").read_text()
     assert m1 == m2
+
+
+def test_run_identification_dispatches_to_single(tmp_path, monkeypatch):
+    import numpy as np
+
+    import dfxm_geo.direct_space.forward_model as fm
+
+    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
+    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
+    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+
+    cfg = _tiny_single_config(tmp_path)
+    result = run_identification(cfg, tmp_path / "out")
+    assert "n_images" in result
+
+
+def test_run_identification_dispatches_to_multi(tmp_path, monkeypatch):
+    import numpy as np
+
+    import dfxm_geo.direct_space.forward_model as fm
+
+    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
+    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
+    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+
+    cfg = _tiny_multi_config()
+    result = run_identification(cfg, tmp_path / "out")
+    assert "n_samples" in result
+
+
+def test_cli_main_identify_parses_args(tmp_path, monkeypatch):
+    """Smoke test: CLI parses --config and --output, calls run_identification, returns 0."""
+    import numpy as np
+
+    import dfxm_geo.direct_space.forward_model as fm
+
+    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
+    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
+    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+
+    toml_text = """
+mode = "single"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]
+angle_start_deg = 0.0
+angle_stop_deg = 0.0
+angle_step_deg = 10.0
+b_vector_indices = [0]
+sweep_all_slip_planes = false
+exclude_invisibility = false
+
+[scan]
+phi_rad = 1.5e-4
+poisson_noise = false
+rng_seed = 0
+intensity_scale = 1.0
+
+[io]
+fn_prefix = "/mosa_test_0000_"
+ftype = ".npy"
+dislocs_dirname = "identify"
+perfect_dirname = "ignored"
+include_perfect_crystal = false
+"""
+    cfg_path = tmp_path / "id.toml"
+    cfg_path.write_text(toml_text)
+    out_dir = tmp_path / "out"
+
+    exit_code = cli_main_identify(["--config", str(cfg_path), "--output", str(out_dir)])
+    assert exit_code == 0
+    assert (out_dir / "manifest.csv").is_file()
