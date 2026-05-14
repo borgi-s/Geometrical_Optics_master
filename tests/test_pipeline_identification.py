@@ -8,6 +8,7 @@ from dfxm_geo.pipeline import (
     IdentificationMonteCarloConfig,
     IdentificationScanConfig,
     IOConfig,
+    load_identification_config,
 )
 
 
@@ -108,3 +109,82 @@ def test_identification_config_invalid_mode_raises():
             scan=IdentificationScanConfig(),
             io=_make_io_config(),
         )
+
+
+def test_load_identification_config_single(tmp_path):
+    """Round-trip a single-mode TOML file → IdentificationConfig."""
+    toml_text = """
+mode = "single"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]
+angle_start_deg = 0.0
+angle_stop_deg = 350.0
+angle_step_deg = 10.0
+sweep_all_slip_planes = true
+exclude_invisibility = true
+invisibility_threshold_deg = 10.0
+
+[scan]
+phi_rad = 1.5e-4
+poisson_noise = true
+rng_seed = 0
+intensity_scale = 7.0
+
+[io]
+fn_prefix = "/mosa_test_0000_"
+ftype = ".npy"
+dislocs_dirname = "identify"
+perfect_dirname = "ignored"
+include_perfect_crystal = false
+"""
+    cfg_path = tmp_path / "identification_single.toml"
+    cfg_path.write_text(toml_text)
+
+    cfg = load_identification_config(cfg_path)
+    assert cfg.mode == "single"
+    assert cfg.crystal.slip_plane_normal == (1, 1, 1)
+    assert cfg.scan.phi_rad == pytest.approx(1.5e-4)
+    assert cfg.multi is None
+
+
+def test_load_identification_config_multi(tmp_path):
+    """Multi-mode TOML round-trips, including the [multi] block."""
+    toml_text = """
+mode = "multi"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]
+
+[scan]
+phi_rad = 1.5e-4
+rng_seed = 42
+
+[multi]
+n_samples = 100
+pos_std_um = 3.0
+n_png_previews = 10
+
+[io]
+fn_prefix = "/mosa_test_0000_"
+ftype = ".npy"
+dislocs_dirname = "identify_multi"
+perfect_dirname = "ignored"
+include_perfect_crystal = false
+"""
+    cfg_path = tmp_path / "identification_multi.toml"
+    cfg_path.write_text(toml_text)
+
+    cfg = load_identification_config(cfg_path)
+    assert cfg.mode == "multi"
+    assert cfg.multi is not None
+    assert cfg.multi.n_samples == 100
+    assert cfg.scan.rng_seed == 42
+
+
+def test_load_identification_config_missing_mode_raises(tmp_path):
+    """A TOML missing the top-level `mode = ...` field raises."""
+    cfg_path = tmp_path / "bad.toml"
+    cfg_path.write_text("[crystal]\nslip_plane_normal = [1, 1, 1]\n")
+    with pytest.raises(ValueError, match="missing top-level 'mode'"):
+        load_identification_config(cfg_path)

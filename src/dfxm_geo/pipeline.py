@@ -154,6 +154,48 @@ class IdentificationConfig:
             raise ValueError(str(exc)) from exc
 
 
+def load_identification_config(path: Path) -> IdentificationConfig:
+    """Load and validate an `dfxm-identify` config from a TOML file.
+
+    Args:
+        path: Filesystem path to a TOML config (see configs/identification_*.toml).
+
+    Returns:
+        Validated IdentificationConfig.
+
+    Raises:
+        ValueError: if the TOML is missing the top-level `mode` field, or if
+            the validation in IdentificationConfig.__post_init__ rejects the
+            content.
+    """
+    with open(path, "rb") as fh:
+        data = tomllib.load(fh)
+
+    if "mode" not in data:
+        raise ValueError(f"{path}: missing top-level 'mode' field")
+
+    crystal_data = data.get("crystal", {})
+    if "slip_plane_normal" in crystal_data:
+        crystal_data = {
+            **crystal_data,
+            "slip_plane_normal": tuple(crystal_data["slip_plane_normal"]),
+        }
+    crystal = IdentificationCrystalConfig(**crystal_data)
+    scan = IdentificationScanConfig(**data.get("scan", {}))
+    io = IOConfig(**data.get("io", {}))
+    multi = (
+        IdentificationMonteCarloConfig(**data["multi"]) if data.get("multi") is not None else None
+    )
+
+    return IdentificationConfig(
+        mode=data["mode"],
+        crystal=crystal,
+        scan=scan,
+        io=io,
+        multi=multi,
+    )
+
+
 def _ensure_kernel_loaded() -> None:
     """Raise a clear error if the reciprocal-space resolution kernel is missing.
 
