@@ -73,11 +73,18 @@ class TestSimulationConfigFromToml:
             SimulationConfig.from_toml(p)
 
     def test_all_shipped_variants_parse(self) -> None:
-        """Every config under configs/ + configs/variants/ parses cleanly."""
+        """Every dfxm-forward config under configs/ + configs/variants/ parses cleanly.
+
+        Excludes ``identification_*.toml`` — those use a different schema
+        consumed by ``load_identification_config``, not ``SimulationConfig``.
+        """
         repo_root = Path(__file__).resolve().parents[1]
-        configs = list((repo_root / "configs").glob("*.toml")) + list(
-            (repo_root / "configs" / "variants").glob("*.toml")
-        )
+        configs = [
+            p
+            for p in list((repo_root / "configs").glob("*.toml"))
+            + list((repo_root / "configs" / "variants").glob("*.toml"))
+            if not p.name.startswith("identification_")
+        ]
         assert len(configs) >= 5, "expected default.toml + at least 4 variants"
         for path in configs:
             cfg = SimulationConfig.from_toml(path)
