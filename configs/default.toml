@@ -12,6 +12,7 @@
 [crystal]
 dis = 4        # inter-dislocation distance (µm)
 ndis = 151     # number of dislocations
+sample_remount = "S1"  # one of "S1", "S2", "S3", "S4" — Purdue 2024 paper. Default: identity (no remount).
 
 [scan]
 # 0.0006 rad ≈ 0.03438 deg ; 0.002 rad ≈ 0.11459 deg
