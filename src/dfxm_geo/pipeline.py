@@ -94,6 +94,39 @@ class SimulationConfig:
         return cls(crystal=crystal, scan=scan, io=io, postprocess=postprocess)
 
 
+@dataclass(frozen=True, kw_only=True)
+class IdentificationCrystalConfig:
+    """Crystal config for `dfxm-identify`. Slip plane + Burgers vector sweep."""
+
+    slip_plane_normal: tuple[int, int, int]
+    angle_start_deg: float = 0.0
+    angle_stop_deg: float = 350.0
+    angle_step_deg: float = 10.0
+    b_vector_indices: list[int] | None = None  # None = all 6
+    sweep_all_slip_planes: bool = True
+    exclude_invisibility: bool = True
+    invisibility_threshold_deg: float = 10.0
+
+
+@dataclass(frozen=True, kw_only=True)
+class IdentificationScanConfig:
+    """Forward-model scan parameters for `dfxm-identify`."""
+
+    phi_rad: float = 150e-6
+    poisson_noise: bool = True
+    rng_seed: int = 0
+    intensity_scale: float = 7.0
+
+
+@dataclass(frozen=True, kw_only=True)
+class IdentificationMonteCarloConfig:
+    """Multi-disloc Monte Carlo parameters (mode='multi' only)."""
+
+    n_samples: int = 1000
+    pos_std_um: float = 5.0
+    n_png_previews: int = 50
+
+
 def _ensure_kernel_loaded() -> None:
     """Raise a clear error if the reciprocal-space resolution kernel is missing.
 
