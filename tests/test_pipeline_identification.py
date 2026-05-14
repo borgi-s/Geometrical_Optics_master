@@ -10,6 +10,7 @@ from dfxm_geo.pipeline import (
     IdentificationMonteCarloConfig,
     IdentificationScanConfig,
     IOConfig,
+    _run_identification_multi,
     _run_identification_single,
     load_identification_config,
 )
@@ -233,3 +234,69 @@ def test_run_identification_single_writes_expected_count(tmp_path, monkeypatch):
     lines = manifest.read_text().strip().splitlines()
     assert len(lines) == 5  # 1 header + 4 rows
     assert result["n_images"] == 4
+
+
+def _tiny_multi_config():
+    return IdentificationConfig(
+        mode="multi",
+        crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
+        scan=IdentificationScanConfig(rng_seed=0, intensity_scale=1.0),
+        multi=IdentificationMonteCarloConfig(n_samples=3, pos_std_um=2.0, n_png_previews=2),
+        io=_make_io_config(),
+    )
+
+
+def test_run_identification_multi_writes_samples_and_manifest(tmp_path, monkeypatch):
+    """n_samples=3 writes 3 .npy + 2 PNGs (n_png_previews=2) + manifest with 3 rows."""
+    import numpy as np
+
+    import dfxm_geo.direct_space.forward_model as fm
+
+    expected_image = np.ones((170, 510))
+    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
+    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
+    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: expected_image)
+
+    output_dir = tmp_path / "out"
+    cfg = _tiny_multi_config()
+
+    result = _run_identification_multi(cfg, output_dir)
+
+    npys = sorted((output_dir / "im_data").glob("*.npy"))
+    pngs = sorted((output_dir / "images").glob("*.png"))
+    assert len(npys) == 3
+    assert len(pngs) == 2
+    manifest = output_dir / "manifest.csv"
+    assert manifest.is_file()
+    lines = manifest.read_text().strip().splitlines()
+    assert len(lines) == 4  # header + 3 rows
+    assert result["n_samples"] == 3
+
+
+def test_run_identification_multi_is_deterministic_for_seed(tmp_path, monkeypatch):
+    """Two runs at the same seed produce identical manifests."""
+    import numpy as np
+
+    import dfxm_geo.direct_space.forward_model as fm
+
+    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
+    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
+    counter = {"n": 0}
+
+    def fake_forward(*args, **kwargs):
+        counter["n"] += 1
+        return np.full((170, 510), float(counter["n"]))
+
+    monkeypatch.setattr(fm, "forward", fake_forward)
+
+    out1 = tmp_path / "out1"
+    out2 = tmp_path / "out2"
+    cfg = _tiny_multi_config()
+
+    _run_identification_multi(cfg, out1)
+    counter["n"] = 0
+    _run_identification_multi(cfg, out2)
+
+    m1 = (out1 / "manifest.csv").read_text()
+    m2 = (out2 / "manifest.csv").read_text()
+    assert m1 == m2

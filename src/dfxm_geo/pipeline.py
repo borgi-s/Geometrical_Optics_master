@@ -33,7 +33,11 @@ from dfxm_geo.crystal.burgers import (
 from dfxm_geo.crystal.burgers import (
     ud_matrices as _ud_matrices,
 )
-from dfxm_geo.crystal.dislocations import Fd_find_mixed
+from dfxm_geo.crystal.dislocations import (
+    Fd_find_mixed,
+    Fd_find_multi_dislocs_mixed,
+    MixedDislocSpec,
+)
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.images import load_images, save_images_parallel
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
@@ -573,6 +577,123 @@ def _run_identification_single(
             fh.write("")
 
     return {"n_images": n_written, "output_dir": output_dir, "manifest_path": manifest_path}
+
+
+_ALL_111_PLANES: list[tuple[int, int, int]] = [
+    (1, 1, 1),
+    (1, -1, 1),
+    (1, 1, -1),
+    (-1, 1, 1),
+]
+
+
+def _draw_dislocation(rng: np.random.Generator, pos_std_um: float) -> dict[str, Any]:
+    """Draw a single random dislocation (slip plane, Burgers idx, angle, position)."""
+    plane_idx = int(rng.integers(0, len(_ALL_111_PLANES)))
+    plane = _ALL_111_PLANES[plane_idx]
+    b_table = _burgers_vectors(plane)
+    b_idx = int(rng.integers(0, len(b_table)))
+    alpha = float(rng.uniform(0.0, 360.0))
+    pos = (float(rng.normal(0.0, pos_std_um)), float(rng.normal(0.0, pos_std_um)), 0.0)
+
+    n = np.asarray(plane, dtype=float)
+    n_unit = n / np.linalg.norm(n)
+    rotated = _rotated_t_vectors(n_unit, b_table[b_idx : b_idx + 1], np.array([alpha]))
+    Ud = _ud_matrices(n_unit, rotated)[0, 0]
+
+    return {
+        "plane": plane,
+        "b_idx": b_idx,
+        "b_vec": b_table[b_idx] * np.sqrt(2),
+        "alpha_deg": alpha,
+        "pos_um": pos,
+        "Ud": Ud,
+    }
+
+
+def _run_identification_multi(
+    config: IdentificationConfig,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Monte Carlo over n_samples; each sample is 2 random mixed dislocations summed."""
+    assert config.multi is not None  # validated in __post_init__
+    mc = config.multi
+    scan_cfg = config.scan
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "im_data").mkdir(exist_ok=True)
+    (output_dir / "images").mkdir(exist_ok=True)
+
+    # Split master rng → child streams (param draws, Poisson noise).
+    master = np.random.default_rng(scan_cfg.rng_seed)
+    param_rng, noise_rng = master.spawn(2)
+
+    manifest_rows: list[dict[str, Any]] = []
+    q_hkl = np.asarray(fm.q_hkl, dtype=float)
+    fm.q_hkl = q_hkl
+
+    pad = max(5, len(str(mc.n_samples - 1)))
+    for k in range(mc.n_samples):
+        d1 = _draw_dislocation(param_rng, mc.pos_std_um)
+        d2 = _draw_dislocation(param_rng, mc.pos_std_um)
+        specs = [
+            MixedDislocSpec(
+                Ud_mix=d1["Ud"], rotation_deg=d1["alpha_deg"], position_lab_um=d1["pos_um"]
+            ),
+            MixedDislocSpec(
+                Ud_mix=d2["Ud"], rotation_deg=d2["alpha_deg"], position_lab_um=d2["pos_um"]
+            ),
+        ]
+        Fg = Fd_find_multi_dislocs_mixed(fm.rl, fm.Us, specs, fm.Theta)
+        Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
+        fm.Hg = Hg
+
+        image_arr = fm.forward(Hg, phi=scan_cfg.phi_rad)
+        assert isinstance(image_arr, np.ndarray)
+        image = image_arr * scan_cfg.intensity_scale
+        if scan_cfg.poisson_noise:
+            image = noise_rng.poisson(np.clip(image, a_min=0.0, a_max=None)).astype(float)
+
+        stem = f"{k:0{pad}d}"
+        np.save(output_dir / "im_data" / f"{stem}.npy", image)
+        if k < mc.n_png_previews:
+            _save_preview_png(image, output_dir / "images" / f"{stem}.png")
+
+        manifest_rows.append(
+            {
+                "sample_id": stem,
+                "n1_h": d1["plane"][0],
+                "n1_k": d1["plane"][1],
+                "n1_l": d1["plane"][2],
+                "b1_idx": d1["b_idx"],
+                "b1_h": int(round(d1["b_vec"][0])),
+                "b1_k": int(round(d1["b_vec"][1])),
+                "b1_l": int(round(d1["b_vec"][2])),
+                "alpha1_deg": d1["alpha_deg"],
+                "x1_um": d1["pos_um"][0],
+                "y1_um": d1["pos_um"][1],
+                "n2_h": d2["plane"][0],
+                "n2_k": d2["plane"][1],
+                "n2_l": d2["plane"][2],
+                "b2_idx": d2["b_idx"],
+                "b2_h": int(round(d2["b_vec"][0])),
+                "b2_k": int(round(d2["b_vec"][1])),
+                "b2_l": int(round(d2["b_vec"][2])),
+                "alpha2_deg": d2["alpha_deg"],
+                "x2_um": d2["pos_um"][0],
+                "y2_um": d2["pos_um"][1],
+                "image_path": f"im_data/{stem}.npy",
+            }
+        )
+
+    manifest_path = output_dir / "manifest.csv"
+    with open(manifest_path, "w", newline="") as fh:
+        if manifest_rows:
+            writer = csv.DictWriter(fh, fieldnames=list(manifest_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(manifest_rows)
+
+    return {"n_samples": mc.n_samples, "output_dir": output_dir, "manifest_path": manifest_path}
 
 
 if __name__ == "__main__":
