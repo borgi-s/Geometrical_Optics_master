@@ -50,6 +50,9 @@ beamstop-wire = [
 memory-aware = [
     "psutil>=5",
 ]
+identification = [
+    "plotly>=5",
+]
 
 [project.urls]
 Homepage = "https://github.com/borgi-s/Geometrical_Optics_master"
@@ -57,6 +60,7 @@ Paper = "https://journals.iucr.org/j/issues/2024/02/00/nb5370/"
 
 [project.scripts]
 dfxm-forward = "dfxm_geo.pipeline:cli_main"
+dfxm-identify = "dfxm_geo.pipeline:cli_main_identify"
 
 [tool.setuptools]
 # Transitional layout during Phase 4 cleanup. Both the new src/dfxm_geo/
