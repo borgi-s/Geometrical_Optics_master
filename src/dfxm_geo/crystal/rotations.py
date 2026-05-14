@@ -112,3 +112,25 @@ def rotate_matrix_z_axis(matrix: np.ndarray, angle_degrees: float) -> np.ndarray
         ]
     )
     return Rz @ matrix
+
+
+def is_valid_rotation_matrix(R: np.ndarray, *, atol: float = 1e-6) -> bool:
+    """Return True if R is a proper rotation matrix.
+
+    Validates ``det(R) ≈ 1`` and ``R @ R.T ≈ I`` within `atol`. Used by the
+    z-scan pipeline to fail early on a malformed Us (rather than producing
+    garbage Fg arrays).
+
+    Args:
+        R: Candidate 3x3 matrix.
+        atol: Absolute tolerance for the determinant and orthogonality
+            checks. Default 1e-6.
+
+    Returns:
+        True if R passes both checks; False otherwise.
+    """
+    if R.shape != (3, 3):
+        return False
+    if not np.isclose(np.linalg.det(R), 1.0, atol=atol):
+        return False
+    return bool(np.allclose(R @ R.T, np.identity(3), atol=atol))

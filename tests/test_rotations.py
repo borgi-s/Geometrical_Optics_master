@@ -3,7 +3,12 @@
 import numpy as np
 import pytest
 
-from dfxm_geo.crystal.rotations import fast_inverse2, rotate_matrix_z_axis, rotatedU
+from dfxm_geo.crystal.rotations import (
+    fast_inverse2,
+    is_valid_rotation_matrix,
+    rotate_matrix_z_axis,
+    rotatedU,
+)
 
 
 def _is_orthogonal(M: np.ndarray, atol: float = 1e-10) -> bool:
@@ -114,3 +119,38 @@ def test_rotate_matrix_z_axis_360_is_identity():
     """A 360° rotation returns to identity (within FP tolerance)."""
     M = np.array([[0.5, 0.1, 0.0], [0.2, 0.7, 0.0], [0.0, 0.0, 1.0]])
     np.testing.assert_allclose(rotate_matrix_z_axis(M, 360.0), M, atol=1e-12)
+
+
+def test_is_valid_rotation_matrix_accepts_identity():
+    assert is_valid_rotation_matrix(np.identity(3)) is True
+
+
+def test_is_valid_rotation_matrix_accepts_scipy_random_rotation():
+    """A scipy-generated random rotation is always valid."""
+    from scipy.spatial.transform import Rotation as R
+
+    M = R.random(random_state=0).as_matrix()
+    assert is_valid_rotation_matrix(M) is True
+
+
+def test_is_valid_rotation_matrix_rejects_scaled_identity():
+    """det != 1 → invalid."""
+    assert is_valid_rotation_matrix(2.0 * np.identity(3)) is False
+
+
+def test_is_valid_rotation_matrix_rejects_non_orthogonal():
+    """R @ R.T != I → invalid."""
+    M = np.array([[1.0, 0.5, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    assert is_valid_rotation_matrix(M) is False
+
+
+def test_is_valid_rotation_matrix_atol_kwarg():
+    """A slightly-non-orthogonal matrix is accepted if atol is loosened.
+
+    Uses a *symmetric* perturbation so M @ M.T - I has first-order entries
+    ~2e-4 (an antisymmetric perturbation cancels at first order and would
+    pass even at atol=1e-6).
+    """
+    M = np.identity(3) + 1e-4 * np.array([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    assert is_valid_rotation_matrix(M, atol=1e-3) is True
+    assert is_valid_rotation_matrix(M, atol=1e-6) is False
