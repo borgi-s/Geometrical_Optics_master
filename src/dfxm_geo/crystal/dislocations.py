@@ -231,6 +231,7 @@ def Fd_find_mixed(
     b: float = BURGERS_VECTOR,
     ny: float = POISSON_RATIO,
     position_lab_um: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    S: np.ndarray = _S_IDENTITY,
 ) -> np.ndarray:
     """Displacement gradient Fg for a single mixed-character dislocation.
 
@@ -276,6 +277,7 @@ def Fd_find_mixed(
         ny: Poisson ratio. Default `POISSON_RATIO` from constants.
         position_lab_um: Lab-frame offset (µm); shifts rl before transforming
             to dislocation coords so the core sits at this offset. Default 0.
+        S: 3x3 rotation matrix (sample-remount; default identity).
 
     Returns:
         Fg of shape (X, 3, 3) in the grain frame, with the identity added.
@@ -286,7 +288,8 @@ def Fd_find_mixed(
 
     # Eq. 8 of Borgi 2025: r_l = Θ^T · Us · Ud · r_d → r_d = Ud^T · Us^T · Θ · r_l.
     rs = Theta @ rl
-    rc = Us.T @ rs
+    rgon = S.T @ rs  # sample-remount (Purdue 2024); S = identity → rgon == rs
+    rc = Us.T @ rgon
     rd = Ud_mix.T @ rc
 
     Fdd = np.zeros([rd.shape[1], 3, 3])

@@ -177,3 +177,43 @@ def test_Fd_find_multi_empty_raises(identity_rotations, simple_rl_grid):
     Us, _, Theta = identity_rotations
     with pytest.raises(ValueError, match="at least one"):
         Fd_find_multi_dislocs_mixed(simple_rl_grid, Us, [], Theta)
+
+
+# --- Sample-remount (S) for mixed-character ---
+
+
+class TestFdFindMixedSampleRemount:
+    """Tests for the S kwarg on Fd_find_mixed (Purdue_Paper port)."""
+
+    def _inputs(self):
+        rl = np.linspace(-1.0, 1.0, 12).reshape(1, -1)
+        rl = np.vstack([rl, rl, rl])  # (3, 12)
+        Us = np.eye(3)
+        Theta = np.eye(3)
+        # Ud_mix: arbitrary proper rotation. Pick one whose columns are unit
+        # length (Eq.3 of Borgi 2025 takes (b, n, t) columns).
+        Ud_mix = np.array(
+            [
+                [1 / np.sqrt(2), 1 / np.sqrt(3), 1 / np.sqrt(6)],
+                [-1 / np.sqrt(2), 1 / np.sqrt(3), 1 / np.sqrt(6)],
+                [0, -1 / np.sqrt(3), 2 / np.sqrt(6)],
+            ]
+        )
+        return rl, Us, Ud_mix, Theta
+
+    def test_S_kwarg_default_matches_omitted(self) -> None:
+        from dfxm_geo.crystal.dislocations import Fd_find_mixed
+
+        rl, Us, Ud_mix, Theta = self._inputs()
+        without = Fd_find_mixed(rl, Us, Ud_mix, rotation_deg=30.0, Theta=Theta)
+        with_I = Fd_find_mixed(rl, Us, Ud_mix, rotation_deg=30.0, Theta=Theta, S=np.identity(3))
+        np.testing.assert_array_equal(without, with_I)
+
+    def test_S2_yields_distinct_output(self) -> None:
+        from dfxm_geo.crystal.dislocations import Fd_find_mixed
+        from dfxm_geo.crystal.remount import S2
+
+        rl, Us, Ud_mix, Theta = self._inputs()
+        with_I = Fd_find_mixed(rl, Us, Ud_mix, rotation_deg=30.0, Theta=Theta, S=np.identity(3))
+        with_S2 = Fd_find_mixed(rl, Us, Ud_mix, rotation_deg=30.0, Theta=Theta, S=S2)
+        assert not np.allclose(with_I, with_S2)
