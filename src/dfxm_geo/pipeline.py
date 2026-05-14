@@ -38,6 +38,7 @@ from dfxm_geo.crystal.dislocations import (
     Fd_find_multi_dislocs_mixed,
     MixedDislocSpec,
 )
+from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.images import load_images, save_images_parallel
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
@@ -47,6 +48,14 @@ from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 class CrystalConfig:
     dis: float = 4.0  # inter-dislocation distance (µm)
     ndis: int = 151  # number of dislocations
+    sample_remount: str = "S1"  # one of S1/S2/S3/S4; Purdue 2024 paper
+
+    def __post_init__(self) -> None:
+        if self.sample_remount not in SAMPLE_REMOUNT_OPTIONS:
+            valid = ", ".join(SAMPLE_REMOUNT_OPTIONS.keys())
+            raise ValueError(
+                f"sample_remount must be one of: {valid} (got {self.sample_remount!r})"
+            )
 
 
 @dataclass

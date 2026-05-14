@@ -92,6 +92,50 @@ class TestSimulationConfigFromToml:
             assert cfg.scan.phi_steps > 0, f"{path.name} has bad phi_steps"
 
 
+class TestCrystalConfigSampleRemount:
+    """Tests for the sample_remount field on CrystalConfig."""
+
+    def test_default_is_S1(self) -> None:
+        from dfxm_geo.pipeline import CrystalConfig
+
+        cfg = CrystalConfig()
+        assert cfg.sample_remount == "S1"
+
+    def test_accepts_S2_S3_S4(self) -> None:
+        from dfxm_geo.pipeline import CrystalConfig
+
+        for name in ("S2", "S3", "S4"):
+            cfg = CrystalConfig(sample_remount=name)
+            assert cfg.sample_remount == name
+
+    def test_rejects_unknown_remount(self) -> None:
+        from dfxm_geo.pipeline import CrystalConfig
+
+        with pytest.raises(ValueError, match="sample_remount must be one of"):
+            CrystalConfig(sample_remount="S99")
+
+    def test_toml_round_trip_with_sample_remount(self, tmp_path: Path) -> None:
+        """TOML containing sample_remount round-trips through SimulationConfig."""
+        from dfxm_geo.pipeline import SimulationConfig
+
+        toml_text = """
+[crystal]
+dis = 4.0
+ndis = 151
+sample_remount = "S3"
+
+[scan]
+phi_range = 0.05
+phi_steps = 5
+chi_range = 0.05
+chi_steps = 5
+"""
+        path = tmp_path / "cfg.toml"
+        path.write_text(toml_text)
+        cfg = SimulationConfig.from_toml(path)
+        assert cfg.crystal.sample_remount == "S3"
+
+
 class TestPostprocessConfigDefaults:
     def test_default_values(self) -> None:
         pc = PostprocessConfig()
