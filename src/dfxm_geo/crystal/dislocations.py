@@ -318,3 +318,52 @@ class MixedDislocSpec:
     Ud_mix: np.ndarray
     rotation_deg: float
     position_lab_um: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
+def Fd_find_multi_dislocs_mixed(
+    rl: np.ndarray,
+    Us: np.ndarray,
+    crystals: list[MixedDislocSpec],
+    Theta: np.ndarray,
+    *,
+    b: float = BURGERS_VECTOR,
+    ny: float = POISSON_RATIO,
+) -> np.ndarray:
+    """Sum of mixed-dislocation contributions from N crystals.
+
+    Generalises Eq. 1 of Borgi 2025 to multiple dislocations: each crystal's
+    screw+edge contributions are summed (no per-crystal identity), and the
+    identity is added once at the end. For N=1 this reduces to
+    ``Fd_find_mixed``; for N=2 it is the case used by the multi-disloc Monte
+    Carlo pipeline mode.
+
+    Args:
+        rl: Lab-frame coordinates, shape (3, X).
+        Us: Sample-to-grain rotation, shape (3, 3).
+        crystals: list of `MixedDislocSpec`, at least one.
+        Theta: Lab-to-sample rotation, shape (3, 3).
+        b: Burgers vector magnitude (µm).
+        ny: Poisson ratio.
+
+    Returns:
+        Fg of shape (X, 3, 3) in the grain frame, with the identity added once.
+    """
+    if not crystals:
+        raise ValueError("Fd_find_multi_dislocs_mixed requires at least one crystal")
+
+    I = np.identity(3)
+    Fg_sum = np.zeros((rl.shape[1], 3, 3))
+    for spec in crystals:
+        Fg_one = Fd_find_mixed(
+            rl,
+            Us,
+            Ud_mix=spec.Ud_mix,
+            rotation_deg=spec.rotation_deg,
+            Theta=Theta,
+            b=b,
+            ny=ny,
+            position_lab_um=spec.position_lab_um,
+        )
+        Fg_sum += Fg_one - I
+
+    return Fg_sum + I

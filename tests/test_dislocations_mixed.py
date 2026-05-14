@@ -11,7 +11,12 @@ import numpy as np
 import pytest
 
 from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
-from dfxm_geo.crystal.dislocations import Fd_find, Fd_find_mixed, MixedDislocSpec
+from dfxm_geo.crystal.dislocations import (
+    Fd_find,
+    Fd_find_mixed,
+    Fd_find_multi_dislocs_mixed,
+    MixedDislocSpec,
+)
 
 
 @pytest.fixture
@@ -131,3 +136,44 @@ def test_Fd_find_mixed_uses_module_constants_as_defaults(identity_rotations, sim
         ny=POISSON_RATIO,
     )
     np.testing.assert_array_equal(Fg_default, Fg_explicit)
+
+
+def test_Fd_find_multi_N1_matches_single(identity_rotations, simple_rl_grid):
+    """For one crystal, Fd_find_multi_dislocs_mixed must equal Fd_find_mixed."""
+    Us, Ud, Theta = identity_rotations
+    rl = simple_rl_grid
+
+    spec = MixedDislocSpec(Ud_mix=Ud, rotation_deg=37.0)
+    Fg_multi = Fd_find_multi_dislocs_mixed(rl, Us, [spec], Theta)
+    Fg_single = Fd_find_mixed(rl, Us, Ud_mix=Ud, rotation_deg=37.0, Theta=Theta)
+
+    np.testing.assert_allclose(Fg_multi, Fg_single, atol=1e-15, rtol=1e-12)
+
+
+def test_Fd_find_multi_N2_is_superposition(identity_rotations, simple_rl_grid):
+    """Two crystals: result = (Fdd1 - I) + (Fdd2 - I) + I."""
+    Us, Ud, Theta = identity_rotations
+    rl = simple_rl_grid
+
+    spec1 = MixedDislocSpec(Ud_mix=Ud, rotation_deg=10.0, position_lab_um=(1.0, 0.0, 0.0))
+    spec2 = MixedDislocSpec(Ud_mix=Ud, rotation_deg=80.0, position_lab_um=(-1.0, 0.0, 0.0))
+
+    Fg_multi = Fd_find_multi_dislocs_mixed(rl, Us, [spec1, spec2], Theta)
+
+    Fg1 = Fd_find_mixed(
+        rl, Us, Ud_mix=Ud, rotation_deg=10.0, Theta=Theta, position_lab_um=(1.0, 0.0, 0.0)
+    )
+    Fg2 = Fd_find_mixed(
+        rl, Us, Ud_mix=Ud, rotation_deg=80.0, Theta=Theta, position_lab_um=(-1.0, 0.0, 0.0)
+    )
+    I = np.identity(3)
+    expected = (Fg1 - I) + (Fg2 - I) + I
+
+    np.testing.assert_allclose(Fg_multi, expected, atol=1e-15, rtol=1e-12)
+
+
+def test_Fd_find_multi_empty_raises(identity_rotations, simple_rl_grid):
+    """Empty crystals list is a programmer error — fail loudly."""
+    Us, _, Theta = identity_rotations
+    with pytest.raises(ValueError, match="at least one"):
+        Fd_find_multi_dislocs_mixed(simple_rl_grid, Us, [], Theta)
