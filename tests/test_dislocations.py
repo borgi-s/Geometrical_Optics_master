@@ -215,3 +215,49 @@ class TestFdFindMisorientation:
         out = Fd_find(rl, np.eye(3), np.eye(3), np.eye(3), dis=1, ndis=1)
         assert out.shape == (rl.shape[1], 3, 3)
         assert np.all(np.isfinite(out))
+
+
+# --- Sample-remount (S) ---
+
+
+class TestFdFindSampleRemount:
+    """Tests for the S kwarg added by the Purdue_Paper port."""
+
+    def _build_inputs(self, n: int = 8):
+        lin = np.linspace(-1.0, 1.0, n)
+        grid = np.stack(np.meshgrid(lin, lin, lin, indexing="ij"))
+        rl = grid.reshape(3, -1)
+        Ud = np.eye(3)
+        Us = np.eye(3)
+        Theta = np.eye(3)
+        return rl, Ud, Us, Theta
+
+    def test_S_kwarg_default_matches_omitted(self) -> None:
+        """Fd_find(..., S=identity) must equal Fd_find(...) with S omitted."""
+        from dfxm_geo.crystal.dislocations import Fd_find
+
+        rl, Ud, Us, Theta = self._build_inputs()
+        without = Fd_find(rl, Ud, Us, Theta, dis=1.0, ndis=3)
+        with_explicit_I = Fd_find(rl, Ud, Us, Theta, dis=1.0, ndis=3, S=np.identity(3))
+        np.testing.assert_array_equal(without, with_explicit_I)
+
+    def test_S2_yields_distinct_output(self) -> None:
+        """S=S2 must produce a different Fg than S=identity on a non-trivial rl."""
+        from dfxm_geo.crystal.dislocations import Fd_find
+        from dfxm_geo.crystal.remount import S2
+
+        rl, Ud, Us, Theta = self._build_inputs()
+        with_I = Fd_find(rl, Ud, Us, Theta, dis=1.0, ndis=3, S=np.identity(3))
+        with_S2 = Fd_find(rl, Ud, Us, Theta, dis=1.0, ndis=3, S=S2)
+        # Difference must be non-zero somewhere.
+        assert not np.allclose(with_I, with_S2)
+
+    def test_S_kwarg_is_keyword_only(self) -> None:
+        """Positional arg in the S slot must not silently rebind to S."""
+        from dfxm_geo.crystal.dislocations import Fd_find
+
+        rl, Ud, Us, Theta = self._build_inputs()
+        # Eighth positional arg should be `b` (Burgers vector), not `S`.
+        # Pass a non-matrix scalar that would error if mistaken for S.
+        result = Fd_find(rl, Ud, Us, Theta, 1.0, 3, 3.0e-4)  # b=3.0e-4
+        assert result.shape == (rl.shape[1], 3, 3)

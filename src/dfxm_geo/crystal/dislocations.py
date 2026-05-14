@@ -17,6 +17,10 @@ from numba import jit
 
 from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
 
+# Module-level identity used as the default for the S kwarg in Fd_find.
+# Defined here (not inline) to satisfy ruff B008 (no function calls in defaults).
+_S_IDENTITY: np.ndarray = np.identity(3)
+
 
 @jit(nopython=True, fastmath=True, cache=True)
 def _accumulate_bipolar_walls(
@@ -117,6 +121,8 @@ def Fd_find(
     ny: float = POISSON_RATIO,
     misorientation: bool = False,
     t_vec: np.ndarray | None = None,
+    *,
+    S: np.ndarray = _S_IDENTITY,
 ) -> np.ndarray:
     """Calculate the displacement gradient field for an edge-dislocation wall.
 
@@ -132,6 +138,7 @@ def Fd_find(
         misorientation: If True, branch into the misorientation path
             (sets up split sample-space rotations U_sr / U_sl).
         t_vec: Tangent vector, required if `misorientation` is True.
+        S: 3x3 rotation matrix (sample-remount; default identity).
 
     Returns:
         ndarray of shape (X, 3, 3): Fg in grain space.
@@ -153,7 +160,8 @@ def Fd_find(
         )
 
     rs = Theta @ rl
-    rc = Us.T @ rs
+    rgon = S.T @ rs  # sample-remount (Purdue 2024); S = identity → rgon == rs
+    rc = Us.T @ rgon
     rd = Ud.T @ rc
 
     Fdd = np.zeros([len(rd[-1]), 3, 3])
