@@ -1,0 +1,32 @@
+# dfxm-identify: deterministic single-dislocation sweep
+#
+# Reproduces the test set of Borgi 2025 (J. Appl. Cryst. 58, 813-821):
+#   4 slip planes × 6 Burgers vectors × 36 line directions = 864 images,
+#   840 after excluding 24 near-invisibility (G·b ≈ 0) configurations.
+#
+# Override on the CLI with: dfxm-identify --config ... --output ... --mode ...
+
+mode = "single"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]      # starting plane; sweep_all_slip_planes overrides
+angle_start_deg = 0.0
+angle_stop_deg = 350.0
+angle_step_deg = 10.0
+# b_vector_indices = [0, 1, 2, 3, 4, 5]  # uncomment to restrict; default = all
+sweep_all_slip_planes = true
+exclude_invisibility = true
+invisibility_threshold_deg = 10.0
+
+[scan]
+phi_rad = 1.5e-4                   # 8 × 10⁻⁴° ≈ 1.4e-4 rad in Borgi 2025
+poisson_noise = true
+rng_seed = 0
+intensity_scale = 7.0              # branch source's `* 7` multiplier
+
+[io]
+fn_prefix = "/mosa_test_0000_"     # unused for dfxm-identify but IOConfig requires
+ftype = ".npy"
+dislocs_dirname = "identify"
+perfect_dirname = "ignored"
+include_perfect_crystal = false

@@ -1,5 +1,7 @@
 """Unit tests for dfxm-identify pipeline shape."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -374,3 +376,21 @@ include_perfect_crystal = false
     exit_code = cli_main_identify(["--config", str(cfg_path), "--output", str(out_dir)])
     assert exit_code == 0
     assert (out_dir / "manifest.csv").is_file()
+
+
+def test_example_single_config_loads():
+    """configs/identification_single.toml parses and validates."""
+    repo_root = Path(__file__).resolve().parents[1]
+    cfg = load_identification_config(repo_root / "configs" / "identification_single.toml")
+    assert cfg.mode == "single"
+    assert cfg.crystal.sweep_all_slip_planes is True
+    assert cfg.crystal.exclude_invisibility is True
+
+
+def test_example_multi_config_loads():
+    """configs/identification_multi.toml parses and validates."""
+    repo_root = Path(__file__).resolve().parents[1]
+    cfg = load_identification_config(repo_root / "configs" / "identification_multi.toml")
+    assert cfg.mode == "multi"
+    assert cfg.multi is not None
+    assert cfg.multi.n_samples == 1000

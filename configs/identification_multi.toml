@@ -1,0 +1,30 @@
+# dfxm-identify: Monte Carlo over 2 random dislocations per image.
+#
+# Forward-looking extension beyond Borgi 2025; intended for ML-training-data
+# generation. Each sample image contains two mixed-character dislocations
+# with independently drawn (slip plane, Burgers vector, rotation angle,
+# in-plane position). The manifest.csv carries per-image ground-truth labels.
+
+mode = "multi"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]      # ignored in mode='multi'; required by validation
+# angle_*_deg and b_vector_indices are also unused in 'multi' mode
+
+[scan]
+phi_rad = 1.5e-4
+poisson_noise = true
+rng_seed = 0
+intensity_scale = 7.0
+
+[multi]
+n_samples = 1000
+pos_std_um = 5.0                   # std of in-plane (x, y) draws
+n_png_previews = 50                # write PNGs only for first N samples
+
+[io]
+fn_prefix = "/mosa_test_0000_"
+ftype = ".npy"
+dislocs_dirname = "identify_multi"
+perfect_dirname = "ignored"
+include_perfect_crystal = false
