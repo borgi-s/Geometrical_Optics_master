@@ -217,3 +217,33 @@ class TestFdFindMixedSampleRemount:
         with_I = Fd_find_mixed(rl, Us, Ud_mix, rotation_deg=30.0, Theta=Theta, S=np.identity(3))
         with_S2 = Fd_find_mixed(rl, Us, Ud_mix, rotation_deg=30.0, Theta=Theta, S=S2)
         assert not np.allclose(with_I, with_S2)
+
+
+class TestFdFindMultiDislocsMixedSampleRemount:
+    def test_S2_threads_through_to_inner_Fd_find_mixed(self) -> None:
+        """Fd_find_multi_dislocs_mixed(S=S2) must differ from S=I."""
+        from dfxm_geo.crystal.dislocations import (
+            Fd_find_multi_dislocs_mixed,
+            MixedDislocSpec,
+        )
+        from dfxm_geo.crystal.remount import S2
+
+        rl = np.linspace(-1.0, 1.0, 12).reshape(1, -1)
+        rl = np.vstack([rl, rl, rl])
+        Us = np.eye(3)
+        Theta = np.eye(3)
+        Ud_mix = np.array(
+            [
+                [1 / np.sqrt(2), 1 / np.sqrt(3), 1 / np.sqrt(6)],
+                [-1 / np.sqrt(2), 1 / np.sqrt(3), 1 / np.sqrt(6)],
+                [0, -1 / np.sqrt(3), 2 / np.sqrt(6)],
+            ]
+        )
+        specs = [
+            MixedDislocSpec(Ud_mix=Ud_mix, rotation_deg=30.0),
+            MixedDislocSpec(Ud_mix=Ud_mix, rotation_deg=60.0, position_lab_um=(1.0, 0.0, 0.0)),
+        ]
+
+        with_I = Fd_find_multi_dislocs_mixed(rl, Us, specs, Theta, S=np.identity(3))
+        with_S2 = Fd_find_multi_dislocs_mixed(rl, Us, specs, Theta, S=S2)
+        assert not np.allclose(with_I, with_S2)

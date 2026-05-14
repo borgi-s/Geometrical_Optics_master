@@ -351,6 +351,7 @@ def Fd_find_multi_dislocs_mixed(
     *,
     b: float = BURGERS_VECTOR,
     ny: float = POISSON_RATIO,
+    S: np.ndarray = _S_IDENTITY,
 ) -> np.ndarray:
     """Sum of mixed-dislocation contributions from N crystals.
 
@@ -367,6 +368,7 @@ def Fd_find_multi_dislocs_mixed(
         Theta: Lab-to-sample rotation, shape (3, 3).
         b: Burgers vector magnitude (µm).
         ny: Poisson ratio.
+        S: 3x3 rotation matrix (sample-remount; default identity).
 
     Returns:
         Fg of shape (X, 3, 3) in the grain frame, with the identity added once.
@@ -386,6 +388,7 @@ def Fd_find_multi_dislocs_mixed(
             b=b,
             ny=ny,
             position_lab_um=spec.position_lab_um,
+            S=S,
         )
         Fg_sum += Fg_one - I
 
