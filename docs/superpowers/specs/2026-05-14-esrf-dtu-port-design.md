@@ -240,7 +240,9 @@ No new required or optional deps. Matplotlib (used by `viz/sample.py`) is alread
 
 ## Configs
 
-`configs/identification_zscan.toml` (sane defaults for a single z-stack at ID06):
+`configs/identification_zscan.toml` (sane defaults for a single z-stack at ID06).
+
+**Before a real run:** flip `Nsub = 2 → 1` in `src/dfxm_geo/direct_space/forward_model.py:42` for ~8× faster per-image forward calls. `Nsub = 1` is the typical real-run choice; the cleanup default of 2 is preserved as the publication-quality setting from Borgi 2024/2025 (see Risk #8).
 
 ```toml
 mode = "z-scan"
@@ -285,4 +287,5 @@ include_perfect_crystal = false
 4. **g·b filter** is shared with single mode's invisibility filter from Round 16. We reuse `_passes_invisibility`. No new physics.
 5. **`Z_shift` shadows the existing module-level `rl`.** Each call returns a fresh array; the module's `rl` is unchanged. Callers that do `fm.rl = Z_shift(...)` are mutating module state — acceptable here because z-scan is the only place we do it, but worth noting in the docstring.
 6. **`euler_matrix` is not a deep abstraction.** It's used once in `viz/sample.py` for drawing the rotated crystal. Don't promote it to `dfxm_geo.crystal.rotations` unless a second caller appears.
-7. **Storage size of a real z-scan run.** 5 layers × 4 planes × 6 b × 36 α × 61 × 61 ≈ 16 M images at the canonical Nsub=2 size; multi-GB. We don't enforce a max; the user is on the hook for `--output` cleanup. Worth a one-line warning in `_run_identification_zscan` printing the projected count after the invisibility filter.
+7. **Storage size of a real z-scan run.** 5 layers × 4 planes × 6 b × 36 α × 61 × 61 ≈ 16 M `.npy` files; multi-GB. We don't enforce a max; the user is on the hook for `--output` cleanup. Worth a one-line warning in `_run_identification_zscan` printing the projected image count after the invisibility filter so the user can sanity-check before kicking off.
+8. **Nsub = 1 is the typical real-run choice** (per user, 2026-05-14). The cleanup's default `Nsub = 2` is preserved as the publication-quality setting (matches Borgi 2024 / Borgi 2025), but day-to-day workflows and ESRF z-scans almost always run at `Nsub = 1` for ~8× faster per-image forward calls. The example `configs/identification_zscan.toml` doesn't change `Nsub` (it's a module-level constant, not config-driven — see Risk #1), so the user is expected to manually flip `Nsub = 1` in `src/dfxm_geo/direct_space/forward_model.py` before a real run. Document this in the example config's preamble. The eventual runtime-configurable-reflection refactor (Risk #1) should also make `Nsub` config-driven; same blocker.
