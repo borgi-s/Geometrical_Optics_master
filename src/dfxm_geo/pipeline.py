@@ -142,6 +142,25 @@ class IdentificationMonteCarloConfig:
 
 
 @dataclass(frozen=True, kw_only=True)
+class IdentificationZScanConfig:
+    """z-scan mode parameters (mode='z-scan' only).
+
+    Each (z_layer, b, α) configuration produces a (phi_steps × chi_steps)
+    rocking-curve stack on disk, with a randomly-drawn secondary
+    dislocation if `include_secondary` is True. The secondary is drawn
+    once per (z, b, α) and shared across the rocking grid.
+    """
+
+    z_offsets_um: list[float]
+    phi_range_deg: float
+    phi_steps: int
+    chi_range_deg: float
+    chi_steps: int
+    include_secondary: bool = True
+    secondary_rng_offset: int = 1
+
+
+@dataclass(frozen=True, kw_only=True)
 class IdentificationConfig:
     """Top-level config for dfxm-identify.
 
