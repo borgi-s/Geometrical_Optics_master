@@ -394,3 +394,63 @@ def test_example_multi_config_loads():
     assert cfg.mode == "multi"
     assert cfg.multi is not None
     assert cfg.multi.n_samples == 1000
+
+
+def test_dfxm_identify_cli_end_to_end(tmp_path):
+    """Invoke `dfxm-identify` via subprocess on a tiny config; confirm exit 0.
+
+    Skipped if the default Resq_i kernel pickle is missing (CI runners
+    without the pickle just skip; local dev with the pickle exercises the
+    full forward call).
+    """
+    import subprocess
+    import sys as _sys
+
+    repo_root = Path(__file__).resolve().parents[1]
+    pkl = repo_root / "reciprocal_space" / "pkl_files" / "Resq_i_20230913_1308.pkl"
+    if not pkl.is_file():
+        pytest.skip(f"kernel pickle missing: {pkl}")
+
+    toml_text = """
+mode = "single"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]
+angle_start_deg = 0.0
+angle_stop_deg = 0.0
+angle_step_deg = 10.0
+b_vector_indices = [0]
+sweep_all_slip_planes = false
+exclude_invisibility = false
+
+[scan]
+phi_rad = 1.5e-4
+poisson_noise = false
+rng_seed = 0
+intensity_scale = 1.0
+
+[io]
+fn_prefix = "/mosa_test_0000_"
+ftype = ".npy"
+dislocs_dirname = "identify"
+perfect_dirname = "ignored"
+include_perfect_crystal = false
+"""
+    cfg_path = tmp_path / "smoke.toml"
+    cfg_path.write_text(toml_text)
+    out_dir = tmp_path / "out"
+
+    result = subprocess.run(
+        [
+            _sys.executable,
+            "-c",
+            "from dfxm_geo.pipeline import cli_main_identify; "
+            f"raise SystemExit(cli_main_identify(['--config', r'{cfg_path}', '--output', r'{out_dir}']))",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    npys = list((out_dir / "n_1_1_1" / "im_data").glob("*.npy"))
+    assert len(npys) == 1
