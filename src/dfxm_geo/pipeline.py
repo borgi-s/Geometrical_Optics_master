@@ -19,12 +19,13 @@ import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.analysis.mosaicity import compute_chi_shift, compute_com_maps
+from dfxm_geo.crystal.burgers import burgers_vectors as _burgers_vectors
 from dfxm_geo.io.images import load_images, save_images_parallel
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
@@ -125,6 +126,32 @@ class IdentificationMonteCarloConfig:
     n_samples: int = 1000
     pos_std_um: float = 5.0
     n_png_previews: int = 50
+
+
+@dataclass(frozen=True, kw_only=True)
+class IdentificationConfig:
+    """Top-level config for dfxm-identify.
+
+    Validates mode/multi/slip-plane consistency in __post_init__.
+    """
+
+    mode: Literal["single", "multi"]
+    crystal: IdentificationCrystalConfig
+    scan: IdentificationScanConfig
+    io: IOConfig
+    multi: IdentificationMonteCarloConfig | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("single", "multi"):
+            raise ValueError(f"mode must be 'single' or 'multi', got {self.mode!r}")
+        if self.mode == "multi" and self.multi is None:
+            raise ValueError("mode='multi' requires a `multi` config block")
+        # Validate the slip plane against the {111} family (also used in 'multi'
+        # mode as the starting / fallback plane).
+        try:
+            _burgers_vectors(self.crystal.slip_plane_normal)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 def _ensure_kernel_loaded() -> None:
