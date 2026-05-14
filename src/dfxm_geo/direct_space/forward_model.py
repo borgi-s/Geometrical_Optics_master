@@ -22,6 +22,10 @@ import numpy as np
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
+# Module-level default for the sample-remount rotation matrix.
+# Defined here to avoid cross-module imports and satisfy ruff-B008.
+_S_IDENTITY: np.ndarray = np.identity(3)
+
 # Repo root: the directory containing pyproject.toml. Derived from this
 # file's location (src/dfxm_geo/direct_space/forward_model.py → 4 levels up).
 # Previously this was inferred from sys.path[0], which silently broke when
@@ -124,6 +128,9 @@ def Find_Hg(
     h: int = -1,
     k: int = 1,
     l: int = -1,
+    *,
+    S: np.ndarray = _S_IDENTITY,
+    remount_name: str = "S1",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the displacement gradient field Hg and reciprocal vector q_hkl.
 
@@ -137,6 +144,8 @@ def Find_Hg(
         psize: Detector pixel size (m).
         zl_rms: RMS of the beam profile in zl (m).
         h, k, l: Miller indices of the active reflection.
+        S: 3x3 sample-remount rotation (default identity).
+        remount_name: Name used in the Fg cache filename (default "S1").
 
     Returns:
         (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
@@ -153,15 +162,16 @@ def Find_Hg(
         _REPO_ROOT
         / "direct_space"
         / "deformation_gradient_tensors"
-        / "Fg_{}_{}nm_{}nm_px{}_sub{}.npy".format(
+        / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}.npy".format(
             str(dis).replace(".", ""),
             int(psize * 1e9),
             int(zl_rms * 2.35e9),
             Npixels,
             Nsub,
+            remount_name,
         )
     )
-    Hg = load_or_generate_Hg(rl, Ud, Us, Theta, dis, ndis, Fg_path)
+    Hg = load_or_generate_Hg(rl, Ud, Us, Theta, dis, ndis, Fg_path, S=S)
 
     if not os.path.exists(Fg_path.replace(".npy", "_vars.txt")):
         vars = {
@@ -177,6 +187,8 @@ def Find_Hg(
             "ndis": ndis,
             "dis [micrometer]": dis,
             "q_hkl": q_hkl.tolist(),
+            "S_remount_name": remount_name,
+            "S_remount_matrix": S.tolist(),
         }
 
         with open(Fg_path.replace(".npy", "_vars.txt"), "w") as data:
