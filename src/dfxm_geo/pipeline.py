@@ -164,20 +164,27 @@ class IdentificationZScanConfig:
 class IdentificationConfig:
     """Top-level config for dfxm-identify.
 
-    Validates mode/multi/slip-plane consistency in __post_init__.
+    Validates mode / sub-config / slip-plane consistency in __post_init__.
     """
 
-    mode: Literal["single", "multi"]
+    mode: Literal["single", "multi", "z-scan"]
     crystal: IdentificationCrystalConfig
     scan: IdentificationScanConfig
     io: IOConfig
     multi: IdentificationMonteCarloConfig | None = None
+    zscan: IdentificationZScanConfig | None = None
 
     def __post_init__(self) -> None:
-        if self.mode not in ("single", "multi"):
-            raise ValueError(f"mode must be 'single' or 'multi', got {self.mode!r}")
+        if self.mode not in ("single", "multi", "z-scan"):
+            raise ValueError(f"mode must be 'single', 'multi', or 'z-scan', got {self.mode!r}")
         if self.mode == "multi" and self.multi is None:
             raise ValueError("mode='multi' requires a `multi` config block")
+        if self.mode == "z-scan" and self.zscan is None:
+            raise ValueError("mode='z-scan' requires a `zscan` config block")
+        if self.mode in ("single", "multi") and self.zscan is not None:
+            raise ValueError(
+                f"mode={self.mode!r}: zscan config block is only valid in mode='z-scan'"
+            )
         # Validate the slip plane against the {111} family (also used in 'multi'
         # mode as the starting / fallback plane).
         try:

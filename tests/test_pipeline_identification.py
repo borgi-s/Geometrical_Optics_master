@@ -487,3 +487,70 @@ def test_identification_zscan_config_is_frozen():
     )
     with pytest.raises(FrozenInstanceError):
         cfg.phi_steps = 21  # type: ignore[misc]
+
+
+def _tiny_zscan_config(slip_plane=(1, 1, 1)):
+    from dfxm_geo.pipeline import IdentificationZScanConfig
+
+    return IdentificationConfig(
+        mode="z-scan",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=slip_plane,
+            angle_start_deg=0.0,
+            angle_stop_deg=0.0,
+            angle_step_deg=10.0,
+            b_vector_indices=[0],
+            sweep_all_slip_planes=False,
+            exclude_invisibility=False,
+        ),
+        scan=IdentificationScanConfig(rng_seed=0, intensity_scale=1.0),
+        zscan=IdentificationZScanConfig(
+            z_offsets_um=[0.0],
+            phi_range_deg=0.03,
+            phi_steps=2,
+            chi_range_deg=0.1,
+            chi_steps=2,
+            include_secondary=False,
+        ),
+        io=_make_io_config(),
+    )
+
+
+def test_identification_config_mode_zscan_ok():
+    cfg = _tiny_zscan_config()
+    assert cfg.mode == "z-scan"
+    assert cfg.zscan is not None
+    assert cfg.multi is None
+
+
+def test_identification_config_mode_zscan_requires_zscan_block():
+    from dfxm_geo.pipeline import IdentificationZScanConfig  # noqa: F401
+
+    with pytest.raises(ValueError, match="mode='z-scan'"):
+        IdentificationConfig(
+            mode="z-scan",
+            crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
+            scan=IdentificationScanConfig(),
+            zscan=None,
+            io=_make_io_config(),
+        )
+
+
+def test_identification_config_mode_single_rejects_zscan_block():
+    """Passing a zscan block in single mode is a config error (clarity)."""
+    from dfxm_geo.pipeline import IdentificationZScanConfig
+
+    with pytest.raises(ValueError, match="single|multi.*zscan"):
+        IdentificationConfig(
+            mode="single",
+            crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
+            scan=IdentificationScanConfig(),
+            zscan=IdentificationZScanConfig(
+                z_offsets_um=[0.0],
+                phi_range_deg=0.03,
+                phi_steps=2,
+                chi_range_deg=0.1,
+                chi_steps=2,
+            ),
+            io=_make_io_config(),
+        )
