@@ -903,10 +903,12 @@ def run_identification(
     config: IdentificationConfig,
     output_dir: Path,
 ) -> dict[str, Any]:
-    """Dispatch to single or multi runner based on config.mode."""
+    """Dispatch to single / multi / z-scan runner based on config.mode."""
     if config.mode == "single":
         return _run_identification_single(config, output_dir)
-    return _run_identification_multi(config, output_dir)
+    if config.mode == "multi":
+        return _run_identification_multi(config, output_dir)
+    return _run_identification_zscan(config, output_dir)
 
 
 def cli_main_identify(argv: list[str] | None = None) -> int:
@@ -918,7 +920,7 @@ def cli_main_identify(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True, help="Output directory")
     parser.add_argument(
         "--mode",
-        choices=["single", "multi"],
+        choices=["single", "multi", "z-scan"],
         default=None,
         help="Override the config's mode field",
     )
@@ -934,8 +936,10 @@ def cli_main_identify(argv: list[str] | None = None) -> int:
     result = run_identification(cfg, args.output)
     if cfg.mode == "single":
         print(f"Wrote {result['n_images']} images to {result['output_dir']}")
-    else:
+    elif cfg.mode == "multi":
         print(f"Wrote {result['n_samples']} samples to {result['output_dir']}")
+    else:  # z-scan
+        print(f"Wrote {result['n_configurations']} configurations to {result['output_dir']}")
     return 0
 
 

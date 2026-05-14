@@ -668,3 +668,70 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
     m1 = (out1 / "manifest.csv").read_text()
     m2 = (out2 / "manifest.csv").read_text()
     assert m1 == m2
+
+
+def test_run_identification_dispatches_to_zscan(tmp_path, monkeypatch):
+    """run_identification dispatches mode='z-scan' to _run_identification_zscan."""
+    import numpy as np
+
+    import dfxm_geo.direct_space.forward_model as fm
+
+    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
+    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
+    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+
+    cfg = _tiny_zscan_config()
+    result = run_identification(cfg, tmp_path / "out")
+    assert "n_configurations" in result
+
+
+def test_cli_main_identify_zscan_mode(tmp_path, monkeypatch):
+    """The CLI accepts --mode z-scan and produces a manifest."""
+    import numpy as np
+
+    import dfxm_geo.direct_space.forward_model as fm
+
+    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
+    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
+    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+
+    toml_text = """
+mode = "z-scan"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]
+angle_start_deg = 0.0
+angle_stop_deg = 0.0
+angle_step_deg = 10.0
+b_vector_indices = [0]
+sweep_all_slip_planes = false
+exclude_invisibility = false
+
+[scan]
+phi_rad = 1.5e-4
+poisson_noise = false
+rng_seed = 0
+intensity_scale = 1.0
+
+[zscan]
+z_offsets_um = [0.0]
+phi_range_deg = 0.03
+phi_steps = 2
+chi_range_deg = 0.1
+chi_steps = 2
+include_secondary = false
+
+[io]
+fn_prefix = "/mosa_test_0000_"
+ftype = ".npy"
+dislocs_dirname = "identify_zscan"
+perfect_dirname = "ignored"
+include_perfect_crystal = false
+"""
+    cfg_path = tmp_path / "zscan.toml"
+    cfg_path.write_text(toml_text)
+    out_dir = tmp_path / "out"
+
+    exit_code = cli_main_identify(["--config", str(cfg_path), "--output", str(out_dir)])
+    assert exit_code == 0
+    assert (out_dir / "manifest.csv").is_file()
