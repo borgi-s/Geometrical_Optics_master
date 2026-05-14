@@ -225,6 +225,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     multi = (
         IdentificationMonteCarloConfig(**data["multi"]) if data.get("multi") is not None else None
     )
+    zscan = IdentificationZScanConfig(**data["zscan"]) if data.get("zscan") is not None else None
 
     return IdentificationConfig(
         mode=data["mode"],
@@ -232,6 +233,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         scan=scan,
         io=io,
         multi=multi,
+        zscan=zscan,
     )
 
 

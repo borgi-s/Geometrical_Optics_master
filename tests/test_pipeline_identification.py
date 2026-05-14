@@ -554,3 +554,44 @@ def test_identification_config_mode_single_rejects_zscan_block():
             ),
             io=_make_io_config(),
         )
+
+
+def test_load_identification_config_zscan(tmp_path):
+    """A mode='z-scan' TOML round-trips, including the [zscan] block."""
+    toml_text = """
+mode = "z-scan"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]
+
+[scan]
+phi_rad = 1.5e-4
+rng_seed = 7
+
+[zscan]
+z_offsets_um = [-1.0, 0.0, 1.0]
+phi_range_deg = 0.03
+phi_steps = 21
+chi_range_deg = 0.1
+chi_steps = 21
+include_secondary = true
+secondary_rng_offset = 2
+
+[io]
+fn_prefix = "/mosa_test_0000_"
+ftype = ".npy"
+dislocs_dirname = "identify_zscan"
+perfect_dirname = "ignored"
+include_perfect_crystal = false
+"""
+    cfg_path = tmp_path / "id_zscan.toml"
+    cfg_path.write_text(toml_text)
+
+    cfg = load_identification_config(cfg_path)
+    assert cfg.mode == "z-scan"
+    assert cfg.zscan is not None
+    assert cfg.zscan.z_offsets_um == [-1.0, 0.0, 1.0]
+    assert cfg.zscan.phi_steps == 21
+    assert cfg.zscan.include_secondary is True
+    assert cfg.zscan.secondary_rng_offset == 2
+    assert cfg.scan.rng_seed == 7
