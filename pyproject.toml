@@ -114,6 +114,7 @@ module = [
     "scipy.*",
     "xraylib",
     "psutil",
+    "plotly.*",
 ]
 ignore_missing_imports = true
 
