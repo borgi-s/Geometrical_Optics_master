@@ -9,6 +9,7 @@ Public functions:
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 
 import numpy as np
 from joblib import cpu_count
@@ -210,3 +211,22 @@ def Fd_find(
     Fdd *= bfactor
     Fdd += np.identity(3)
     return Ud @ Fdd @ Ud.T
+
+
+@dataclass(frozen=True)
+class MixedDislocSpec:
+    """Specification for one mixed-character dislocation.
+
+    Attributes:
+        Ud_mix: Rotation matrix from dislocation to grain frame (Eq. 3 of
+            Borgi 2025), shape (3, 3). Columns are (b, n, t) basis vectors.
+        rotation_deg: Rotation angle (degrees) of the line direction `t`
+            around the slip-plane normal `n`, starting from `t_0 = b × n`.
+            See `Fd_find_mixed` docstring for the relation to the paper's α.
+        position_lab_um: Lab-frame offset (µm) applied to ``rl`` so the
+            dislocation core sits at the given (x, y, z). Default (0, 0, 0).
+    """
+
+    Ud_mix: np.ndarray
+    rotation_deg: float
+    position_lab_um: tuple[float, float, float] = field(default=(0.0, 0.0, 0.0))
