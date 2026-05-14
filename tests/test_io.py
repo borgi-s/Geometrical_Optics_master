@@ -389,3 +389,51 @@ def test_save_image_does_not_misunpack_forward(tmp_path, monkeypatch):
     assert out_file.is_file()
     loaded = np.load(out_file)
     np.testing.assert_array_equal(loaded, expected_array)
+
+
+class TestLoadOrGenerateHgSampleRemount:
+    """The S kwarg threads through to Fd_find, producing different Fg."""
+
+    def _rl(self, n: int = 8) -> np.ndarray:
+        lin = np.linspace(-1.0, 1.0, n)
+        grid = np.stack(np.meshgrid(lin, lin, lin, indexing="ij"))
+        return grid.reshape(3, -1)
+
+    def test_S_kwarg_default_matches_omitted(self, rotation_matrices, tmp_path) -> None:
+        """Calling with S=identity must equal calling without S."""
+        from dfxm_geo.io.strain_cache import load_or_generate_Hg
+
+        rl = self._rl()
+        Ud, Us, Theta = rotation_matrices
+
+        path_a = str(tmp_path / "fg_a.npy")
+        path_b = str(tmp_path / "fg_b.npy")
+
+        Hg_omitted = load_or_generate_Hg(rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=path_a)
+        Hg_with_I = load_or_generate_Hg(
+            rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=path_b, S=np.identity(3)
+        )
+        np.testing.assert_array_equal(Hg_omitted, Hg_with_I)
+
+    def test_S2_yields_distinct_Hg(self, rotation_matrices, tmp_path) -> None:
+        """S=S2 must produce a different Hg than S=identity on the same inputs."""
+        from dfxm_geo.crystal.remount import S2
+        from dfxm_geo.io.strain_cache import load_or_generate_Hg
+
+        rl = self._rl()
+        Ud, Us, Theta = rotation_matrices
+
+        Hg_I = load_or_generate_Hg(
+            rl, Ud, Us, Theta, dis=1.0, ndis=3, file_path=str(tmp_path / "fg_I.npy")
+        )
+        Hg_S2 = load_or_generate_Hg(
+            rl,
+            Ud,
+            Us,
+            Theta,
+            dis=1.0,
+            ndis=3,
+            file_path=str(tmp_path / "fg_S2.npy"),
+            S=S2,
+        )
+        assert not np.allclose(Hg_I, Hg_S2)

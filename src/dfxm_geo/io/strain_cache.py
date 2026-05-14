@@ -5,6 +5,10 @@ import numpy as np
 from dfxm_geo.crystal.dislocations import Fd_find
 from dfxm_geo.crystal.rotations import fast_inverse2
 
+# Module-level identity used as the default for the S kwarg in load_or_generate_Hg.
+# Defined here (not inline) to satisfy ruff B008 (no function calls in defaults).
+_S_IDENTITY: np.ndarray = np.identity(3)
+
 
 def load_or_generate_Hg(
     rl: np.ndarray,
@@ -14,6 +18,8 @@ def load_or_generate_Hg(
     dis: float,
     ndis: int,
     file_path: str | None = None,
+    *,
+    S: np.ndarray = _S_IDENTITY,
 ) -> np.ndarray:
     """Return the displacement gradient field Hg, loading from disk if cached.
 
@@ -22,6 +28,11 @@ def load_or_generate_Hg(
     written under a different detector ray grid) regenerates Fg and overwrites
     the cache rather than silently corrupting the result. Hg is derived from
     Fg by bulk inversion + transpose.
+
+    The optional ``S`` rotation matrix is the sample-remount transformation
+    (Purdue 2024 paper). When `S = identity` (default), the call matches the
+    pre-port behaviour bit-for-bit; with `S != identity`, the strain field is
+    computed in a remounted-sample frame.
     """
     expected_n = rl.shape[1]
     Fg: np.ndarray | None = None
@@ -47,7 +58,7 @@ def load_or_generate_Hg(
             Fg = np.zeros([expected_n, 3, 3])
             Fg += np.identity(Fg.shape[1])
         else:
-            Fg = Fd_find(rl * 1e6, Ud, Us, Theta, dis, ndis)
+            Fg = Fd_find(rl * 1e6, Ud, Us, Theta, dis, ndis, S=S)
         if file_path is not None:
             np.save(file_path, Fg)
             print(f"Saved Fg to {file_path.rsplit('/', 1)[-1]}")
