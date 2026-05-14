@@ -595,3 +595,76 @@ include_perfect_crystal = false
     assert cfg.zscan.include_secondary is True
     assert cfg.zscan.secondary_rng_offset == 2
     assert cfg.scan.rng_seed == 7
+
+
+def test_run_identification_zscan_writes_per_config_rocking_grid(tmp_path, monkeypatch):
+    """Tiny z-scan: 1 layer x 1 plane x 1 b x 1 alpha = 1 configuration ->
+    1 config directory with phi_steps*chi_steps .npy files (4 here)."""
+    import numpy as np
+
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import _run_identification_zscan
+
+    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
+    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
+    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+
+    output_dir = tmp_path / "out"
+    cfg = _tiny_zscan_config()
+    result = _run_identification_zscan(cfg, output_dir)
+
+    layer_dirs = sorted(output_dir.glob("layer_*"))
+    assert len(layer_dirs) == 1
+    config_dirs = list((layer_dirs[0] / "n_1_1_1").glob("b*"))
+    assert len(config_dirs) == 1
+    npys = list(config_dirs[0].glob("*.npy"))
+    assert len(npys) == 4  # 2 phi * 2 chi
+    manifest = output_dir / "manifest.csv"
+    assert manifest.is_file()
+    lines = manifest.read_text().strip().splitlines()
+    assert len(lines) == 2  # header + 1 row
+    assert result["n_configurations"] == 1
+
+
+def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatch):
+    """Two runs at same seed produce identical manifests (same secondary draws)."""
+    import numpy as np
+
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import IdentificationZScanConfig, _run_identification_zscan
+
+    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
+    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
+    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+
+    cfg = IdentificationConfig(
+        mode="z-scan",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=(1, 1, 1),
+            angle_start_deg=0.0,
+            angle_stop_deg=90.0,
+            angle_step_deg=90.0,
+            b_vector_indices=[0, 1],
+            sweep_all_slip_planes=False,
+            exclude_invisibility=False,
+        ),
+        scan=IdentificationScanConfig(rng_seed=0, intensity_scale=1.0),
+        zscan=IdentificationZScanConfig(
+            z_offsets_um=[0.0],
+            phi_range_deg=0.03,
+            phi_steps=2,
+            chi_range_deg=0.1,
+            chi_steps=2,
+            include_secondary=True,  # exercise the secondary draw
+        ),
+        io=_make_io_config(),
+    )
+
+    out1 = tmp_path / "a"
+    out2 = tmp_path / "b"
+    _run_identification_zscan(cfg, out1)
+    _run_identification_zscan(cfg, out2)
+
+    m1 = (out1 / "manifest.csv").read_text()
+    m2 = (out2 / "manifest.csv").read_text()
+    assert m1 == m2

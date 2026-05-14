@@ -724,6 +724,181 @@ def _run_identification_multi(
     return {"n_samples": mc.n_samples, "output_dir": output_dir, "manifest_path": manifest_path}
 
 
+def _run_identification_zscan(
+    config: IdentificationConfig,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """z-scan mode: depth layers x Burgers x angle sweep x rocking-curve grid.
+
+    For each (z_offset, slip_plane, b_idx, alpha), optionally pairs a random
+    secondary dislocation drawn once per configuration, computes Hg, and
+    writes the phi/chi rocking-curve grid via `save_images_parallel`.
+    """
+    assert config.zscan is not None  # validated in __post_init__
+    zscan = config.zscan
+    crystal_cfg = config.crystal
+    scan_cfg = config.scan
+    io_cfg = config.io
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    all_planes: list[tuple[int, int, int]] = [
+        (1, 1, 1),
+        (1, -1, 1),
+        (1, 1, -1),
+        (-1, 1, 1),
+    ]
+    planes = all_planes if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
+
+    angles_deg = np.arange(
+        crystal_cfg.angle_start_deg,
+        crystal_cfg.angle_stop_deg + crystal_cfg.angle_step_deg * 0.5,
+        crystal_cfg.angle_step_deg,
+    )
+
+    # Reuse Round 16's RNG-spawn pattern. The secondary stream is at
+    # `secondary_rng_offset` in the spawn list so a noise stream could be
+    # added later without breaking determinism.
+    master = np.random.default_rng(scan_cfg.rng_seed)
+    spawned = master.spawn(zscan.secondary_rng_offset + 1)
+    secondary_rng = spawned[zscan.secondary_rng_offset]
+
+    q_hkl = np.asarray(fm.q_hkl, dtype=float)
+    manifest_rows: list[dict[str, Any]] = []
+    n_configs = 0
+
+    projected_configs = (
+        len(zscan.z_offsets_um)
+        * len(planes)
+        * (len(crystal_cfg.b_vector_indices) if crystal_cfg.b_vector_indices else 6)
+        * len(angles_deg)
+    )
+    projected_images = projected_configs * zscan.phi_steps * zscan.chi_steps
+    print(
+        f"z-scan projection (pre-invisibility filter): "
+        f"{projected_configs} configs x {zscan.phi_steps * zscan.chi_steps} rocking images "
+        f"= {projected_images} .npy files to {output_dir}"
+    )
+
+    for k, z_off in enumerate(zscan.z_offsets_um):
+        rl_shifted = fm.Z_shift(z_off)
+        layer_dir = output_dir / f"layer_{k:04d}"
+
+        for plane in planes:
+            plane_slug = _slip_plane_slug(plane)
+            b_table = _burgers_vectors(plane)
+            b_indices = (
+                crystal_cfg.b_vector_indices
+                if crystal_cfg.b_vector_indices is not None
+                else list(range(len(b_table)))
+            )
+            b_subset = b_table[b_indices]
+            n_arr_unnorm = np.asarray(plane, dtype=float)
+            n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
+
+            rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
+            Ud_all = _ud_matrices(n_arr, rotated)
+
+            for j, b_idx in enumerate(b_indices):
+                if crystal_cfg.exclude_invisibility and not _passes_invisibility(
+                    q_hkl, b_table[b_idx], crystal_cfg.invisibility_threshold_deg
+                ):
+                    continue
+                for i, alpha in enumerate(angles_deg):
+                    Ud_primary = Ud_all[i, j]
+                    primary_spec = MixedDislocSpec(
+                        Ud_mix=Ud_primary,
+                        rotation_deg=float(alpha),
+                        position_lab_um=(0.0, 0.0, 0.0),
+                    )
+
+                    if zscan.include_secondary:
+                        sec = _draw_dislocation(secondary_rng, pos_std_um=0.0)
+                        secondary_spec = MixedDislocSpec(
+                            Ud_mix=sec["Ud"],
+                            rotation_deg=sec["alpha_deg"],
+                            position_lab_um=sec["pos_um"],
+                        )
+                        Fg = Fd_find_multi_dislocs_mixed(
+                            rl_shifted, fm.Us, [primary_spec, secondary_spec], fm.Theta
+                        )
+                        secondary_meta: dict[str, Any] = {
+                            "secondary_present": True,
+                            "secondary_n_h": sec["plane"][0],
+                            "secondary_n_k": sec["plane"][1],
+                            "secondary_n_l": sec["plane"][2],
+                            "secondary_b_idx": sec["b_idx"],
+                            "secondary_b_h": int(round(sec["b_vec"][0])),
+                            "secondary_b_k": int(round(sec["b_vec"][1])),
+                            "secondary_b_l": int(round(sec["b_vec"][2])),
+                            "secondary_alpha_deg": sec["alpha_deg"],
+                        }
+                    else:
+                        Fg = Fd_find_mixed(
+                            rl_shifted,
+                            fm.Us,
+                            Ud_mix=Ud_primary,
+                            rotation_deg=float(alpha),
+                            Theta=fm.Theta,
+                        )
+                        secondary_meta = {
+                            "secondary_present": False,
+                            "secondary_n_h": float("nan"),
+                            "secondary_n_k": float("nan"),
+                            "secondary_n_l": float("nan"),
+                            "secondary_b_idx": -1,
+                            "secondary_b_h": float("nan"),
+                            "secondary_b_k": float("nan"),
+                            "secondary_b_l": float("nan"),
+                            "secondary_alpha_deg": float("nan"),
+                        }
+
+                    Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
+                    fm.Hg = Hg
+
+                    config_dir = (
+                        layer_dir / f"n_{plane_slug}" / f"b{b_idx}_alpha{int(round(alpha)):03d}"
+                    )
+                    config_dir.mkdir(parents=True, exist_ok=True)
+                    save_images_parallel(
+                        Hg,
+                        zscan.phi_range_deg,
+                        zscan.phi_steps,
+                        zscan.chi_range_deg,
+                        zscan.chi_steps,
+                        str(config_dir),
+                        io_cfg.fn_prefix,
+                        io_cfg.ftype,
+                    )
+
+                    manifest_rows.append(
+                        {
+                            "layer": f"{k:04d}",
+                            "z_offset_um": z_off,
+                            "n_h": plane[0],
+                            "n_k": plane[1],
+                            "n_l": plane[2],
+                            "b_idx": b_idx,
+                            "b_h": int(round(b_table[b_idx, 0] * np.sqrt(2))),
+                            "b_k": int(round(b_table[b_idx, 1] * np.sqrt(2))),
+                            "b_l": int(round(b_table[b_idx, 2] * np.sqrt(2))),
+                            "alpha_deg": float(alpha),
+                            **secondary_meta,
+                            "path": str(config_dir.relative_to(output_dir)),
+                        }
+                    )
+                    n_configs += 1
+
+    manifest_path = output_dir / "manifest.csv"
+    with open(manifest_path, "w", newline="") as fh:
+        if manifest_rows:
+            writer = csv.DictWriter(fh, fieldnames=list(manifest_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(manifest_rows)
+
+    return {"n_configurations": n_configs, "output_dir": output_dir, "manifest_path": manifest_path}
+
+
 def run_identification(
     config: IdentificationConfig,
     output_dir: Path,
