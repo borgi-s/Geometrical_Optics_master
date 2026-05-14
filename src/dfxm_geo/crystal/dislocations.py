@@ -246,6 +246,18 @@ def Fd_find_mixed(
     Naming preserves the convention of the branch source (`disloc_identify`)
     rather than the paper to keep callers unchanged.
 
+    **Convenience equivalences (use these instead of separate functions):**
+
+    - ``Fd_find_mixed(..., rotation_deg=0)`` is the pure-edge field
+      (equivalent to ``Fd_find(..., ndis=1)`` with matching Ud).
+    - ``Fd_find_mixed(..., rotation_deg=90)`` is the pure-screw field
+      (only the screw out-of-plane terms ∂u_dx/∂y, ∂u_dx/∂z survive).
+
+    We don't ship separate `Fd_find_edge` / `Fd_find_screw` wrappers; the
+    ESRF_DTU branch had them but they're just `Fd_find_mixed` at the
+    specific rotation angles above (Borgi 2025 Eq. 1's α=90° and α=0°
+    limits respectively).
+
     Args:
         rl: Lab-frame coordinates, shape (3, X).
         Us: Sample-to-grain rotation (Eq. 5 of Borgi 2025), shape (3, 3).
