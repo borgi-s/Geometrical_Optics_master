@@ -454,3 +454,36 @@ include_perfect_crystal = false
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
     npys = list((out_dir / "n_1_1_1" / "im_data").glob("*.npy"))
     assert len(npys) == 1
+
+
+def test_identification_zscan_config_defaults():
+    from dfxm_geo.pipeline import IdentificationZScanConfig
+
+    cfg = IdentificationZScanConfig(
+        z_offsets_um=[0.0],
+        phi_range_deg=0.03,
+        phi_steps=11,
+        chi_range_deg=0.1,
+        chi_steps=11,
+    )
+    assert cfg.z_offsets_um == [0.0]
+    assert cfg.phi_steps == 11
+    assert cfg.chi_steps == 11
+    assert cfg.include_secondary is True
+    assert cfg.secondary_rng_offset == 1
+
+
+def test_identification_zscan_config_is_frozen():
+    from dataclasses import FrozenInstanceError
+
+    from dfxm_geo.pipeline import IdentificationZScanConfig
+
+    cfg = IdentificationZScanConfig(
+        z_offsets_um=[0.0],
+        phi_range_deg=0.03,
+        phi_steps=11,
+        chi_range_deg=0.1,
+        chi_steps=11,
+    )
+    with pytest.raises(FrozenInstanceError):
+        cfg.phi_steps = 21  # type: ignore[misc]
