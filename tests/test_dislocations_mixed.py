@@ -5,12 +5,12 @@ References:
     DOI: 10.1107/S1600576725002614. Eq. 1 defines the mixed-character F_d.
 """
 
+from dataclasses import FrozenInstanceError
+
 import numpy as np
 import pytest
 
-from dfxm_geo.crystal.dislocations import (
-    MixedDislocSpec,
-)
+from dfxm_geo.crystal.dislocations import MixedDislocSpec
 
 
 def test_mixed_disloc_spec_defaults():
@@ -29,7 +29,7 @@ def test_mixed_disloc_spec_with_position():
 
 
 def test_mixed_disloc_spec_is_frozen():
-    """MixedDislocSpec is immutable."""
+    """MixedDislocSpec is immutable — mutation raises FrozenInstanceError."""
     spec = MixedDislocSpec(Ud_mix=np.identity(3), rotation_deg=0.0)
-    with pytest.raises((AttributeError, Exception)):
+    with pytest.raises(FrozenInstanceError):
         spec.rotation_deg = 10.0  # type: ignore[misc]

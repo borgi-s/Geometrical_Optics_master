@@ -9,7 +9,7 @@ Public functions:
 """
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from joblib import cpu_count
@@ -229,4 +229,4 @@ class MixedDislocSpec:
 
     Ud_mix: np.ndarray
     rotation_deg: float
-    position_lab_um: tuple[float, float, float] = field(default=(0.0, 0.0, 0.0))
+    position_lab_um: tuple[float, float, float] = (0.0, 0.0, 0.0)
