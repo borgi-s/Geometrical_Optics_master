@@ -213,6 +213,94 @@ def Fd_find(
     return Ud @ Fdd @ Ud.T
 
 
+def Fd_find_mixed(
+    rl: np.ndarray,
+    Us: np.ndarray,
+    Ud_mix: np.ndarray,
+    rotation_deg: float,
+    Theta: np.ndarray,
+    *,
+    b: float = BURGERS_VECTOR,
+    ny: float = POISSON_RATIO,
+    position_lab_um: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> np.ndarray:
+    """Displacement gradient Fg for a single mixed-character dislocation.
+
+    Implements Eq. 1 of Borgi, Winther & Poulsen (2025), J. Appl. Cryst. 58,
+    813-821, doi:10.1107/S1600576725002614::
+
+        F_d = I + screw_matrix * cos(α_paper) + edge_matrix * sin(α_paper)
+
+    where α_paper is the angle between Burgers vector and dislocation line
+    (α_paper = 0° / 180° pure screw; 90° / 270° pure edge).
+
+    **Parameterization note (differs from paper)**: ``rotation_deg`` is the
+    angle (degrees) by which the line direction has been rotated around the
+    slip-plane normal `n`, starting from the initial in-plane reference
+    ``t_0 = b × n`` (which has α_paper=90°, pure edge). The two
+    parameterizations satisfy ``α_paper = 90° - rotation_deg``, so:
+
+        rotation_deg = 0   ⇔ α_paper = 90°  (pure edge)
+        rotation_deg = 90° ⇔ α_paper = 0°   (pure screw)
+
+    Naming preserves the convention of the branch source (`disloc_identify`)
+    rather than the paper to keep callers unchanged.
+
+    Args:
+        rl: Lab-frame coordinates, shape (3, X).
+        Us: Sample-to-grain rotation (Eq. 5 of Borgi 2025), shape (3, 3).
+        Ud_mix: Dislocation-to-grain rotation (Eq. 3 of Borgi 2025), shape (3, 3).
+        rotation_deg: See parameterization note above.
+        Theta: Lab-to-sample rotation (Eq. 7 of Borgi 2025), shape (3, 3).
+        b: Burgers vector magnitude. Default `BURGERS_VECTOR` from constants.
+        ny: Poisson ratio. Default `POISSON_RATIO` from constants.
+        position_lab_um: Lab-frame offset (µm); shifts rl before transforming
+            to dislocation coords so the core sits at this offset. Default 0.
+
+    Returns:
+        Fg of shape (X, 3, 3) in the grain frame, with the identity added.
+    """
+    if position_lab_um != (0.0, 0.0, 0.0):
+        offset_m = np.asarray(position_lab_um).reshape(3, 1) * 1e-6
+        rl = rl - offset_m
+
+    # Eq. 8 of Borgi 2025: r_l = Θ^T · Us · Ud · r_d → r_d = Ud^T · Us^T · Θ · r_l.
+    rs = Theta @ rl
+    rc = Us.T @ rs
+    rd = Ud_mix.T @ rc
+
+    Fdd = np.zeros([rd.shape[1], 3, 3])
+    alpha = 1e-20
+
+    sqx = rd[0] * rd[0]
+    sqy = rd[1] * rd[1]
+    denom = (sqx + sqy) * (sqx + sqy) + alpha
+    bfactor = b / (4 * np.pi * (1 - ny))
+    nyfactor = 2 * ny * (sqx + sqy)
+
+    # Edge formula (Appendix-A sign correction already applied: +nyfactor on [1,1]).
+    Fdd[:, 0, 0] = -rd[1] * (3 * sqx + sqy - nyfactor) / denom
+    Fdd[:, 0, 1] = rd[0] * (3 * sqx + sqy - nyfactor) / denom
+    Fdd[:, 1, 0] = -rd[0] * (3 * sqy + sqx - nyfactor) / denom
+    Fdd[:, 1, 1] = rd[1] * (sqx - sqy + nyfactor) / denom
+
+    Fdd *= bfactor
+    Fdd *= np.cos(np.deg2rad(rotation_deg))
+
+    # Screw out-of-plane contributions (∂u_dx/∂y, ∂u_dx/∂z).
+    # denom1 = z² + y² preserved from branch source (Eq. 1 pure-screw matrix).
+    sqz = rd[2] * rd[2]
+    denom1 = sqz + sqy + alpha
+    bfactor1 = b / (2 * np.pi)
+    sin_rot = np.sin(np.deg2rad(rotation_deg))
+
+    Fdd[:, 0, 1] += (-rd[2] / denom1) * bfactor1 * sin_rot
+    Fdd[:, 0, 2] += (rd[1] / denom1) * bfactor1 * sin_rot
+
+    Fdd += np.identity(3)
+    return Ud_mix @ Fdd @ Ud_mix.T
+
+
 @dataclass(frozen=True)
 class MixedDislocSpec:
     """Specification for one mixed-character dislocation.
