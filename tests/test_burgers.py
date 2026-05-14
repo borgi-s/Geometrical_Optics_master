@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from dfxm_geo.crystal.burgers import burgers_vectors
+from dfxm_geo.crystal.burgers import burgers_vectors, rotated_t_vectors, ud_matrices
 
 # The four {111}-family normals from the branch source's lookup table.
 SLIP_PLANE_NORMALS = [
@@ -51,3 +51,51 @@ def test_burgers_vectors_invalid_normal_raises():
     """Non-{111} normal raises ValueError."""
     with pytest.raises(ValueError, match="not one of the four"):
         burgers_vectors((2, 0, 0))
+
+
+def test_rotated_t_vectors_shape():
+    """Shape is (n_angles, n_burgers, 3)."""
+    n = np.array([1.0, 1.0, 1.0]) / np.sqrt(3)
+    b = burgers_vectors((1, 1, 1))
+    angles = np.array([0.0, 90.0, 180.0])
+    result = rotated_t_vectors(n, b, angles)
+    assert result.shape == (3, 6, 3)
+
+
+def test_rotated_t_vectors_zero_angle_is_b_cross_n():
+    """At angle=0, the rotated vector equals t_0 = b × n (initial in-plane)."""
+    n = np.array([1.0, 1.0, 1.0]) / np.sqrt(3)
+    b = burgers_vectors((1, 1, 1))
+    result = rotated_t_vectors(n, b, np.array([0.0]))
+
+    t_expected = np.cross(b, n)
+    np.testing.assert_allclose(result[0], t_expected, atol=1e-12)
+
+
+def test_rotated_t_vectors_180_negates():
+    """At angle=180°, the rotated vector is -t_0."""
+    n = np.array([1.0, 1.0, 1.0]) / np.sqrt(3)
+    b = burgers_vectors((1, 1, 1))
+    result = rotated_t_vectors(n, b, np.array([180.0]))
+    t_expected = -np.cross(b, n)
+    np.testing.assert_allclose(result[0], t_expected, atol=1e-12)
+
+
+def test_ud_matrices_shape():
+    """Shape is (n_angles, n_burgers, 3, 3)."""
+    n = np.array([1.0, 1.0, 1.0]) / np.sqrt(3)
+    b = burgers_vectors((1, 1, 1))
+    rotated = rotated_t_vectors(n, b, np.array([0.0, 45.0]))
+    Ud = ud_matrices(n, rotated)
+    assert Ud.shape == (2, 6, 3, 3)
+
+
+def test_ud_matrices_columns_are_basis():
+    """Each Ud has columns (n × t, n, t) per branch source convention."""
+    n = np.array([1.0, 1.0, 1.0]) / np.sqrt(3)
+    b = burgers_vectors((1, 1, 1))
+    rotated = rotated_t_vectors(n, b, np.array([30.0]))
+    Ud = ud_matrices(n, rotated)
+    for j in range(6):
+        np.testing.assert_allclose(Ud[0, j, :, 2], rotated[0, j], atol=1e-12)
+        np.testing.assert_allclose(Ud[0, j, :, 1], n, atol=1e-12)

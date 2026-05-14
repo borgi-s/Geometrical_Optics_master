@@ -13,6 +13,7 @@ References:
 from __future__ import annotations
 
 import numpy as np
+from scipy.spatial.transform import Rotation as _Rotation
 
 # Lookup table for the four {111}-family slip-plane normals. Each entry maps
 # the slug "h k l" (with `-` for minus) to its three basis Burgers vectors,
@@ -54,3 +55,60 @@ def burgers_vectors(slip_plane_normal: tuple[int, int, int]) -> np.ndarray:
         )
     basis = _BASIS_TABLE[key]
     return np.vstack([basis, -basis]) / np.sqrt(2)
+
+
+def rotated_t_vectors(
+    slip_plane_normal: np.ndarray,
+    burgers: np.ndarray,
+    angles_deg: np.ndarray,
+) -> np.ndarray:
+    """Rotate each in-plane initial line direction `t_0 = b × n` around `n`.
+
+    For every (angle, Burgers vector) pair, computes
+    ``R_n(angle) · (b × n)`` where ``R_n`` is rotation around `n` (degrees).
+    Mirrors the branch source's `BurgersVectorsPlotter.calculate_rotated_vectors`.
+
+    Args:
+        slip_plane_normal: shape (3,) — the slip-plane normal `n`.
+        burgers: shape (n_burgers, 3) — the Burgers vectors.
+        angles_deg: shape (n_angles,) — rotation angles in degrees.
+
+    Returns:
+        ndarray of shape (n_angles, n_burgers, 3) — rotated t-vectors.
+    """
+    n = np.asarray(slip_plane_normal, dtype=float)
+    t_0 = np.cross(burgers, n)  # (n_burgers, 3)
+
+    out = np.zeros((len(angles_deg), len(burgers), 3))
+    for i, angle in enumerate(angles_deg):
+        rot = _Rotation.from_rotvec(angle * n, degrees=True)
+        out[i] = rot.apply(t_0)
+    return out
+
+
+def ud_matrices(
+    slip_plane_normal: np.ndarray,
+    rotated_vectors: np.ndarray,
+) -> np.ndarray:
+    """Construct Ud_mix matrices from (n × t, n, t) basis frames.
+
+    Mirrors the branch source's `BurgersVectorsPlotter.calculate_ud_matrices`,
+    which stacks ``(np.cross(n, t), n, t)`` as the three columns of each Ud
+    matrix.
+
+    Args:
+        slip_plane_normal: shape (3,) — the slip-plane normal `n`.
+        rotated_vectors: shape (n_angles, n_burgers, 3) from `rotated_t_vectors`.
+
+    Returns:
+        ndarray of shape (n_angles, n_burgers, 3, 3).
+    """
+    n = np.asarray(slip_plane_normal, dtype=float)
+    n_angles, n_burgers, _ = rotated_vectors.shape
+    Ud = np.zeros((n_angles, n_burgers, 3, 3))
+    for i in range(n_angles):
+        for j in range(n_burgers):
+            t = rotated_vectors[i, j]
+            cross_nt = np.cross(n, t)
+            Ud[i, j] = np.column_stack([cross_nt, n, t])
+    return Ud
