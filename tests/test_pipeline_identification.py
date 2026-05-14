@@ -735,3 +735,12 @@ include_perfect_crystal = false
     exit_code = cli_main_identify(["--config", str(cfg_path), "--output", str(out_dir)])
     assert exit_code == 0
     assert (out_dir / "manifest.csv").is_file()
+
+
+def test_example_zscan_config_loads():
+    """configs/identification_zscan.toml parses and validates."""
+    repo_root = Path(__file__).resolve().parents[1]
+    cfg = load_identification_config(repo_root / "configs" / "identification_zscan.toml")
+    assert cfg.mode == "z-scan"
+    assert cfg.zscan is not None
+    assert len(cfg.zscan.z_offsets_um) >= 1
