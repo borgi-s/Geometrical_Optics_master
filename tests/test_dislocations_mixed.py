@@ -94,24 +94,25 @@ def test_Fd_find_mixed_pure_screw_has_only_screw_terms(identity_rotations):
 def test_Fd_find_mixed_position_offset_shifts_singularity(identity_rotations):
     """Translating the dislocation core by `position_lab_um` is equivalent to
     evaluating Fd_find_mixed at rl shifted in the opposite direction.
+
+    With position_lab_um=(2µm, 0, 0), `rl_shifted - (2e-6, 0, 0)` internally
+    equals `rl_unshifted` — so the two calls must return bit-identical fields.
     """
     Us, Ud, Theta = identity_rotations
-    rl = np.array([[5e-6, 0.0], [0.0, 0.0], [0.0, 0.0]])
+    rl_unshifted = np.array([[3e-6], [1e-6], [0.0]])
+    rl_shifted = np.array([[5e-6], [1e-6], [0.0]])
 
-    Fg_at_origin = Fd_find_mixed(rl, Us, Ud_mix=Ud, rotation_deg=0.0, Theta=Theta)
-
-    rl_at_offset = np.array([[5e-6], [0.0], [0.0]])
-    Fg_at_offset_pos = Fd_find_mixed(
-        rl_at_offset,
+    Fg_no_offset = Fd_find_mixed(rl_unshifted, Us, Ud_mix=Ud, rotation_deg=0.0, Theta=Theta)
+    Fg_with_offset = Fd_find_mixed(
+        rl_shifted,
         Us,
         Ud_mix=Ud,
         rotation_deg=0.0,
         Theta=Theta,
-        position_lab_um=(5.0, 0.0, 0.0),
+        position_lab_um=(2.0, 0.0, 0.0),
     )
 
-    diff = np.abs(Fg_at_origin[0] - Fg_at_offset_pos[0]).max()
-    assert diff > 1e-6, f"position_lab_um had no effect (diff={diff})"
+    np.testing.assert_allclose(Fg_no_offset, Fg_with_offset, atol=1e-15, rtol=1e-12)
 
 
 def test_Fd_find_mixed_uses_module_constants_as_defaults(identity_rotations, simple_rl_grid):
