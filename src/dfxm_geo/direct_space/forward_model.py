@@ -329,6 +329,35 @@ def forward(
     return im_1
 
 
+def Z_shift(offset_um: float) -> np.ndarray:
+    """Return an `rl` grid shifted along the z axis by `offset_um` µm.
+
+    Uses the module's existing detector ray-grid parameters (xl_range,
+    xl_steps, yl_range, yl_steps, zl_range, zl_steps) to build the same
+    mgrid as `rl` does at import time, but with the z range translated by
+    ``-offset_um * 1e-6`` m. The module-level ``rl`` is not modified.
+
+    Used by the z-scan pipeline mode to scan dislocations through the
+    sample depth without rebuilding the detector ray grid for each layer.
+
+    Args:
+        offset_um: z offset in micrometres. Positive values move the
+            dislocation core "up" in the lab z direction (equivalent to
+            shifting `rl` "down" by the same amount).
+
+    Returns:
+        (3, X) coordinates in metres, same shape as `rl`.
+    """
+    offset_m = offset_um * 1e-6
+    return np.vstack(  # type: ignore[call-overload]
+        np.mgrid[
+            -xl_range : xl_range : complex(xl_steps),
+            -yl_range : yl_range : complex(yl_steps),
+            -zl_range - offset_m : zl_range - offset_m : complex(zl_steps),
+        ]
+    ).reshape(3, -1)
+
+
 # Auto-load the default kernel iff it exists on disk. Preserves the
 # pre-cleanup behavior for callers (e.g. init_forward.py) that expect
 # `Resq_i`, `Hg`, `q_hkl`, etc. to be ready at import time.
