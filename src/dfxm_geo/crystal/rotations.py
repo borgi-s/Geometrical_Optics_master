@@ -87,3 +87,28 @@ def fast_inverse2(A):  # Try to rewrite this
     inv[:, 2, 1] = -inv_det * (a * h - b * g)
     inv[:, 2, 2] = inv_det * (a * e - b * d)
     return inv
+
+
+def rotate_matrix_z_axis(matrix: np.ndarray, angle_degrees: float) -> np.ndarray:
+    """Rotate `matrix` by `angle_degrees` around the lab z axis.
+
+    Returns ``R_z(angle) @ matrix``. Matches the branch source's
+    ``functions.rotate_matrix_z_axis`` from the ESRF_DTU port.
+
+    Args:
+        matrix: Shape (3, 3) — the matrix to left-rotate.
+        angle_degrees: Rotation angle in degrees around the lab z axis.
+
+    Returns:
+        Rotated (3, 3) matrix.
+    """
+    angle_rad = np.radians(angle_degrees)
+    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+    Rz = np.array(
+        [
+            [cos_a, -sin_a, 0.0],
+            [sin_a, cos_a, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    return Rz @ matrix

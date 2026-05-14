@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from dfxm_geo.crystal.rotations import fast_inverse2, rotatedU
+from dfxm_geo.crystal.rotations import fast_inverse2, rotate_matrix_z_axis, rotatedU
 
 
 def _is_orthogonal(M: np.ndarray, atol: float = 1e-10) -> bool:
@@ -93,3 +93,24 @@ class TestFastInverse2:
         product = np.einsum("nij,njk->nik", A, inv)
         expected = np.broadcast_to(np.eye(3), product.shape)
         np.testing.assert_allclose(product, expected, atol=1e-9)
+
+
+def test_rotate_matrix_z_axis_zero_is_identity():
+    """A 0° rotation around z leaves any matrix unchanged."""
+    M = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+    np.testing.assert_allclose(rotate_matrix_z_axis(M, 0.0), M, atol=1e-15)
+
+
+def test_rotate_matrix_z_axis_90_permutes_first_two_rows():
+    """Rotating identity by 90° around z swaps and signs the first two rows
+    of the result (left-multiplication by R_z(90°))."""
+    I = np.identity(3)
+    R90 = rotate_matrix_z_axis(I, 90.0)
+    expected = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    np.testing.assert_allclose(R90, expected, atol=1e-12)
+
+
+def test_rotate_matrix_z_axis_360_is_identity():
+    """A 360° rotation returns to identity (within FP tolerance)."""
+    M = np.array([[0.5, 0.1, 0.0], [0.2, 0.7, 0.0], [0.0, 0.0, 1.0]])
+    np.testing.assert_allclose(rotate_matrix_z_axis(M, 360.0), M, atol=1e-12)
