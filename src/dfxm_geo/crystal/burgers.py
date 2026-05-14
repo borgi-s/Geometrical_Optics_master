@@ -37,8 +37,11 @@ def burgers_vectors(slip_plane_normal: tuple[int, int, int]) -> np.ndarray:
         slip_plane_normal: One of (1,1,1), (1,-1,1), (1,1,-1), (-1,1,1).
 
     Returns:
-        Array of shape (6, 3) — three basis vectors followed by their negatives,
-        normalised to magnitude 1/sqrt(2) (matches branch source convention).
+        Array of shape (6, 3) — three basis vectors followed by their negatives.
+        The branch convention divides the integer basis (e.g. ``[-1, 1, 0]``,
+        magnitude √2) by √2, producing unit-magnitude direction vectors. The
+        actual Burgers-vector magnitude is applied downstream via the
+        `BURGERS_VECTOR` constant.
 
     Raises:
         ValueError: if slip_plane_normal is not one of the four {111} variants.
