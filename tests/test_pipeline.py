@@ -211,7 +211,7 @@ class TestRunSimulation:
         fake_q = np.array([0.0, 0.0, 1.0])
         find_hg_called = {"count": 0}
 
-        def fake_find_hg(dis, ndis, psize, zl_rms):
+        def fake_find_hg(dis, ndis, psize, zl_rms, **kwargs):
             find_hg_called["count"] += 1
             return fake_Hg, fake_q
 
@@ -285,6 +285,42 @@ class TestRunSimulation:
 
         assert save_count["n"] == 1
         assert result["perfect_path"] is None
+
+    def test_run_simulation_passes_resolved_S_to_find_hg(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """sample_remount='S2' must arrive at fm.Find_Hg as the S2 matrix."""
+        from dfxm_geo.crystal.remount import S2
+
+        config = SimulationConfig(
+            crystal=CrystalConfig(dis=2.0, ndis=4, sample_remount="S2"),
+            scan=ScanConfig(phi_range=0.05, phi_steps=5, chi_range=0.05, chi_steps=5),
+            io=IOConfig(),
+        )
+
+        captured: dict = {}
+        fake_Hg = np.ones((3, 3, 4, 4, 4))
+        fake_q = np.array([0.0, 0.0, 1.0])
+
+        def fake_find_hg(dis, ndis, psize, zl_rms, **kwargs):
+            captured["kwargs"] = kwargs
+            return fake_Hg, fake_q
+
+        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.Find_Hg", fake_find_hg)
+        monkeypatch.setattr("dfxm_geo.pipeline.save_images_parallel", lambda *a, **k: True)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.psize", 0.1)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_rms", 1.0)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
+        monkeypatch.setattr("dfxm_geo.pipeline.fm.q_hkl", None)
+
+        run_simulation(config, tmp_path / "out")
+
+        assert "S" in captured["kwargs"]
+        np.testing.assert_array_equal(captured["kwargs"]["S"], S2)
+        assert captured["kwargs"]["remount_name"] == "S2"
 
 
 @pytest.fixture

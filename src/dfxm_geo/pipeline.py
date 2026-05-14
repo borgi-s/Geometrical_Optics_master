@@ -277,7 +277,15 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     _ensure_kernel_loaded()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    Hg, q_hkl = fm.Find_Hg(config.crystal.dis, config.crystal.ndis, fm.psize, fm.zl_rms)
+    S = SAMPLE_REMOUNT_OPTIONS[config.crystal.sample_remount]
+    Hg, q_hkl = fm.Find_Hg(
+        config.crystal.dis,
+        config.crystal.ndis,
+        fm.psize,
+        fm.zl_rms,
+        S=S,
+        remount_name=config.crystal.sample_remount,
+    )
     # Forward() reads the module-level q_hkl global. Find_Hg() returns a new
     # one based on its h/k/l args but does not update the global itself. Sync
     # them so the rocking sweep uses the same reflection that Hg was built for.
