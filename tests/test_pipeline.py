@@ -545,3 +545,42 @@ class TestCliMainFlags:
 
         cli_main(["--config", str(config_path), "--output", str(tmp_path / "out")])
         assert calls == ["sim"]
+
+
+class TestDfxmForwardSampleRemountCLI:
+    """End-to-end CLI smoke: dfxm-forward with sample_remount=S2."""
+
+    def test_dfxm_forward_with_sample_remount_S2_runs(self, tmp_path: Path) -> None:
+        import subprocess
+        import sys as _sys
+        from pathlib import Path as _P
+
+        # Skip if the Resq_i kernel pickle is not on disk — same gating pattern
+        # as Round 16's CLI smoke. The path mirrors what forward_model loads.
+        repo_root = _P(__file__).resolve().parents[1]
+        kernel_path = repo_root / "reciprocal_space" / "pkl_files" / "Resq_i_20230913_1308.pkl"
+        if not kernel_path.exists():
+            pytest.skip(f"Kernel pickle {kernel_path} not present; skipping CLI smoke.")
+
+        # Run dfxm-forward with the S2 variant config, output to tmp_path
+        variant_config = repo_root / "configs" / "variants" / "sample_remount_S2.toml"
+        out_dir = tmp_path / "out"
+        result = subprocess.run(
+            [
+                _sys.executable,
+                "-c",
+                "from dfxm_geo.pipeline import cli_main; "
+                f"raise SystemExit(cli_main(['--config', r'{variant_config}', '--output', r'{out_dir}', '--no-postprocess']))",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+        # CLI should succeed
+        assert result.returncode == 0, (
+            f"dfxm-forward failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        )
+        # Output dir was populated
+        dislocs_dir = tmp_path / "out" / "images10"
+        assert dislocs_dir.is_dir(), "dislocs images dir missing"
+        assert any(dislocs_dir.iterdir()), "dislocs images dir empty"
