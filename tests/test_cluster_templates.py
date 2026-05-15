@@ -99,3 +99,29 @@ class TestSlurmForwardSingle:
 
     def test_edit_these_block(self) -> None:
         assert "EDIT THESE" in _read(self.rel)
+
+
+class TestSlurmIdentifyArray:
+    rel = "slurm/identify_array.sbatch"
+
+    def test_exists(self) -> None:
+        assert (REPO_ROOT / self.rel).is_file()
+
+    def test_array_directive(self) -> None:
+        text = _read(self.rel)
+        # SLURM array syntax: --array=1-N
+        import re
+
+        assert re.search(r"#SBATCH --array=\d+-\d+", text), (
+            "SLURM array template must declare --array=N-M"
+        )
+
+    def test_uses_slurm_array_task_id(self) -> None:
+        text = _read(self.rel)
+        assert "$SLURM_ARRAY_TASK_ID" in text or "${SLURM_ARRAY_TASK_ID}" in text
+
+    def test_invokes_identify_cli(self) -> None:
+        assert "dfxm-identify" in _read(self.rel)
+
+    def test_edit_these_block(self) -> None:
+        assert "EDIT THESE" in _read(self.rel)
