@@ -19,6 +19,7 @@ from pprint import pprint
 
 import numpy as np
 
+from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
@@ -149,7 +150,19 @@ def Find_Hg(
 
     Returns:
         (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
+
+    Raises:
+        ValueError: If `remount_name` is not one of the named remount options
+            in `SAMPLE_REMOUNT_OPTIONS`. Guards against silently writing a
+            cache filename like `..._remountbogus.npy` when a non-pipeline
+            caller passes a typo or free-form string.
     """
+    if remount_name not in SAMPLE_REMOUNT_OPTIONS:
+        raise ValueError(
+            f"Unknown remount_name {remount_name!r}; expected one of "
+            f"{sorted(SAMPLE_REMOUNT_OPTIONS)}"
+        )
+
     Q_norm = np.sqrt(h * h + k * k + l * l)  # We have assumed B_0 = I
     q_hkl = np.asarray([h, k, l]) / Q_norm
 

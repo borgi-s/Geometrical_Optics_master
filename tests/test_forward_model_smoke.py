@@ -120,3 +120,21 @@ class TestFindHgSampleRemount:
 
         assert "_remountS1.npy" in captured["file_path"]
         np.testing.assert_array_equal(captured["S"], np.identity(3))
+
+    def test_find_hg_rejects_unknown_remount_name(self) -> None:
+        """Find_Hg raises ValueError on a remount_name not in SAMPLE_REMOUNT_OPTIONS.
+
+        Hardens the surface for ad-hoc / notebook callers that bypass
+        CrystalConfig validation. Without this guard, a typo silently writes
+        a junk cache filename like Fg_..._remountbogus.npy.
+        """
+        import dfxm_geo.direct_space.forward_model as fm
+
+        with pytest.raises(ValueError, match="Unknown remount_name 'bogus'"):
+            fm.Find_Hg(
+                dis=4,
+                ndis=2,
+                psize=fm.psize,
+                zl_rms=fm.zl_rms,
+                remount_name="bogus",
+            )
