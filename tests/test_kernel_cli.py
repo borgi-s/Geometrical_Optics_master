@@ -46,3 +46,27 @@ class TestGenerateKernelOutputPath:
         # Mirrors the Round 11 fix that hoisted check_folder("", "pkl_files") out of
         # module-import time.
         assert not (Path.cwd() / "pkl_files" / "Resq_i_explicit_vars.txt").exists()
+
+
+class TestDefaultConfigReciprocalBlock:
+    def test_default_toml_has_reciprocal_block(self) -> None:
+        """configs/default.toml must include a `[reciprocal]` block that
+        dfxm-bootstrap can drive without any extra args.
+        """
+        import tomllib
+
+        cfg_path = Path(__file__).resolve().parents[1] / "configs" / "default.toml"
+        with cfg_path.open("rb") as f:
+            data = tomllib.load(f)
+        assert "reciprocal" in data, "configs/default.toml missing [reciprocal] block"
+        recip = data["reciprocal"]
+        # CDD_inc canonical recipe (spec §1 + kernel.py defaults).
+        assert recip["Nrays"] == int(1e8)
+        assert recip["beamstop"] is True
+        assert recip["aperture"] is True
+        assert recip["knife_edge"] is False
+        assert recip["bs_height"] == 25e-3
+        # qi ranges (units consistent with generate_kernel kwargs).
+        assert recip["qi1_range"] == 5e-4
+        assert recip["qi2_range"] == 0.75e-2
+        assert recip["qi3_range"] == 0.75e-2
