@@ -1,0 +1,51 @@
+#!/bin/bash
+# ==============================================================================
+# DTU HPC (LSF) — single dfxm-forward simulation
+# ==============================================================================
+# Submit with:   bsub < lsf/forward_single.bsub
+# Monitor with:  bjobs -l <JOBID>
+# See docs/cluster-runs.md for the full walkthrough.
+# ==============================================================================
+#
+# >>> EDIT THESE >>>
+#BSUB -J dfxm-forward                  # Job name (visible in bjobs)
+#BSUB -q hpc                           # Queue (DTU HPC default)
+#BSUB -W 24:00                         # Walltime HH:MM (24 h is the hpc queue cap)
+#BSUB -n 8                             # CPU slots
+#BSUB -R "rusage[mem=4GB]"             # Memory per slot
+#BSUB -R "span[hosts=1]"               # Pin to a single host (joblib parallelism)
+#BSUB -o logs/forward-%J.out           # stdout (%J = job id)
+#BSUB -e logs/forward-%J.err           # stderr
+# #BSUB -u your.address@dtu.dk -B -N   # Uncomment for email on start/end
+# <<< EDIT THESE <<<
+
+set -euo pipefail
+
+# Workspace is the directory bsub was invoked from. Make sure it is the repo
+# root or adjust the paths below.
+WORKDIR="${PWD}"
+CONFIG="${WORKDIR}/configs/default.toml"
+OUTPUT="${WORKDIR}/output/forward_${LSB_JOBID:-local}"
+
+mkdir -p "$(dirname "${OUTPUT}")" logs
+
+# Module load (DTU HPC site convention). Replace miniconda3 with your module
+# tag if your site uses a different name.
+module load python3/3.11
+# Alternatively: `source ~/miniforge3/etc/profile.d/conda.sh` if you maintain
+# your own conda install on the cluster.
+
+# Activate the conda environment created by environment.yml.
+source ~/miniforge3/etc/profile.d/conda.sh
+conda activate dfxm-geo
+
+# Stage 0 — generate the kernel pickle if missing. dfxm-bootstrap is idempotent
+# (it refuses to overwrite without --force), so this line is safe to leave in.
+if [ ! -f reciprocal_space/pkl_files/Resq_i_20230913_1308.pkl ]; then
+    dfxm-bootstrap --config "${CONFIG}"
+fi
+
+# Stage 1 — run the forward simulation.
+dfxm-forward --config "${CONFIG}" --output "${OUTPUT}"
+
+echo "Done. Output in ${OUTPUT}"
