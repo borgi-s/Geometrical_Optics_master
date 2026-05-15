@@ -21,6 +21,24 @@ This is not a generic optics simulator — it is specifically a *forward model*
 for dark-field X-ray microscopy at synchrotron sources, used to interpret
 images of strain fields and crystal defects.
 
+## Examples
+
+A representative DFXM forward image from a 151-dislocation crystal:
+
+![DFXM forward image](docs/img/example_dislocs_frame.png)
+
+The corresponding mosaicity map (per-pixel COM in φ and χ) from the
+post-processing stage:
+
+![Mosaicity map](docs/img/example_mosaicity.png)
+
+To regenerate these images locally:
+
+```bash
+dfxm-bootstrap --config configs/default.toml      # one-time, ~50 s
+python scripts/render_readme_examples.py --small  # ~30 s
+```
+
 ## Status
 
 This repository is undergoing a structural cleanup (branch

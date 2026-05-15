@@ -24,3 +24,20 @@ class TestReadmeClusterSection:
 
     def test_mentions_dfxm_bootstrap(self) -> None:
         assert "dfxm-bootstrap" in _text()
+
+
+class TestReadmeExamplesSection:
+    def test_has_examples_section(self) -> None:
+        text = _text()
+        assert "## Examples" in text or "# Examples" in text
+
+    def test_references_example_images(self) -> None:
+        text = _text()
+        for img in [
+            "docs/img/example_dislocs_frame.png",
+            "docs/img/example_mosaicity.png",
+        ]:
+            assert img in text, f"missing image reference: {img}"
+
+    def test_references_render_script(self) -> None:
+        assert "scripts/render_readme_examples.py" in _text()
