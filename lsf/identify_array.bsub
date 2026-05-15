@@ -30,7 +30,13 @@ TASK_OUTPUT="${OUTPUT_BASE}/task_$(printf '%04d' "${LSB_JOBINDEX}")"
 
 mkdir -p "${OUTPUT_BASE}" logs
 
-source ~/miniforge3/etc/profile.d/conda.sh
+# Activate conda. Edit CONDA_BASE if your conda install lives elsewhere.
+# Common locations on DTU:
+#   $HOME/miniforge3                                         (personal install)
+#   $HOME/miniconda3                                         (personal install)
+#   /dtu/3d-imaging-center/projects/<project>/.../miniconda3 (shared project install)
+CONDA_BASE="${HOME}/miniforge3"
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate dfxm-geo
 
 if [ ! -f reciprocal_space/pkl_files/Resq_i_20230913_1308.pkl ]; then

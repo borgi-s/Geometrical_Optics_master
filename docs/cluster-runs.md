@@ -43,8 +43,10 @@ The DTU HPC cluster uses the LSF scheduler. Templates live in
 cd ~/Geometrical_Optics_master
 git pull
 
-# One-time conda env setup.
-module load python3/3.11
+# One-time conda env setup. Your conda must be initialized — if you
+# installed miniforge yourself, it usually auto-activates via ~/.bashrc.
+# DO NOT `module load python3/...` on DTU; it conflicts with conda's
+# Python and causes a `Fatal Python error: init_fs_encoding` crash.
 conda env create -f environment.yml      # creates `dfxm-geo`
 conda activate dfxm-geo
 pip install -e .

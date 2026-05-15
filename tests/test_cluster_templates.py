@@ -168,3 +168,27 @@ class TestClusterRunsDoc:
         assert "SLURM" in text
         assert "bsub" in text
         assert "sbatch" in text
+
+
+class TestLsfNoModuleLoadPython:
+    """v1.0.1 regression guard: `module load python3/...` conflicts with conda's
+    Python and causes `Fatal Python error: init_fs_encoding`. Neither LSF
+    template should load a DTU python3 module — conda provides its own.
+    """
+
+    def test_forward_single_no_module_load_python3(self) -> None:
+        text = _read("lsf/forward_single.bsub")
+        assert "module load python3" not in text, (
+            "LSF template must not `module load python3/...` — it shadows conda's "
+            "Python and crashes with init_fs_encoding. See v1.0.1 bugfix."
+        )
+
+    def test_identify_array_no_module_load_python3(self) -> None:
+        text = _read("lsf/identify_array.bsub")
+        assert "module load python3" not in text
+
+    def test_lsf_templates_use_conda_base_var(self) -> None:
+        """The CONDA_BASE indirection makes the conda path the obvious EDIT THESE point."""
+        for rel in ["lsf/forward_single.bsub", "lsf/identify_array.bsub"]:
+            text = _read(rel)
+            assert "CONDA_BASE=" in text, f"{rel} should expose CONDA_BASE as an editable variable"
