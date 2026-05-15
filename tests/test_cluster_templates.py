@@ -67,3 +67,35 @@ class TestLsfIdentifyArray:
 
     def test_edit_these_block(self) -> None:
         assert "EDIT THESE" in _read(self.rel)
+
+
+class TestSlurmForwardSingle:
+    rel = "slurm/forward_single.sbatch"
+
+    def test_exists(self) -> None:
+        assert (REPO_ROOT / self.rel).is_file()
+
+    def test_sbatch_directives(self) -> None:
+        text = _read(self.rel)
+        assert text.startswith("#!/bin/bash")
+        for directive in [
+            "#SBATCH --job-name",
+            "#SBATCH --time",
+            "#SBATCH --output",
+            "#SBATCH --error",
+            "#SBATCH --cpus-per-task",
+            "#SBATCH --mem",
+        ]:
+            assert directive in text, f"missing {directive}"
+
+    def test_mentions_sinfo_callout(self) -> None:
+        """SLURM templates flag partition naming as cluster-specific via `sinfo`."""
+        assert "sinfo" in _read(self.rel)
+
+    def test_invokes_forward_cli(self) -> None:
+        text = _read(self.rel)
+        assert "dfxm-forward" in text
+        assert "dfxm-bootstrap" in text
+
+    def test_edit_these_block(self) -> None:
+        assert "EDIT THESE" in _read(self.rel)
