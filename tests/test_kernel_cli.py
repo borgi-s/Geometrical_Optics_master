@@ -42,3 +42,7 @@ class TestGenerateKernelOutputPath:
         text = sidecar.read_text()
         assert "Nrays" in text
         assert "qi1_range" in text
+        # Defensive: the sidecar must land next to the pickle ONLY, not also in CWD.
+        # Mirrors the Round 11 fix that hoisted check_folder("", "pkl_files") out of
+        # module-import time.
+        assert not (Path.cwd() / "pkl_files" / "Resq_i_explicit_vars.txt").exists()
