@@ -17,13 +17,18 @@
     },
     {
       "name": "Detlefs, Carsten",
-      "affiliation": "European Synchrotron Radiation Facility"
+      "affiliation": "European Synchrotron Radiation Facility",
+      "orcid": "0000-0003-2573-2286"
     },
     {
-      "name": "Winther, Grethe"
+      "name": "Winther, Grethe",
+      "affiliation": "Technical University of Denmark",
+      "orcid": "0000-0002-4178-3449"
     },
     {
-      "name": "Poulsen, Henning Friis"
+      "name": "Poulsen, Henning Friis",
+      "affiliation": "Technical University of Denmark",
+      "orcid": "0000-0001-7876-4113"
     }
   ],
   "keywords": [
