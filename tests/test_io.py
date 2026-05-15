@@ -276,10 +276,12 @@ def test_save_edfs_round_trips_pixel_data(tmp_path):
 
 def test_save_images_parallel_uses_explicit_max_workers(tmp_path, monkeypatch):
     """The max_workers kwarg overrides env var and auto-default."""
+    import dfxm_geo.direct_space.forward_model as fm_mod
     import dfxm_geo.io.images as images_mod
 
     # Mock forward() so we don't need the real kernel.
-    monkeypatch.setattr(images_mod, "forward", lambda Hg, phi=0, chi=0: np.zeros((4, 4)))
+    # save_image calls _fm.forward(...) — patch the source module attribute.
+    monkeypatch.setattr(fm_mod, "forward", lambda Hg, phi=0, chi=0: np.zeros((4, 4)))
 
     captured = {}
 
@@ -306,9 +308,10 @@ def test_save_images_parallel_uses_explicit_max_workers(tmp_path, monkeypatch):
 
 def test_save_images_parallel_falls_back_to_env_var(tmp_path, monkeypatch):
     """When max_workers is None, DFXM_MAX_WORKERS env var is honored."""
+    import dfxm_geo.direct_space.forward_model as fm_mod
     import dfxm_geo.io.images as images_mod
 
-    monkeypatch.setattr(images_mod, "forward", lambda Hg, phi=0, chi=0: np.zeros((4, 4)))
+    monkeypatch.setattr(fm_mod, "forward", lambda Hg, phi=0, chi=0: np.zeros((4, 4)))
 
     captured = {}
 
@@ -365,6 +368,7 @@ def test_save_image_does_not_misunpack_forward(tmp_path, monkeypatch):
     Mocks forward() to return a single np.ndarray (the default) and confirms
     save_image writes the file without raising ValueError.
     """
+    import dfxm_geo.direct_space.forward_model as fm_mod
     import dfxm_geo.io.images as images_mod
 
     expected_array = np.arange(12, dtype=float).reshape(3, 4)
@@ -372,7 +376,7 @@ def test_save_image_does_not_misunpack_forward(tmp_path, monkeypatch):
     def fake_forward(Hg, phi=0.0, chi=0.0, *args, **kwargs):
         return expected_array
 
-    monkeypatch.setattr(images_mod, "forward", fake_forward)
+    monkeypatch.setattr(fm_mod, "forward", fake_forward)
     args = (
         np.zeros((1, 3, 3)),  # Hg (unused by fake_forward)
         0.0,  # phi

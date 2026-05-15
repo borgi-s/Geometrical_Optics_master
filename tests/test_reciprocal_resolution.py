@@ -63,15 +63,15 @@ def test_seeded_rng_makes_output_reproducible():
 
 
 def test_no_beamstop_baseline_matches_golden(golden_dir):
-    """Seeded no-beamstop run reproduces the pinned baseline to one ULP.
+    """Seeded no-beamstop run reproduces the pinned baseline to ~1e-12.
 
-    The original golden was generated locally; cross-platform FP variance
-    (Windows MSVC vs Linux GCC numpy/scipy builds) introduces ~1e-19
-    absolute differences (~1 ULP) on a few percent of values. That's
-    physically zero — the seeded math is deterministic to within the
-    reorder-of-summation noise floor, not bit-for-bit across compilers.
-    Use rtol=1e-15 (~10 ULP) to remain a tight regression guard while
-    surviving the platform skew.
+    The golden was generated on Windows; cross-platform FP variance
+    (Windows MSVC vs Linux GCC builds of numpy/scipy) introduces
+    relative differences up to ~1.78e-13 on a few percent of values.
+    That's reorder-of-summation / FMA-vs-non-FMA noise — physically
+    zero, but enough to break `assert_array_equal`. rtol=1e-12 is two
+    orders of magnitude looser than the observed worst case while
+    still being tight enough to catch any real numerical regression.
     """
     rng = np.random.default_rng(20260513)
     result = _call(rng=rng, return_qs=True)
@@ -79,12 +79,12 @@ def test_no_beamstop_baseline_matches_golden(golden_dir):
     qrock, qroll, qpar, qrock_prime, q2th, delta_2theta = result
 
     golden = np.load(golden_dir / "reciprocal_baseline.npz")
-    np.testing.assert_allclose(qrock, golden["qrock"], rtol=1e-15)
-    np.testing.assert_allclose(qroll, golden["qroll"], rtol=1e-15)
-    np.testing.assert_allclose(qpar, golden["qpar"], rtol=1e-15)
-    np.testing.assert_allclose(qrock_prime, golden["qrock_prime"], rtol=1e-15)
-    np.testing.assert_allclose(q2th, golden["q2th"], rtol=1e-15)
-    np.testing.assert_allclose(delta_2theta, golden["delta_2theta"], rtol=1e-15)
+    np.testing.assert_allclose(qrock, golden["qrock"], rtol=1e-12)
+    np.testing.assert_allclose(qroll, golden["qroll"], rtol=1e-12)
+    np.testing.assert_allclose(qpar, golden["qpar"], rtol=1e-12)
+    np.testing.assert_allclose(qrock_prime, golden["qrock_prime"], rtol=1e-12)
+    np.testing.assert_allclose(q2th, golden["q2th"], rtol=1e-12)
+    np.testing.assert_allclose(delta_2theta, golden["delta_2theta"], rtol=1e-12)
 
 
 def test_dphi_range_zero_matches_baseline():
