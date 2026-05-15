@@ -72,6 +72,32 @@ as a historical reference. Use `dfxm-forward` for all new workflows; the
 post-processing (COM / mosaicity maps, SVG figures) is now handled by
 `dfxm_geo.analysis` and `dfxm_geo.viz` and is invoked automatically by the CLI.
 
+## Running on a cluster
+
+`dfxm-forward` and `dfxm-identify` are designed to run on HPC clusters. The
+two-step workflow is `dfxm-bootstrap` once per environment, then
+`dfxm-forward` / `dfxm-identify` many times. See
+[`docs/cluster-runs.md`](docs/cluster-runs.md) for the full walkthrough.
+
+Submit templates live in:
+
+- [`lsf/`](lsf/) — DTU HPC (LSF scheduler, `bsub`)
+- [`slurm/`](slurm/) — ESRF (SLURM scheduler, `sbatch`)
+
+Each scheduler ships a single-job template (`forward_single.{bsub,sbatch}`)
+and an array template for ML-training sweeps
+(`identify_array.{bsub,sbatch}`). Open them and edit the
+`>>> EDIT THESE >>>` block at the top to set your queue / partition,
+walltime, and memory.
+
+For conda-based cluster installs, use [`environment.yml`](environment.yml):
+
+```bash
+conda env create -f environment.yml
+conda activate dfxm-geo
+pip install -e .
+```
+
 ## Project structure
 
 ```
