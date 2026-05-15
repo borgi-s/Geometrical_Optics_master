@@ -551,8 +551,8 @@ class TestDfxmForwardSampleRemountCLI:
     """End-to-end CLI smoke: dfxm-forward with sample_remount=S2."""
 
     def test_dfxm_forward_with_sample_remount_S2_runs(self, tmp_path: Path) -> None:
+        import shutil
         import subprocess
-        import sys as _sys
         from pathlib import Path as _P
 
         # Skip if the Resq_i kernel pickle is not on disk — same gating pattern
@@ -564,17 +564,18 @@ class TestDfxmForwardSampleRemountCLI:
 
         # Run dfxm-forward with the S2 variant config, output to tmp_path
         variant_config = repo_root / "configs" / "variants" / "sample_remount_S2.toml"
-        out_dir = tmp_path / "out"
         result = subprocess.run(
             [
-                _sys.executable,
-                "-c",
-                "from dfxm_geo.pipeline import cli_main; "
-                f"raise SystemExit(cli_main(['--config', r'{variant_config}', '--output', r'{out_dir}', '--no-postprocess']))",
+                shutil.which("dfxm-forward") or "dfxm-forward",
+                "--config",
+                str(variant_config),
+                "--output",
+                str(tmp_path / "out"),
+                "--no-postprocess",
             ],
             capture_output=True,
             text=True,
-            timeout=3600,
+            timeout=600,
         )
         # CLI should succeed
         assert result.returncode == 0, (
