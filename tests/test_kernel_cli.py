@@ -9,6 +9,7 @@ import pickle
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 class TestGenerateKernelOutputPath:
@@ -94,3 +95,155 @@ class TestDefaultConfigReciprocalBlock:
             assert default == val, (
                 f"[reciprocal].{key} = {val!r} drifted from generate_kernel default {default!r}"
             )
+
+
+class TestCliMain:
+    """Unit tests for `dfxm_geo.reciprocal_space.kernel.cli_main`.
+
+    We mock `generate_kernel` itself (the underlying Monte Carlo is exercised
+    elsewhere); the goal here is to pin the CLI surface — flags, defaults,
+    overwrite-guard, and TOML parsing.
+    """
+
+    def _make_config(self, tmp_path: Path) -> Path:
+        cfg = tmp_path / "tiny.toml"
+        cfg.write_text(
+            "[reciprocal]\n"
+            "Nrays = 1000\n"
+            "npoints1 = 20\n"
+            "npoints2 = 20\n"
+            "npoints3 = 20\n"
+            "qi1_range = 5e-4\n"
+            "qi2_range = 7.5e-3\n"
+            "qi3_range = 7.5e-3\n"
+            "beamstop = true\n"
+            "bs_height = 25e-3\n"
+            "aperture = true\n"
+            "knife_edge = false\n"
+        )
+        return cfg
+
+    def test_requires_config(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from dfxm_geo.reciprocal_space.kernel import cli_main
+
+        with pytest.raises(SystemExit) as excinfo:
+            cli_main([])
+        assert excinfo.value.code == 2  # argparse usage error
+
+    def test_invokes_generate_kernel_with_toml_params(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = self._make_config(tmp_path)
+        captured: dict[str, object] = {}
+
+        def fake_generate(**kwargs: object) -> Path:
+            captured.update(kwargs)
+            out = kwargs.get("output_path")
+            assert isinstance(out, Path)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"")
+            return out
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate)
+
+        out = tmp_path / "canonical.pkl"
+        rc = kmod.cli_main(["--config", str(cfg), "--output", str(out)])
+        assert rc == 0
+        assert out.is_file()
+        # TOML fields are forwarded as kwargs.
+        assert captured["Nrays"] == 1000
+        assert captured["npoints1"] == 20
+        assert captured["beamstop"] is True
+        assert captured["bs_height"] == 25e-3
+        assert captured["output_path"] == out
+
+    def test_default_output_matches_forward_model_canonical_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no --output, write to `<fm.pkl_fpath>/<fm.pkl_fn>`."""
+        import os
+
+        import dfxm_geo.direct_space.forward_model as fm
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        # Redirect the canonical path into tmp_path so we don't trip the
+        # overwrite-guard on a checkout that already has the real pickle.
+        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + os.sep)
+        monkeypatch.setattr(fm, "pkl_fn", "Resq_i_canonical.pkl")
+
+        cfg = self._make_config(tmp_path)
+        seen: dict[str, object] = {}
+
+        def fake_generate(**kwargs: object) -> Path:
+            seen.update(kwargs)
+            out = kwargs["output_path"]
+            assert isinstance(out, Path)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"")
+            return out
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate)
+
+        rc = kmod.cli_main(["--config", str(cfg)])
+        assert rc == 0
+        expected = Path(fm.pkl_fpath) / fm.pkl_fn
+        assert seen["output_path"] == expected
+
+    def test_refuses_to_overwrite_without_force(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = self._make_config(tmp_path)
+        existing = tmp_path / "existing.pkl"
+        existing.write_bytes(b"prior contents")
+        called = False
+
+        def fake_generate(**kwargs: object) -> Path:
+            nonlocal called
+            called = True
+            return Path()
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate)
+
+        rc = kmod.cli_main(["--config", str(cfg), "--output", str(existing)])
+        assert rc != 0
+        assert not called, "generate_kernel must not run when output exists and --force absent"
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+        assert "--force" in out
+
+    def test_force_flag_overwrites(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = self._make_config(tmp_path)
+        existing = tmp_path / "existing.pkl"
+        existing.write_bytes(b"prior contents")
+
+        def fake_generate(**kwargs: object) -> Path:
+            out = kwargs["output_path"]
+            assert isinstance(out, Path)
+            out.write_bytes(b"new contents")
+            return out
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate)
+
+        rc = kmod.cli_main(["--config", str(cfg), "--output", str(existing), "--force"])
+        assert rc == 0
+        assert existing.read_bytes() == b"new contents"
+
+    def test_missing_reciprocal_block_errors_clearly(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from dfxm_geo.reciprocal_space.kernel import cli_main
+
+        bad = tmp_path / "no_recip.toml"
+        bad.write_text("[scan]\nphi_range = 0.1\n")
+        with pytest.raises(SystemExit) as excinfo:
+            cli_main(["--config", str(bad)])
+        assert excinfo.value.code != 0
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+        assert "[reciprocal]" in out

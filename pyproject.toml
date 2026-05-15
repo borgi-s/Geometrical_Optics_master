@@ -61,6 +61,7 @@ Paper = "https://journals.iucr.org/j/issues/2024/02/00/nb5370/"
 [project.scripts]
 dfxm-forward = "dfxm_geo.pipeline:cli_main"
 dfxm-identify = "dfxm_geo.pipeline:cli_main_identify"
+dfxm-bootstrap = "dfxm_geo.reciprocal_space.kernel:cli_main"
 
 [tool.setuptools]
 packages = [

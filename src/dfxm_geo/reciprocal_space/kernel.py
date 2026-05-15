@@ -146,5 +146,76 @@ def generate_kernel(
     return output_path if output_path is not None else Path("pkl_files") / f"Resq_i_{date}.pkl"
 
 
+def cli_main(argv: list[str] | None = None) -> int:
+    """Entry point for `dfxm-bootstrap`.
+
+    Reads a TOML config (e.g. `configs/default.toml`), parses the
+    `[reciprocal]` block, and writes the resulting reciprocal-space kernel
+    pickle to the canonical path that `dfxm-forward`'s stage-0 preflight will
+    read (`<fm.pkl_fpath>/<fm.pkl_fn>`), or to `--output <path>` if given.
+    """
+    import argparse
+    import sys
+    import tomllib
+
+    import dfxm_geo.direct_space.forward_model as fm
+
+    parser = argparse.ArgumentParser(
+        prog="dfxm-bootstrap",
+        description=(
+            "Generate the reciprocal-space resolution kernel pickle for "
+            "dfxm-forward / dfxm-identify. Takes ~50 s wall-clock at the "
+            "default Nrays=1e8."
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to a TOML config containing a [reciprocal] block.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help=(
+            "Destination pickle path. Defaults to <pkl_fpath>/<pkl_fn> "
+            "(the path dfxm-forward reads at import time)."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing pickle at the destination.",
+    )
+    args = parser.parse_args(argv)
+
+    with args.config.open("rb") as f:
+        data = tomllib.load(f)
+    if "reciprocal" not in data:
+        print(
+            f"error: {args.config} has no [reciprocal] block; "
+            "see configs/default.toml for the expected schema.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    output_path = args.output if args.output is not None else Path(fm.pkl_fpath) / fm.pkl_fn
+
+    if output_path.exists() and not args.force:
+        print(
+            f"refusing to overwrite existing pickle at {output_path}; pass --force to regenerate.",
+            file=sys.stderr,
+        )
+        return 1
+
+    kwargs = dict(data["reciprocal"])
+    written = generate_kernel(output_path=output_path, **kwargs)
+    print(f"wrote {written}")
+    return 0
+
+
 if __name__ == "__main__":
-    generate_kernel()
+    import sys as _sys
+
+    _sys.exit(cli_main())
