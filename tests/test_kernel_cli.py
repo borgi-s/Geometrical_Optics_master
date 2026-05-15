@@ -70,3 +70,27 @@ class TestDefaultConfigReciprocalBlock:
         assert recip["qi1_range"] == 5e-4
         assert recip["qi2_range"] == 0.75e-2
         assert recip["qi3_range"] == 0.75e-2
+
+    def test_toml_values_match_generate_kernel_defaults(self) -> None:
+        """Pin the [reciprocal] TOML block to generate_kernel's defaults.
+
+        Catches drift: if anyone bumps a default in kernel.py and forgets to
+        update the TOML, this test trips. Conversely if a TOML value is
+        edited without intent, this test surfaces it.
+        """
+        import inspect
+        import tomllib
+
+        from dfxm_geo.reciprocal_space.kernel import generate_kernel
+
+        cfg_path = Path(__file__).resolve().parents[1] / "configs" / "default.toml"
+        with cfg_path.open("rb") as f:
+            recip = tomllib.load(f)["reciprocal"]
+
+        sig = inspect.signature(generate_kernel)
+        for key, val in recip.items():
+            assert key in sig.parameters, f"unknown kwarg {key} in [reciprocal]"
+            default = sig.parameters[key].default
+            assert default == val, (
+                f"[reciprocal].{key} = {val!r} drifted from generate_kernel default {default!r}"
+            )

@@ -52,7 +52,7 @@ qi3_range  = 7.5e-3
 # Beam / objective parameters.
 zeta_v_fwhm = 5.3e-4
 zeta_h_fwhm = 0.0
-NA_rms      = 3.110638297872340e-4  # = 7.31e-4 / 2.35
+NA_rms      = 3.1106382978723403e-4  # = 7.31e-4 / 2.35
 eps_rms     = 6.0e-5                # = 1.41e-4 / 2.35
 # theta is auto-derived from Al 111 + 17 keV when absent (see kernel.cli_main).
 D  = 0.000565685424949238   # = 2 * sqrt(50e-6 * 1.6e-3)
