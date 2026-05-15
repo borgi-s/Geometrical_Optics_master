@@ -63,14 +63,7 @@ dfxm-forward = "dfxm_geo.pipeline:cli_main"
 dfxm-identify = "dfxm_geo.pipeline:cli_main_identify"
 
 [tool.setuptools]
-# Transitional layout during Phase 4 cleanup. Both the new src/dfxm_geo/
-# package and the legacy flat modules ship together; legacy paths will
-# become deprecation shims that re-export from dfxm_geo.* until Phase 5.3
-# removes them.
-py-modules = ["functions", "image_processor"]
 packages = [
-    "direct_space",
-    "reciprocal_space",
     "dfxm_geo",
     "dfxm_geo.analysis",
     "dfxm_geo.crystal",
