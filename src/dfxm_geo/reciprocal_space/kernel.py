@@ -14,6 +14,7 @@ Run as a script::
 """
 
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 
@@ -50,7 +51,8 @@ def generate_kernel(
     aperture: bool = True,
     knife_edge: bool = False,
     dphi_range: float = 0.0,
-) -> str:
+    output_path: Path | None = None,
+) -> Path:
     """Run the kernel-generation Monte Carlo and write the pickle to ``pkl_files/``.
 
     Defaults reproduce the CDD_inc canonical recipe (Al 111 reflection at
@@ -72,12 +74,23 @@ def generate_kernel(
         dphi_range: rocking-curve sweep half-width (rad).
 
     Returns:
-        The timestamp tag that was used.
+        The path the pickle was written to.
     """
     if date is None:
         date = datetime.now().strftime("%Y%m%d_%H%M")
 
     phys_aper = D / d1
+
+    # Resolve the destination. When `output_path` is provided, it is the
+    # canonical path; the sidecar lives next to it as `<stem>_vars.txt`.
+    # When `output_path` is None, fall back to the legacy default
+    # `pkl_files/Resq_i_<date>.pkl` (relative to CWD) — preserves the
+    # `python -m dfxm_geo.reciprocal_space.kernel` workflow.
+    if output_path is not None:
+        output_path = Path(output_path)
+        vars_path = output_path.with_name(output_path.stem + "_vars.txt")
+    else:
+        vars_path = Path("pkl_files") / f"Resq_i_{date}_vars.txt"
 
     reciprocal_res_func(
         Nrays,
@@ -101,6 +114,7 @@ def generate_kernel(
         aperture=aperture,
         knife_edge=knife_edge,
         dphi_range=dphi_range,
+        output_path=output_path,
     )
 
     vars_used = {
@@ -126,10 +140,10 @@ def generate_kernel(
         "dphi_range": dphi_range,
     }
 
-    with open(f"pkl_files/Resq_i_{date}_vars.txt", "w") as data:
-        data.write(str(vars_used))
+    vars_path.parent.mkdir(parents=True, exist_ok=True)
+    vars_path.write_text(str(vars_used))
 
-    return date
+    return output_path if output_path is not None else Path("pkl_files") / f"Resq_i_{date}.pkl"
 
 
 if __name__ == "__main__":
