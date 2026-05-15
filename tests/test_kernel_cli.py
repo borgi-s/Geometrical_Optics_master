@@ -241,9 +241,36 @@ class TestCliMain:
 
         bad = tmp_path / "no_recip.toml"
         bad.write_text("[scan]\nphi_range = 0.1\n")
-        with pytest.raises(SystemExit) as excinfo:
-            cli_main(["--config", str(bad)])
-        assert excinfo.value.code != 0
+        rc = cli_main(["--config", str(bad)])
+        assert rc == 1
         captured = capsys.readouterr()
         out = captured.out + captured.err
         assert "[reciprocal]" in out
+
+    def test_missing_config_file_errors_clearly(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Non-existent --config path → clean CLI error, not a traceback."""
+        from dfxm_geo.reciprocal_space.kernel import cli_main
+
+        missing = tmp_path / "does_not_exist.toml"
+        rc = cli_main(["--config", str(missing)])
+        assert rc == 1
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+        assert "not found" in out
+        assert str(missing) in out
+
+    def test_unknown_reciprocal_key_errors_clearly(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Unknown TOML key in [reciprocal] → clean CLI error, not a TypeError."""
+        from dfxm_geo.reciprocal_space.kernel import cli_main
+
+        cfg = tmp_path / "bogus.toml"
+        cfg.write_text("[reciprocal]\nNrays = 1000\ntotally_invented_key = 99\n")
+        rc = cli_main(["--config", str(cfg)])
+        assert rc == 1
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+        assert "totally_invented_key" in out

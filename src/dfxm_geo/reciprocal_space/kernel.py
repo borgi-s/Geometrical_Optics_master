@@ -146,6 +146,13 @@ def generate_kernel(
     return output_path if output_path is not None else Path("pkl_files") / f"Resq_i_{date}.pkl"
 
 
+# Stable reference to the original generate_kernel for CLI introspection.
+# `cli_main` uses this (not the module-level `generate_kernel` name) when
+# validating TOML keys, so that test monkeypatches replacing the public
+# symbol don't shrink the inspected signature to the fake's `**kwargs`.
+_generate_kernel_original = generate_kernel
+
+
 def cli_main(argv: list[str] | None = None) -> int:
     """Entry point for `dfxm-bootstrap`.
 
@@ -190,6 +197,10 @@ def cli_main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if not args.config.is_file():
+        print(f"error: config file not found: {args.config}", file=sys.stderr)
+        return 1
+
     with args.config.open("rb") as f:
         data = tomllib.load(f)
     if "reciprocal" not in data:
@@ -198,7 +209,25 @@ def cli_main(argv: list[str] | None = None) -> int:
             "see configs/default.toml for the expected schema.",
             file=sys.stderr,
         )
-        raise SystemExit(1)
+        return 1
+
+    import inspect
+
+    # Bind to the original `generate_kernel` (not the module-level name) so
+    # that test monkeypatches replacing kmod.generate_kernel don't shrink the
+    # valid-key set to just the fake's **kwargs.
+    sig = inspect.signature(_generate_kernel_original)
+    valid_params = set(sig.parameters)
+    # `date` and `output_path` are CLI-managed kwargs, not TOML-driven.
+    valid_recip_keys = valid_params - {"date", "output_path"}
+    unknown = set(data["reciprocal"]) - valid_recip_keys
+    if unknown:
+        print(
+            f"error: unknown [reciprocal] keys: {sorted(unknown)}; "
+            f"valid keys are {sorted(valid_recip_keys)}.",
+            file=sys.stderr,
+        )
+        return 1
 
     output_path = args.output if args.output is not None else Path(fm.pkl_fpath) / fm.pkl_fn
 
