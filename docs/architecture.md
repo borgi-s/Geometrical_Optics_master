@@ -64,7 +64,11 @@ The end-to-end pipeline has five stages. Stages 1–3 are the forward simulation
 2. **Compute or load the displacement-gradient field `Hg`** for a given
    dislocation configuration. The first call generates Hg from the
    per-pixel `Fd_find` solution and caches it as
-   `direct_space/deformation_gradient_tensors/Fg_<dis>_<psize>nm_<zl_rms>nm.npy`:
+   `direct_space/deformation_gradient_tensors/Fg_<dis>_<psize_nm>nm_<zl_rms_nm>nm_px<Npixels>_sub<Nsub>_remount<name>.npy`
+   — e.g. `Fg_4_40nm_64nm_px340_sub2_remountS1.npy`. The `_px<Npixels>_sub<Nsub>`
+   key (added with the Round 15 shape-mismatch fix) and the `_remount<name>`
+   suffix (added with the Round 18 sample-remount port) make the cache safe
+   against grid-resolution and reference-frame collisions:
 
    ```python
    from dfxm_geo.direct_space.forward_model import Find_Hg
