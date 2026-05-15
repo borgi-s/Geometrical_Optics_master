@@ -125,3 +125,46 @@ class TestSlurmIdentifyArray:
 
     def test_edit_these_block(self) -> None:
         assert "EDIT THESE" in _read(self.rel)
+
+
+class TestClusterRunsDoc:
+    rel = "docs/cluster-runs.md"
+
+    def test_exists(self) -> None:
+        assert (REPO_ROOT / self.rel).is_file()
+
+    def test_has_required_sections(self) -> None:
+        text = _read(self.rel)
+        for heading in [
+            "Two-step workflow",
+            "DTU HPC",
+            "ESRF",
+            "Output handling",
+            "Memory + walltime sizing",
+            "DTU vs ESRF",
+        ]:
+            assert heading in text, f"missing section: {heading}"
+
+    def test_references_templates(self) -> None:
+        text = _read(self.rel)
+        for path in [
+            "lsf/forward_single.bsub",
+            "lsf/identify_array.bsub",
+            "slurm/forward_single.sbatch",
+            "slurm/identify_array.sbatch",
+        ]:
+            assert path in text, f"missing reference to {path}"
+
+    def test_references_clis(self) -> None:
+        text = _read(self.rel)
+        assert "dfxm-bootstrap" in text
+        assert "dfxm-forward" in text
+        assert "dfxm-identify" in text
+
+    def test_warns_lsf_vs_slurm(self) -> None:
+        """DTU is LSF (bsub), ESRF is SLURM (sbatch). The doc must say so explicitly."""
+        text = _read(self.rel)
+        assert "LSF" in text
+        assert "SLURM" in text
+        assert "bsub" in text
+        assert "sbatch" in text
