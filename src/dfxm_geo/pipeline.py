@@ -247,20 +247,26 @@ def load_identification_config(path: Path) -> IdentificationConfig:
 
 
 def _ensure_kernel_loaded() -> None:
-    """Raise a clear error if the reciprocal-space resolution kernel is missing.
+    """Pre-flight: verify the reciprocal-space kernel is loaded.
 
-    `forward()` reads module-level `Resq_i` populated by `_load_default_kernel`
-    at import time iff the default pickle exists. If it didn't, surface that
-    here instead of inside the thread pool inside `save_images_parallel`.
+    If the canonical pickle is on disk but the import-time auto-load didn't
+    populate state (e.g. it ran before bootstrap in the same process), this
+    function calls ``fm._load_default_kernel(...)`` to recover. If the pickle
+    is missing altogether, raises ``FileNotFoundError`` with a clear
+    `dfxm-bootstrap` instruction.
     """
-    if fm.Resq_i is None:
-        raise RuntimeError(
-            "Reciprocal-space resolution kernel not loaded. The pipeline "
-            "requires the default kernel pickle to be present at "
-            f"{fm.pkl_fpath + fm.pkl_fn!r}. Place the pickle there or call "
-            "dfxm_geo.direct_space.forward_model._load_default_kernel(...) "
-            "with explicit paths before running the pipeline."
+    if fm.Resq_i is not None:
+        return  # auto-load already populated state at import (common case)
+    pkl_path = Path(fm.pkl_fpath) / fm.pkl_fn
+    if not pkl_path.is_file():
+        raise FileNotFoundError(
+            f"Reciprocal-space kernel pickle not found at {pkl_path}.\n"
+            "Run 'dfxm-bootstrap --config <your.toml>' to generate it "
+            "(takes ~50 s for default Nrays=1e8). See docs/cluster-runs.md "
+            "for the full cluster workflow."
         )
+    # Pickle is on disk but Resq_i is None — load it explicitly.
+    fm._load_default_kernel(str(pkl_path))
 
 
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
@@ -346,8 +352,8 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
 
     Raises:
         FileNotFoundError: if either expected stack directory is absent.
-        RuntimeError: from :func:`_ensure_kernel_loaded` if the reciprocal-
-            space kernel is missing.
+        FileNotFoundError: from :func:`_ensure_kernel_loaded` if the
+            reciprocal-space kernel pickle is missing.
     """
     _ensure_kernel_loaded()
 

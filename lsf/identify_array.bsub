@@ -1,0 +1,46 @@
+#!/bin/bash
+# ==============================================================================
+# DTU HPC (LSF) — ML-training-data array job for dfxm-identify
+# ==============================================================================
+# Each array task processes a slice of the configured n_samples. With 10
+# samples per task and the default n_samples=1000, 100 array tasks cover
+# the full sweep.
+#
+# Submit with:   bsub < lsf/identify_array.bsub
+# Monitor with:  bjobs -A <ARRAYID>
+# ==============================================================================
+#
+# >>> EDIT THESE >>>
+#BSUB -J "dfxm-identify[1-100]"        # Array index range
+#BSUB -q hpc
+#BSUB -W 6:00                          # Walltime per array task
+#BSUB -n 4
+#BSUB -R "rusage[mem=4GB]"
+#BSUB -R "span[hosts=1]"
+#BSUB -o logs/identify-%J-%I.out       # %J = job id, %I = array index
+#BSUB -e logs/identify-%J-%I.err
+# <<< EDIT THESE <<<
+
+set -euo pipefail
+
+WORKDIR="${PWD}"
+CONFIG="${WORKDIR}/configs/identification_multi.toml"
+OUTPUT_BASE="${WORKDIR}/output/identify_${LSB_JOBID:-local}"
+TASK_OUTPUT="${OUTPUT_BASE}/task_$(printf '%04d' "${LSB_JOBINDEX}")"
+
+mkdir -p "${OUTPUT_BASE}" logs
+
+source ~/miniforge3/etc/profile.d/conda.sh
+conda activate dfxm-geo
+
+if [ ! -f reciprocal_space/pkl_files/Resq_i_20230913_1308.pkl ]; then
+    dfxm-bootstrap --config "${CONFIG}"
+fi
+
+# Each task computes 10 samples; rng_seed is offset by LSB_JOBINDEX so each
+# task draws a deterministic, non-overlapping slice. NB: this assumes the
+# identification TOML's `multi` block uses n_samples=10 (per-task). Adjust
+# the LSF array range above to cover your total: tasks * 10 = total samples.
+dfxm-identify --config "${CONFIG}" --output "${TASK_OUTPUT}"
+
+echo "Task ${LSB_JOBINDEX} done. Output in ${TASK_OUTPUT}"

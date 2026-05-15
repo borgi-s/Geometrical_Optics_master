@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dfxm-geo"
-version = "0.1.0"
+version = "1.0.0"
 description = "Geometrical-optics forward model for dark-field X-ray microscopy"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -61,6 +61,7 @@ Paper = "https://journals.iucr.org/j/issues/2024/02/00/nb5370/"
 [project.scripts]
 dfxm-forward = "dfxm_geo.pipeline:cli_main"
 dfxm-identify = "dfxm_geo.pipeline:cli_main_identify"
+dfxm-bootstrap = "dfxm_geo.reciprocal_space.kernel:cli_main"
 
 [tool.setuptools]
 packages = [

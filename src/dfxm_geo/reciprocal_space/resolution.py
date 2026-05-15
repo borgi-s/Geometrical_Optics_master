@@ -17,6 +17,7 @@
 #                                       qi1_range, qi2_range, qi3_range.
 
 import pickle
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -173,6 +174,7 @@ def reciprocal_res_func(
     bs_height: float | None = None,
     aperture: bool = False,
     knife_edge: bool = False,
+    output_path: Path | None = None,
 ) -> tuple[np.ndarray, ...] | None:
     print("Defining properties of rays")
     if rng is None:
@@ -315,14 +317,22 @@ def reciprocal_res_func(
         plt.grid(True)
         plt.show()
     if save_resqi == 1:
-        # Ensure pkl_files/ exists in the CWD only when we're about to write
-        # to it. Previously this was done as a module-level side effect on
-        # import, which silently created a stray directory anywhere the
-        # module was imported.
-        check_folder("", "pkl_files")
-        with open(f"pkl_files/Resq_i_{date}.pkl", "wb") as output:
-            pickle.dump(normResq_i, output)
-        print(f"Resq_i saved as Resq_i_{date}.pkl")
+        if output_path is not None:
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "wb") as output:
+                pickle.dump(normResq_i, output)
+            print(f"Resq_i saved to {output_path}")
+        else:
+            # Legacy default: write to pkl_files/Resq_i_<date>.pkl in CWD.
+            # Ensure pkl_files/ exists in the CWD only when we're about to write
+            # to it. Previously this was done as a module-level side effect on
+            # import, which silently created a stray directory anywhere the
+            # module was imported.
+            check_folder("", "pkl_files")
+            with open(f"pkl_files/Resq_i_{date}.pkl", "wb") as output:
+                pickle.dump(normResq_i, output)
+            print(f"Resq_i saved as Resq_i_{date}.pkl")
 
     # %%%%%%%%%%%%  For test purposes, plots %%%%%%%%%%%
 

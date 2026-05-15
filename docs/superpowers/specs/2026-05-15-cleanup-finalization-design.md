@@ -67,7 +67,7 @@ independent priority — addressed under §"Release & Zenodo arc."
 
 ## Production environment (Q1.5, Q2)
 
-- **Production target:** Linux SLURM clusters (DTU HPC + ESRF).
+- **Production target:** Linux clusters (DTU HPC uses LSF; ESRF uses SLURM).
 - **Install path:** conda env from a checked-in `environment.yml`,
   followed by `pip install -e .[beamstop-wire,identification]`. Both
   target clusters expose conda via modules; numba + xraylib + fabio
@@ -85,19 +85,21 @@ J. Appl. Cryst. 58, 813–821).
 
 | Mode | Example | Scale | Orchestration |
 |------|---------|-------|---------------|
-| Single config full forward | one `(dis, ndis)`, full Nsub=2, 510×510 detector, 61×61 rocking | ~3700 images, ~1 h wall | one SLURM job, single node, multi-thread |
-| Parameter sweep | N variants per `configs/variants/dis_*.toml` | N × single-config | SLURM array, one task per variant |
-| **ML training-data generation** | `dfxm-identify` multi-mode, 1000+ samples × planes × Burgers vectors | embarrassingly parallel | SLURM array, **batch K=10 samples per task → ~100 array tasks** (Q4.5 default) |
-| z-scan stack (ESRF_DTU port) | many z-layers × planes × Burgers vectors × rocking | hours-to-days | single SLURM job with checkpointing (future) |
+| Single config full forward | one `(dis, ndis)`, full Nsub=2, 510×510 detector, 61×61 rocking | ~3700 images, ~1 h wall | one batch job, single node, multi-thread (LSF on DTU, SLURM on ESRF) |
+| Parameter sweep | N variants per `configs/variants/dis_*.toml` | N × single-config | scheduler array (LSF `#BSUB -J name[1-N]` / SLURM `--array=1-N`), one task per variant |
+| **ML training-data generation** | `dfxm-identify` multi-mode, 1000+ samples × planes × Burgers vectors | embarrassingly parallel | scheduler array, **batch K=10 samples per task → ~100 array tasks** (Q4.5 default) |
+| z-scan stack (ESRF_DTU port) | many z-layers × planes × Burgers vectors × rocking | hours-to-days | single batch job with checkpointing (future) |
 
 ## Output handling on the cluster (Q5)
 
 - The CLI flag `--output <abs path>` is the single point of policy.
   No magic auto-detection of `$SCRATCH`. Cluster users set
-  `--output $SCRATCH/$SLURM_JOB_ID/run/` or similar in their job
+  `--output $SCRATCH/$LSB_JOBID/run/` (DTU LSF) or
+  `--output $SCRATCH/$SLURM_JOB_ID/run/` (ESRF SLURM) in their job
   script.
-- A new `docs/cluster-runs.md` ships a worked example: SLURM script,
-  conda module load, output path conventions, where the kernel pickle
+- A new `docs/cluster-runs.md` ships worked examples for both
+  schedulers (LSF `bsub` script and SLURM `sbatch` script), conda
+  module load, output path conventions, where the kernel pickle
   comes from.
 
 ## Pipeline shape: stage 0 = ensure kernel (Q3)
@@ -210,9 +212,10 @@ In order (Q9):
    - `environment.yml` for the conda env on DTU HPC + ESRF cluster
    - Stage 0 refactor in `dfxm_geo.pipeline` (`_ensure_kernel(config)`
      before `Find_Hg`; cleanup of `forward_model` import-time auto-load)
-   - `docs/cluster-runs.md` with a worked SLURM array example
-   - `slurm/` directory with template job + array scripts (single
-     forward, parameter sweep, ML-training-array)
+   - `docs/cluster-runs.md` with worked array examples for both
+     LSF (DTU) and SLURM (ESRF)
+   - `lsf/` and `slurm/` directories with template job + array
+     scripts (single forward, parameter sweep, ML-training-array)
    - README rewrite — include cluster-runs cross-reference, install
      instructions for both laptop and cluster, **and the deferred
      README example images from Q10a**
@@ -266,8 +269,9 @@ the finalize phase or for v0.9 / v1.0:
 - **GPU / numba CUDA acceleration.** The current numba CPU JIT
   (Round 12 / Round 13) is already 4–5× faster than the pre-cleanup
   Python loops. GPU work would benefit but is far out of scope.
-- **MPI / distributed compute.** SLURM array jobs are the parallelism
-  model; multi-node MPI is overkill for the workload shape.
+- **MPI / distributed compute.** Scheduler array jobs (LSF / SLURM)
+  are the parallelism model; multi-node MPI is overkill for the
+  workload shape.
 - **Two-stage staging dir + archival rsync** (Q5 option d). Users can
   do this manually if they need it.
 - **Auto-detected per-cluster output paths** (Q5 option c). Magic is a
@@ -304,7 +308,7 @@ the finalize phase or for v0.9 / v1.0:
 | Q2.5 | Target clusters DTU HPC + ESRF | §Production environment |
 | Q3 | Kernel pickle = stage 0 of pipeline (regenerate or reuse) | §Pipeline shape |
 | Q4 | Workload mode E (all); ML training (C) dominant near-term | §Workload model |
-| Q4.5 | SLURM batching = 10 samples per array task → 100 tasks | §Workload model |
+| Q4.5 | Scheduler-array batching = 10 samples per task → 100 tasks | §Workload model |
 | Q5 | Output via CLI `--output`; docs ship `cluster-runs.md` | §Output handling |
 | Q6 | Polish round → merge with merge commit (preserve 140 commits) | §Merge strategy |
 | Q7 | Drop all 5 deprecation shims | §Polish round item 1 |
@@ -316,3 +320,10 @@ the finalize phase or for v0.9 / v1.0:
 | Q10c | Self-merge; optional FYI to Khaled | §Merge strategy |
 | Q11 | Single point of failure (Sina) + honest README archival framing | §Long-term lifecycle |
 | Q12 | Write this spec doc and commit it | (this document) |
+
+## 2026-05-15 — Amendment
+
+- Corrected scheduler attribution: DTU HPC uses LSF (`bsub` / `#BSUB`),
+  not SLURM. ESRF uses SLURM. See
+  [`docs/superpowers/specs/2026-05-15-cluster-integration-design.md`](2026-05-15-cluster-integration-design.md)
+  for the per-scheduler plan.

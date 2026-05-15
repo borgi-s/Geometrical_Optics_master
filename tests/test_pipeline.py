@@ -172,22 +172,69 @@ class TestPostprocessConfigFromToml:
 
 
 class TestPreflight:
-    def test_raises_when_kernel_not_loaded(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Without the resolution kernel, _ensure_kernel_loaded() errors clearly."""
+    def test_raises_when_kernel_not_loaded_and_pickle_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Pickle absent -> FileNotFoundError with the dfxm-bootstrap hint."""
         monkeypatch.setattr(fm, "Resq_i", None)
-        with pytest.raises(RuntimeError, match="Reciprocal-space resolution kernel"):
+        # Point the canonical path at an empty tmp dir; nothing to find.
+        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + "/")
+        monkeypatch.setattr(fm, "pkl_fn", "missing_kernel.pkl")
+        with pytest.raises(FileNotFoundError) as excinfo:
             _ensure_kernel_loaded()
+        msg = str(excinfo.value)
+        assert "dfxm-bootstrap" in msg
+        assert "docs/cluster-runs.md" in msg
+        assert "missing_kernel.pkl" in msg
 
+    def test_recovers_when_pickle_on_disk_but_not_loaded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pickle present but Resq_i not loaded -> call _load_default_kernel."""
+        monkeypatch.setattr(fm, "Resq_i", None)
+        called: dict[str, str] = {}
+
+        def fake_load(pkl_path: str | None = None, **kwargs: object) -> None:
+            called["pkl_path"] = pkl_path or ""
+            # Simulate the load succeeding by populating Resq_i.
+            monkeypatch.setattr(fm, "Resq_i", np.ones((2, 2, 2)))
+
+        monkeypatch.setattr(fm, "_load_default_kernel", fake_load)
+        # Make the canonical path exist.
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tf:
+            tf.write(b"placeholder")
+            pkl_path = tf.name
+        try:
+            monkeypatch.setattr(fm, "pkl_fpath", str(Path(pkl_path).parent) + "/")
+            monkeypatch.setattr(fm, "pkl_fn", Path(pkl_path).name)
+            _ensure_kernel_loaded()
+            assert called["pkl_path"].endswith(Path(pkl_path).name)
+            assert fm.Resq_i is not None
+        finally:
+            Path(pkl_path).unlink(missing_ok=True)
+
+    def test_noops_when_already_loaded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Resq_i already set -> no I/O, no error."""
+        monkeypatch.setattr(fm, "Resq_i", np.ones((2, 2, 2)))
+        # Set canonical path to a definitely-missing file: if the preflight
+        # touched it, we'd hit the FileNotFoundError branch instead.
+        monkeypatch.setattr(fm, "pkl_fpath", "/nonexistent/")
+        monkeypatch.setattr(fm, "pkl_fn", "does_not_matter.pkl")
+        _ensure_kernel_loaded()  # must not raise
+
+
+class TestRunSimulationPreflight:
     def test_run_simulation_short_circuits_without_kernel(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """run_simulation() bails via the preflight before the thread pool starts."""
         monkeypatch.setattr(fm, "Resq_i", None)
-        with pytest.raises(RuntimeError, match="Reciprocal-space resolution kernel"):
+        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + "/")
+        monkeypatch.setattr(fm, "pkl_fn", "missing.pkl")
+        with pytest.raises(FileNotFoundError, match="dfxm-bootstrap"):
             run_simulation(SimulationConfig(), tmp_path)
-        # The output directory was created before the preflight check; that's a
-        # minor wart but not worth a Phase 6 follow-up. Just confirm no
-        # image-stack subdirectories were created.
         assert not (tmp_path / "images10").exists()
         assert not (tmp_path / "images10_perf_crystal").exists()
 

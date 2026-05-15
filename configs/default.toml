@@ -36,3 +36,30 @@ phi_oversample = 20
 chi_oversample_for_shift = 100
 figures_dirname = "figures"
 data_dirname = "analysis"
+
+[reciprocal]
+# Used by `dfxm-bootstrap --config configs/default.toml` to (re)generate the
+# reciprocal-space resolution kernel pickle. Defaults reproduce the CDD_inc
+# canonical recipe (Al 111 reflection at 17 keV, square-aperture beamstop
+# 25 mm at the BFP). Takes ~50 s wall-clock on a laptop at Nrays=1e8.
+Nrays      = 100_000_000   # 1e8
+npoints1   = 400
+npoints2   = 200
+npoints3   = 200
+qi1_range  = 5e-4
+qi2_range  = 7.5e-3
+qi3_range  = 7.5e-3
+# Beam / objective parameters.
+zeta_v_fwhm = 5.3e-4
+zeta_h_fwhm = 0.0
+NA_rms      = 3.1106382978723403e-4  # = 7.31e-4 / 2.35
+eps_rms     = 6.0e-5                # = 1.41e-4 / 2.35
+# theta is auto-derived from Al 111 + 17 keV when absent (see kernel.cli_main).
+D  = 0.000565685424949238   # = 2 * sqrt(50e-6 * 1.6e-3)
+d1 = 0.274
+# Beamstop config.
+beamstop   = true
+bs_height  = 25e-3
+aperture   = true
+knife_edge = false
+dphi_range = 0.0
