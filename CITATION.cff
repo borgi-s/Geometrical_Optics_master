@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying paper."
+title: "Geometrical Optics: forward modelling of Dark Field X-ray Microscopy"
+authors:
+  - family-names: Borgi
+    given-names: Sina
+    affiliation: "Technical University of Denmark (DTU)"
+    email: borgi@dtu.dk
+preferred-citation:
+  type: article
+  title: "Simulations of dislocation contrast in dark-field X-ray microscopy"
+  authors:
+    - family-names: Borgi
+      given-names: Sina
+    - family-names: Ræder
+      given-names: Trygve Magnus
+    - family-names: Carlsen
+      given-names: Mads Allerup
+    - family-names: Detlefs
+      given-names: Carsten
+    - family-names: Winther
+      given-names: Grethe
+    - family-names: Poulsen
+      given-names: Henning Friis
+  journal: "Journal of Applied Crystallography"
+  year: 2024
+  volume: 57
+  issue: 2
+  start: 358
+  end: 368
+  month: 4
+  doi: "10.1107/S1600576724001183"
+  url: "https://doi.org/10.1107/S1600576724001183"

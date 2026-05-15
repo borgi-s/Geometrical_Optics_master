@@ -1,0 +1,52 @@
+{
+  "title": "Geometrical_Optics_master: DFXM forward-modelling toolkit",
+  "description": "Forward modelling for dark-field X-ray microscopy (DFXM) at synchrotron beamlines. Reproduces the simulations in Borgi et al., J. Appl. Cryst. 57(2):358-368, 2024.",
+  "license": "MIT",
+  "upload_type": "software",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Borgi, Sina",
+      "affiliation": "Technical University of Denmark",
+      "orcid": "0000-0001-7404-7766"
+    },
+    {
+      "name": "Ræder, Trygve Magnus"
+    },
+    {
+      "name": "Carlsen, Mads Allerup"
+    },
+    {
+      "name": "Detlefs, Carsten",
+      "affiliation": "European Synchrotron Radiation Facility",
+      "orcid": "0000-0003-2573-2286"
+    },
+    {
+      "name": "Winther, Grethe",
+      "affiliation": "Technical University of Denmark",
+      "orcid": "0000-0002-4178-3449"
+    },
+    {
+      "name": "Poulsen, Henning Friis",
+      "affiliation": "Technical University of Denmark",
+      "orcid": "0000-0001-7876-4113"
+    }
+  ],
+  "keywords": [
+    "dark-field X-ray microscopy",
+    "DFXM",
+    "forward modelling",
+    "diffraction microstructure imaging",
+    "dislocations",
+    "geometrical optics",
+    "synchrotron"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "10.1107/S1600576724001183",
+      "relation": "isSupplementTo",
+      "resource_type": "publication-article"
+    }
+  ],
+  "communities": []
+}

@@ -1,0 +1,45 @@
+# dfxm-identify: z-scan mode (4D scan — depth × Burgers × angle × rocking-curve).
+#
+# Mirrors the ESRF_DTU branch's save_scan workflow: for each z layer, sweep
+# (Burgers, line-direction angle), pair with a randomly-drawn secondary
+# dislocation (seeded for reproducibility), then save a phi/chi rocking
+# curve per configuration via save_images_parallel.
+#
+# BEFORE A REAL RUN: flip Nsub = 2 -> 1 in
+# src/dfxm_geo/direct_space/forward_model.py:42 for ~8x faster per-image
+# forward calls. Nsub = 1 is the typical real-run choice; the cleanup
+# default Nsub = 2 is preserved as the publication-quality setting from
+# Borgi 2024/2025.
+
+mode = "z-scan"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]    # starting plane; sweep_all_slip_planes overrides
+angle_start_deg = 0.0
+angle_stop_deg = 350.0
+angle_step_deg = 10.0
+sweep_all_slip_planes = true
+exclude_invisibility = true
+invisibility_threshold_deg = 10.0
+
+[scan]
+phi_rad = 1.5e-4                 # unused in z-scan but IdentificationScanConfig requires
+poisson_noise = false            # noise lives in the rocking-curve forward calls
+rng_seed = 0
+intensity_scale = 7.0
+
+[zscan]
+z_offsets_um = [-2.0, -1.0, 0.0, 1.0, 2.0]   # 5 depth slices
+phi_range_deg = 0.034377467707849395         # matches dfxm-forward default (0.0006 rad)
+phi_steps = 21                               # downscaled example; bump to 61 for a real run
+chi_range_deg = 0.11459155902616465
+chi_steps = 21
+include_secondary = true
+secondary_rng_offset = 1
+
+[io]
+fn_prefix = "/mosa_test_0000_"
+ftype = ".npy"
+dislocs_dirname = "identify_zscan"
+perfect_dirname = "ignored"
+include_perfect_crystal = false

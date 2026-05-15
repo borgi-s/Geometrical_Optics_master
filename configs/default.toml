@@ -1,0 +1,38 @@
+# Default DFXM forward-simulation config.
+# Mirrors the parameters used in the original init_forward.py demo.
+#
+# Notes:
+#   - phi_range / chi_range are half-ranges in *degrees* (consistent with
+#     save_images_parallel's API, which converts to radians internally).
+#   - dis is the inter-dislocation distance in micrometers.
+#   - psize, zl_rms, and the (h, k, l) reflection are currently bound to the
+#     module-level defaults in dfxm_geo.direct_space.forward_model (ID06
+#     settings). See pipeline.py docstring for the deferred work.
+
+[crystal]
+dis = 4        # inter-dislocation distance (µm)
+ndis = 151     # number of dislocations
+sample_remount = "S1"  # one of "S1", "S2", "S3", "S4" — Purdue 2024 paper. Default: identity (no remount).
+
+[scan]
+# 0.0006 rad ≈ 0.03438 deg ; 0.002 rad ≈ 0.11459 deg
+phi_range = 0.034377467707849395
+phi_steps = 61
+chi_range = 0.11459155902616465
+chi_steps = 61
+
+[io]
+fn_prefix = "/mosa_test_0000_"
+ftype = ".npy"
+dislocs_dirname = "images10"
+perfect_dirname = "images10_perf_crystal"
+include_perfect_crystal = true
+# max_workers = 4  # uncomment to cap parallel forward() calls; None = auto
+
+[postprocess]
+enabled = true
+chi_oversample = 20
+phi_oversample = 20
+chi_oversample_for_shift = 100
+figures_dirname = "figures"
+data_dirname = "analysis"

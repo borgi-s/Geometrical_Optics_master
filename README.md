@@ -1,39 +1,126 @@
-# Geometrical_Optics-master
+# DFXM Geometrical-Optics Forward Model
 
-Welcome to the Geometrical Optics Code Repository! This repository serves as a snapshot of the powerful codebase used to generate the results presented in our recent article. If you're looking to understand, reproduce, or build upon the geometrical optics simulations that were an integral part of our research, you've come to the right place.
+A Python implementation of the geometrical-optics forward model for Dark Field
+X-ray Microscopy (DFXM), as published in:
 
-## Introduction
-Optical phenomena play a vital role in a wide range of scientific and engineering fields, from physics and astronomy to telecommunications and medical imaging. This repository contains the Geometrical Optics code that powered the simulations of Dark Field X-ray Microscopy (DFXM) and analyses discussed in our article, which is available [here](https://doi.org/10.1107/S1600576724001183).
+> Borgi, S. et al. *J. Appl. Cryst.* (2024).
+> DOI: [10.1107/S1600576724001183](https://doi.org/10.1107/S1600576724001183)
+> [Article on IUCr](https://journals.iucr.org/j/issues/2024/02/00/nb5370/)
 
-Our codebase is designed to provide a clear and accessible implementation of Geometrical Optics principles, making it easy for researchers and enthusiasts to explore and experiment with optical systems. It can be used to simulate the behavior of x-rays as they interact with lenses, mirrors, prisms, and samples, helping you gain a deeper understanding of the inner workings of your material.
+The default beamline configuration matches ID06 at the European Synchrotron
+Radiation Facility (ESRF).
 
-## Getting Started
+## What this code does
 
-1. **Clone the Repository:** Start by cloning this repository to your local machine using Git. You can do this by running the following command:
+Given a crystal containing dislocations, this code simulates the DFXM images
+that would be recorded on a detector under a defined beam and goniometer
+geometry. It models both the direct-space deformation field around dislocations
+and the reciprocal-space resolution function of the microscope.
 
-   ```bash
-   git clone https://github.com/borgi-s/Geometrical_Optics-master.git
-2. **Install Dependencies:** Make sure you have all the necessary dependencies installed. Detailed instructions will be added in the repository's documentation at a later date.
+This is not a generic optics simulator — it is specifically a *forward model*
+for dark-field X-ray microscopy at synchrotron sources, used to interpret
+images of strain fields and crystal defects.
 
-3. **Explore and Experiment:** Dive into the code, explore different optical scenarios, and use it to conduct your experiments or simulations.
+## Status
 
-4. **Reciprocal Space:** Use the 'generate_res.py' script to generate your reciprocal space resolution. Define the angular space that will be probed. This will create some pkl files with information for the direct space part of the resolution function.
+This repository is undergoing a structural cleanup (branch
+`cleanup/main-modernization`). The physics is stable; the surrounding
+engineering is being modernized. See `docs/superpowers/plans/2026-05-12-codebase-cleanup.md`
+for the full roadmap.
 
-5. **Direct Space:** Use either 'forward_model.py' or 'init_forward.py' to start generating images. The standard geometrical parameters of ID06 at the European Synchrotron Radiation Facility, where the microscope is set up experimentally, are the default settings.
+## Quick start
 
-## Usage
-The Geometrical Optics code is versatile and can be used for various purposes, including:
+Requires Python 3.11+.
 
-- Simulating the behavior of light rays in different optical systems.
-- Analyzing the formation of images by lenses, mirrors, and other optical components.
-- Investigating optical aberrations and their effects on image quality.
-- Designing and optimizing optical systems for specific applications.
-- We encourage you to explore the code and adapt it to your specific research or educational needs. If you find any issues or have suggestions for improvements, please feel free to contribute.
+```bash
+git clone https://github.com/borgi-s/Geometrical_Optics_master.git
+cd Geometrical_Optics_master
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+pytest                             # smoke tests should pass
+```
 
-## Descriptions
+## Running a simulation
 
-Here are some short descriptions of what some of the files contain, and how they can be used.
+Both entry points expect a pickled reciprocal-space resolution function at
+`reciprocal_space/pkl_files/Resq_i_<timestamp>.pkl`, generated once with:
 
-- 'image_processor.py' contain different functions and scripts to save and load DFXM images, analyse images with various function and much more.
+```bash
+python reciprocal_space/generate_Resq_i.py
+```
 
-- 'functions.py' has all the functions used by the direct space scripts
+### Recommended: config-driven CLI
+
+```bash
+dfxm-forward --config configs/default.toml --output ./out
+```
+
+The CLI runs the forward simulation only (rocking sweep → image stacks
+on disk). See [`docs/reproducibility.md`](docs/reproducibility.md) for the
+config schema, pre-built variants for different dislocation densities,
+and what is not yet configurable.
+
+### Legacy demo (historical reference)
+
+```bash
+dfxm-forward --config configs/default.toml --output output/
+```
+
+The original single-file entry point is preserved under `legacy/init_forward.py`
+as a historical reference. Use `dfxm-forward` for all new workflows; the
+post-processing (COM / mosaicity maps, SVG figures) is now handled by
+`dfxm_geo.analysis` and `dfxm_geo.viz` and is invoked automatically by the CLI.
+
+## Project structure
+
+```
+.
+├── functions.py                  Crystal mechanics and dislocation fields
+├── image_processor.py            Image I/O, moment/FWHM analysis, parallel rendering
+├── legacy/init_forward.py        Pre-cleanup entry point (historical reference)
+├── direct_space/
+│   └── forward_model.py          Direct-space forward simulator
+├── reciprocal_space/
+│   ├── generate_Resq_i.py        Resolution-function generator (run first)
+│   ├── recspace_res.py           Monte Carlo reciprocal-space resolution
+│   └── exposure_time.py          Exposure-time helper
+├── tests/                        Pytest smoke tests
+└── docs/                         Architecture, physics, reproducibility guides (planned)
+```
+
+A future refactor (plan Phase 4) moves the physics modules into
+`src/dfxm_geo/{crystal,direct_space,reciprocal_space,analysis,io,viz}`.
+
+## Reproducing the paper figures
+
+See [`docs/reproducibility.md`](docs/reproducibility.md) for the current
+recipe (`dfxm-forward --config configs/default.toml --output output/` runs
+both the simulation and post-processing end-to-end).
+Reference datasets are scheduled for Zenodo deposit; until then, contact
+the corresponding author.
+
+## Citing
+
+See `CITATION.cff`.
+
+```bibtex
+@article{borgi2024dfxm,
+  title  = {Geometrical Optics: forward modelling of Dark Field X-ray Microscopy},
+  author = {Borgi, Sina and others},
+  journal= {Journal of Applied Crystallography},
+  year   = {2024},
+  doi    = {10.1107/S1600576724001183},
+}
+```
+
+(Title and full author list need verification against the published paper —
+see the `TODO(borgi)` note in `CITATION.cff`.)
+
+## Contributing
+
+PRs welcome. Run `pre-commit run --all-files` before pushing.
+
+## License
+
+MIT. See `LICENSE`.

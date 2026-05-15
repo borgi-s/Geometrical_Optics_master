@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "cleanup/**"]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package and dev deps
+        run: pip install -e ".[dev]"
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      # Type-check is scoped to the dfxm_geo package. The flat-layout legacy
+      # modules (functions.py, image_processor.py, init_forward.py,
+      # direct_space/, reciprocal_space/) are excluded — they will become
+      # deprecation re-export shims and go away in Phase 5.3.
+      - name: Mypy
+        run: mypy src/dfxm_geo/
+
+      - name: Pytest
+        run: pytest --cov=. --cov-report=term
+
+  pre-commit:
+    name: Pre-commit hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: pre-commit/action@v3.0.1
