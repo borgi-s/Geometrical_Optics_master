@@ -7,6 +7,8 @@ shape, masking direction, kwargs plumbed through) are tight.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -313,3 +315,67 @@ class TestNotEnoughSamplesGuards:
         # filter keeps ~0 of the 1.01 * Nrays oversampled draws.
         with pytest.raises(ValueError, match="Not enough values for"):
             _call(phys_aper=1e-12)
+
+
+class TestExplicitOutputPath:
+    """The `output_path` kwarg lets callers pin the pickle to a specific file
+    instead of writing under `pkl_files/Resq_i_<date>.pkl` in CWD. Required
+    by `dfxm-bootstrap`, which must write to the path stage 0 will read.
+    """
+
+    def test_writes_to_explicit_path(self, tmp_path: Path) -> None:
+        """When `output_path` is provided, pickle goes there (not to CWD/pkl_files)."""
+        from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func
+
+        out = tmp_path / "kernel.pkl"
+        reciprocal_res_func(
+            Nrays=1000,
+            npoints1=20,
+            npoints2=20,
+            npoints3=20,
+            qi1_range=5e-4,
+            qi2_range=7.5e-3,
+            qi3_range=7.5e-3,
+            plot_figs=False,
+            save_resqi=True,
+            zeta_v_fwhm=5.3e-4,
+            zeta_h_fwhm=0,
+            NA_rms=7.31e-4 / 2.35,
+            eps_rms=1.41e-4 / 2.35,
+            theta=0.1566,
+            phys_aper=2e-3 / 0.274,
+            date="test",
+            rng=np.random.default_rng(42),
+            output_path=out,
+        )
+        assert out.is_file(), "expected pickle written to explicit output_path"
+        # And the legacy default path was NOT created.
+        assert not (tmp_path / "pkl_files").exists(), (
+            "explicit output_path must not also create the legacy pkl_files/ dir"
+        )
+
+    def test_default_path_unchanged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With no `output_path`, falls back to `pkl_files/Resq_i_<date>.pkl` in CWD."""
+        from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func
+
+        monkeypatch.chdir(tmp_path)
+        reciprocal_res_func(
+            Nrays=1000,
+            npoints1=20,
+            npoints2=20,
+            npoints3=20,
+            qi1_range=5e-4,
+            qi2_range=7.5e-3,
+            qi3_range=7.5e-3,
+            plot_figs=False,
+            save_resqi=True,
+            zeta_v_fwhm=5.3e-4,
+            zeta_h_fwhm=0,
+            NA_rms=7.31e-4 / 2.35,
+            eps_rms=1.41e-4 / 2.35,
+            theta=0.1566,
+            phys_aper=2e-3 / 0.274,
+            date="legacy",
+            rng=np.random.default_rng(42),
+        )
+        assert (tmp_path / "pkl_files" / "Resq_i_legacy.pkl").is_file()
