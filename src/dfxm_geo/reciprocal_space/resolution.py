@@ -228,9 +228,19 @@ def reciprocal_res_func(
     delta_2theta = x1[np.abs(x1) < phys_aper / 2][:Nrays]
     xi = x2[np.abs(x2) < phys_aper / 2][:Nrays]
     if len(xi) < Nrays:
-        exit("Not enough values for xi")
+        raise ValueError(
+            f"Not enough values for xi: filtered {len(xi)} samples through "
+            f"phys_aper={phys_aper:g}, need Nrays={Nrays}. Increase the "
+            "oversampling factor (1.01 * Nrays at line 226-227) or widen "
+            "phys_aper."
+        )
     if len(delta_2theta) < Nrays:
-        exit("Not enough values for delta_2theta")
+        raise ValueError(
+            f"Not enough values for delta_2theta: filtered {len(delta_2theta)} "
+            f"samples through phys_aper={phys_aper:g}, need Nrays={Nrays}. "
+            "Increase the oversampling factor (1.01 * Nrays at line 226-227) "
+            "or widen phys_aper."
+        )
     if len(delta_2theta) == Nrays and len(xi) == Nrays:
         print("Found trial delta_2theta and xi")
 

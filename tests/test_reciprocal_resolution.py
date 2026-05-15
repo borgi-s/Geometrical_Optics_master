@@ -286,3 +286,18 @@ def test_truncnorm_chunked_matches_unchunked():
     )
 
     np.testing.assert_array_equal(out_chunked, out_single)
+
+
+class TestNotEnoughSamplesGuards:
+    """phys_aper too tight -> raise ValueError, do not call exit().
+
+    Library code must not call exit(). These guards convert the original
+    bare exit("...") shutdown into recoverable ValueErrors that the caller
+    can catch (or that the test runner can report cleanly).
+    """
+
+    def test_raises_value_error_when_xi_filter_drops_too_many_samples(self) -> None:
+        # phys_aper of 1e-12 m << NA_rms (~3e-4) means the |x| < phys_aper/2
+        # filter keeps ~0 of the 1.01 * Nrays oversampled draws.
+        with pytest.raises(ValueError, match="Not enough values for"):
+            _call(phys_aper=1e-12)
