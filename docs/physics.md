@@ -56,6 +56,19 @@ The composed transpose form appears throughout `Fd_find`. This is
 *passive* rotation — the vector is unchanged, only its coordinate
 representation changes.
 
+### Sample remount (Purdue 2024)
+
+In addition to the lab/sample/crystal/dislocation frames, `Fd_find` supports a
+sample-remount rotation `S` inserted between sample and crystal frames. This
+models a physical operation: the sample is removed from the goniometer and
+remounted in a different (symmetry-equivalent) orientation. The four named
+constants `S1` (identity), `S2`, `S3`, `S4` are ported verbatim from the
+Purdue paper (`dfxm_geo.crystal.remount`). They are proper rotations from the
+cubic point group; their numerical traces differ (S2 and S4 are ~109.47°
+rotations; S3 is ~70.53°) so they are not three rotations about a single
+axis. Cleanup ports them as-is and does not re-derive their geometric
+interpretation.
+
 ## Edge dislocation displacement field
 
 For an isolated edge dislocation in an isotropic linear-elastic medium

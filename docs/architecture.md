@@ -134,6 +134,23 @@ A cleaner alternative (planned in Phase 6 of the cleanup) is a
 `SimulationConfig` dataclass that the CLI loads from a TOML file and a
 pipeline function that takes it as an argument.
 
+### Sample-remount (goniometer) frame
+
+`Fd_find` / `Fd_find_mixed` accept a sample-remount rotation matrix `S` as a
+keyword-only argument (default identity). The rotation chain is:
+
+    rs   = Theta · rl       (sample frame from lab)
+    rgon = S.T · rs         (goniometer frame after sample remount)
+    rc   = Us.T · rgon      (crystal frame)
+    rd   = Ud.T · rc        (dislocation frame)
+
+With `S = identity`, `rgon == rs` and the chain reduces to the original lab
+→ sample → crystal → dislocation pipeline. The four named values `S1, S2, S3,
+S4` (`dfxm_geo.crystal.remount`) are ported from the Purdue 2024 paper and
+model "the same defect remounted in a symmetry-equivalent orientation."
+Configure via `[crystal].sample_remount = "S1" | "S2" | "S3" | "S4"` in the
+`dfxm-forward` TOML.
+
 ## Dependencies between modules
 
 ```
