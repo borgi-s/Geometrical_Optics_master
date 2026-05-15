@@ -171,10 +171,10 @@ def Find_Hg(
     # detector ray-grid dimensions. Without Npixels/Nsub, changing those
     # module-level constants silently loaded a wrong-shape cache (see
     # `load_or_generate_Hg`'s shape guard).
+    Fg_dir = _REPO_ROOT / "direct_space" / "deformation_gradient_tensors"
+    Fg_dir.mkdir(parents=True, exist_ok=True)
     Fg_path = str(
-        _REPO_ROOT
-        / "direct_space"
-        / "deformation_gradient_tensors"
+        Fg_dir
         / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}.npy".format(
             str(dis).replace(".", ""),
             int(psize * 1e9),

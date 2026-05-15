@@ -7,7 +7,7 @@ import fabio
 import numpy as np
 from tqdm import tqdm
 
-from dfxm_geo.direct_space.forward_model import forward
+from dfxm_geo.direct_space import forward_model as _fm
 from dfxm_geo.io import check_folder
 
 
@@ -66,7 +66,7 @@ def save_image(args: tuple) -> None:
         None: The function saves an image but does not return a value.
     """
     Hg, phi, chi, j, i, fpath, fn_prefix, ftype = args
-    im = forward(Hg, phi=phi, chi=chi)
+    im = _fm.forward(Hg, phi=phi, chi=chi)
     fn_suffix = f"{i}".zfill(4) + "_" + f"{j}".zfill(4) + ftype
     np.save(os.path.join(fpath + fn_prefix + fn_suffix), im)
 
