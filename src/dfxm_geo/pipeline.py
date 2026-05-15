@@ -352,8 +352,8 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
 
     Raises:
         FileNotFoundError: if either expected stack directory is absent.
-        RuntimeError: from :func:`_ensure_kernel_loaded` if the reciprocal-
-            space kernel is missing.
+        FileNotFoundError: from :func:`_ensure_kernel_loaded` if the
+            reciprocal-space kernel pickle is missing.
     """
     _ensure_kernel_loaded()
 
