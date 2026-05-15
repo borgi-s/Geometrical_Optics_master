@@ -47,7 +47,16 @@ git pull
 # installed miniforge yourself, it usually auto-activates via ~/.bashrc.
 # DO NOT `module load python3/...` on DTU; it conflicts with conda's
 # Python and causes a `Fatal Python error: init_fs_encoding` crash.
-conda env create -f environment.yml      # creates `dfxm-geo`
+
+# Fast path (DTU only, ~2 min): skip the conda-forge solve via a captured
+# lock file. Use this on linux-64 hosts; for other platforms, use the
+# slow path below.
+conda env create -f locks/environment-dtu-linux-64.yml
+
+# Slow path (any cluster, ~30 min): re-solve from the >= ranges. Use
+# this if the lock file is out of date for your platform.
+# conda env create -f environment.yml
+
 conda activate dfxm-geo
 pip install -e .
 
