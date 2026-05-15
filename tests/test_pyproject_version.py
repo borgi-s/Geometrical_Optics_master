@@ -6,10 +6,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 
-def test_version_is_1_0_0() -> None:
+def test_version_is_1_0_1() -> None:
     with (REPO / "pyproject.toml").open("rb") as f:
         data = tomllib.load(f)
-    assert data["project"]["version"] == "1.0.0"
+    assert data["project"]["version"] == "1.0.1"
 
 
 def test_dfxm_bootstrap_script_registered() -> None:
