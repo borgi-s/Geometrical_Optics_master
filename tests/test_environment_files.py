@@ -67,3 +67,27 @@ class TestEnvironmentYml:
         names = {d.split(">=")[0].split("=")[0] for d in env["dependencies"] if isinstance(d, str)}
         for dev_only in ["pytest", "ruff", "mypy", "pre-commit", "jupyterlab"]:
             assert dev_only not in names, f"{dev_only} should be in environment-dev.yml only"
+
+
+class TestEnvironmentDevYml:
+    def test_exists(self) -> None:
+        assert (REPO_ROOT / "environment-dev.yml").is_file()
+
+    def test_extends_runtime(self) -> None:
+        """environment-dev.yml is a superset of environment.yml: runtime deps + dev tools."""
+        env = _load("environment-dev.yml")
+        assert env["name"] == "dfxm-geo-dev"
+        assert env["channels"] == ["conda-forge"]
+        names = {d.split(">=")[0].split("=")[0] for d in env["dependencies"] if isinstance(d, str)}
+        # Same runtime deps as environment.yml.
+        for required in ["python", "numpy", "scipy", "numba", "xraylib"]:
+            assert required in names
+        # Plus dev tooling.
+        for dev in ["pytest", "pytest-cov", "pytest-benchmark", "ruff", "mypy", "pre-commit"]:
+            assert dev in names, f"{dev} missing from environment-dev.yml"
+
+    def test_pip_self_install_dev(self) -> None:
+        env = _load("environment-dev.yml")
+        pip_block = [d for d in env["dependencies"] if isinstance(d, dict) and "pip" in d]
+        assert pip_block, "environment-dev.yml needs a pip: block too"
+        assert any("-e ." in p for p in pip_block[0]["pip"])
