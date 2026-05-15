@@ -40,3 +40,30 @@ class TestLsfForwardSingle:
     def test_edit_these_block(self) -> None:
         text = _read(self.rel)
         assert "EDIT THESE" in text
+
+
+class TestLsfIdentifyArray:
+    rel = "lsf/identify_array.bsub"
+
+    def test_exists(self) -> None:
+        assert (REPO_ROOT / self.rel).is_file()
+
+    def test_array_directive(self) -> None:
+        text = _read(self.rel)
+        assert "#BSUB -J" in text
+        # LSF array syntax: -J "name[1-N]"
+        import re
+
+        assert re.search(r"#BSUB -J [\"'][^\"']*\[\d+-\d+\]", text), (
+            "LSF array template must declare -J 'name[1-N]'"
+        )
+
+    def test_uses_lsb_jobindex(self) -> None:
+        """Tasks differentiate via $LSB_JOBINDEX."""
+        assert "$LSB_JOBINDEX" in _read(self.rel) or "${LSB_JOBINDEX}" in _read(self.rel)
+
+    def test_invokes_identify_cli(self) -> None:
+        assert "dfxm-identify" in _read(self.rel)
+
+    def test_edit_these_block(self) -> None:
+        assert "EDIT THESE" in _read(self.rel)
