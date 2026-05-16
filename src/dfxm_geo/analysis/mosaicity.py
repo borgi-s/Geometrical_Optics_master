@@ -11,8 +11,10 @@ already reshaped to ``(chi_steps, phi_steps, H, W)`` and return:
   strained stack.
 
 The straight port preserves the original numerical conventions, including the
-``abs(shift)`` sign-loss in ``compute_chi_shift``. Performance work (vectorizing
-the COM loop) is deferred to Phase 8.
+``abs(shift)`` sign-loss in ``compute_chi_shift``. The per-pixel
+``center_of_mass`` loop in ``compute_com_maps`` was vectorized via two einsum
+contractions in Phase 8 close-out (May 2026), eliminating ~86k scipy calls
+per pipeline run at the production detector size.
 """
 
 from __future__ import annotations
@@ -97,17 +99,27 @@ def compute_com_maps(
     )
 
     H, W = stack.shape[2], stack.shape[3]
-    phi_list = np.zeros((H, W))
-    chi_list = np.zeros((H, W))
 
-    for i in range(H):
-        for j in range(W):
-            chi_idx, phi_idx = center_of_mass(stack[:, :, i, j])
-            if np.isnan(chi_idx) or np.isnan(phi_idx):
-                phi_list[i, j] = np.nan
-                chi_list[i, j] = np.nan
-                continue
-            phi_list[i, j] = phi_high[int(round(phi_idx * oversample))]
-            chi_list[i, j] = chi_high[int(round(chi_idx * chi_over))]
+    chi_indices = np.arange(chi_steps, dtype=np.float64)
+    phi_indices = np.arange(phi_steps, dtype=np.float64)
+    totals = stack.sum(axis=(0, 1))  # (H, W)
+    chi_weighted = np.einsum("cphw,c->hw", stack, chi_indices)
+    phi_weighted = np.einsum("cphw,p->hw", stack, phi_indices)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        chi_idx_arr = chi_weighted / totals
+        phi_idx_arr = phi_weighted / totals
+
+    # Dead pixels (totals == 0) produce NaN COMs; preserve them as NaN in the
+    # output instead of casting to an arbitrary int (the per-pixel loop hit
+    # this via the isnan branch).
+    valid = np.isfinite(chi_idx_arr) & np.isfinite(phi_idx_arr)
+
+    phi_list = np.full((H, W), np.nan)
+    chi_list = np.full((H, W), np.nan)
+    # int(round(x)) on Python floats uses banker's rounding; np.rint matches.
+    phi_lookup = np.rint(phi_idx_arr[valid] * oversample).astype(np.int64)
+    chi_lookup = np.rint(chi_idx_arr[valid] * chi_over).astype(np.int64)
+    phi_list[valid] = phi_high[phi_lookup]
+    chi_list[valid] = chi_high[chi_lookup]
 
     return phi_list, chi_list
