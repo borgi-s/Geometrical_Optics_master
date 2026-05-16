@@ -79,3 +79,37 @@ class TestGenerateKernelWritesNpz:
         # Sidecar must NOT exist
         sidecar = dst.with_name(dst.stem + "_vars.txt")
         assert not sidecar.exists(), f"unexpected sidecar at {sidecar}"
+
+
+class TestLoadDefaultKernel:
+    """Layer 1 + 2: the loader resolves npz paths and populates module state."""
+
+    def test_load_default_kernel_loads_npz(self, tmp_path: Path) -> None:
+        """_load_default_kernel reads an .npz and sets module globals correctly."""
+        import dfxm_geo.direct_space.forward_model as fm
+
+        # Build a tiny synthetic npz
+        dst = tmp_path / "Resq_i_test.npz"
+        np.savez(
+            dst,
+            Resq_i=np.ones((4, 4, 4), dtype=np.float64),
+            qi1_range=np.float64(1e-3),
+            qi2_range=np.float64(2e-3),
+            qi3_range=np.float64(3e-3),
+            npoints1=np.int64(4),
+            npoints2=np.int64(4),
+            npoints3=np.int64(4),
+        )
+
+        saved_resq = fm.Resq_i
+        saved_qi1 = fm.qi1_range
+        try:
+            fm._load_default_kernel(pkl_path=str(dst), compute_Hg=False)
+            assert fm.Resq_i is not None
+            assert fm.Resq_i.shape == (4, 4, 4)
+            assert np.array_equal(fm.Resq_i, np.ones((4, 4, 4)))
+            assert fm.qi1_range == pytest.approx(1e-3)
+            assert fm.npoints1 == 4
+        finally:
+            fm.Resq_i = saved_resq
+            fm.qi1_range = saved_qi1
