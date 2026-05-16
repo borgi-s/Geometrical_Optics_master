@@ -142,7 +142,7 @@ class TestCliMain:
 
         monkeypatch.setattr(kmod, "generate_kernel", fake_generate)
 
-        out = tmp_path / "canonical.pkl"
+        out = tmp_path / "canonical.npz"
         rc = kmod.cli_main(["--config", str(cfg), "--output", str(out)])
         assert rc == 0
         assert out.is_file()
