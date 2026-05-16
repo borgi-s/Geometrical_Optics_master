@@ -101,8 +101,28 @@ class TestLoadDefaultKernel:
             npoints3=np.int64(4),
         )
 
-        saved_resq = fm.Resq_i
-        saved_qi1 = fm.qi1_range
+        # Snapshot all globals that _load_default_kernel mutates, so the test
+        # doesn't leak state into subsequent tests in the same process.
+        saved_state = {
+            name: getattr(fm, name)
+            for name in (
+                "Resq_i",
+                "qi1_range",
+                "qi2_range",
+                "qi3_range",
+                "npoints1",
+                "npoints2",
+                "npoints3",
+                "qi1_start",
+                "qi2_start",
+                "qi3_start",
+                "qi1_step",
+                "qi2_step",
+                "qi3_step",
+                "qi_starts",
+                "qi_steps",
+            )
+        }
         try:
             fm._load_default_kernel(pkl_path=str(dst), compute_Hg=False)
             assert fm.Resq_i is not None
@@ -111,5 +131,5 @@ class TestLoadDefaultKernel:
             assert fm.qi1_range == pytest.approx(1e-3)
             assert fm.npoints1 == 4
         finally:
-            fm.Resq_i = saved_resq
-            fm.qi1_range = saved_qi1
+            for name, value in saved_state.items():
+                setattr(fm, name, value)

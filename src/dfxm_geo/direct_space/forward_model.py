@@ -51,7 +51,7 @@ NN3 = int(Npixels // 30 * Nsub)
 # Default reciprocal-space resolution kernel paths.
 # These are loaded lazily by `_load_default_kernel()` only if the file exists,
 # so the module can be imported on a clean checkout that lacks the precomputed
-# pickle (e.g. CI, tests, fresh clones).
+# kernel (e.g. CI, tests, fresh clones).
 pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
 # Constant name preserved (`pkl_fn`) so import-time monkeypatches in tests
 # and the dfxm-bootstrap CLI don't break. Value is now the npz canonical.
@@ -113,8 +113,8 @@ prob_z = np.exp(-0.5 * (rl[2] / zl_rms) ** 2)
 ndis = 151  # number of dislocations
 dis = 4  # units of micrometer
 
-# Pickle-dependent globals — populated by `_load_default_kernel()` if the
-# default pickle exists; otherwise these stay `None` and `forward()` will
+# Kernel-dependent globals — populated by `_load_default_kernel()` if the
+# default kernel exists; otherwise these stay `None` and `forward()` will
 # raise a clear error at call time.
 Resq_i = None
 qi1_range = qi2_range = qi3_range = None
