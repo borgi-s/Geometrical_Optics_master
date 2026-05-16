@@ -133,3 +133,18 @@ class TestLoadDefaultKernel:
         finally:
             for name, value in saved_state.items():
                 setattr(fm, name, value)
+
+
+class TestLegacyPickleRejection:
+    """The loader refuses .pkl paths with a clear migration message."""
+
+    def test_load_raises_on_pkl_path(self, tmp_path: Path) -> None:
+        """A .pkl path raises RuntimeError mentioning dfxm-bootstrap."""
+        import dfxm_geo.direct_space.forward_model as fm
+
+        # Create a non-empty file with the wrong extension
+        fake_pkl = tmp_path / "Resq_i_legacy.pkl"
+        fake_pkl.write_bytes(b"\x80\x04\x95")  # pickle magic; never read
+
+        with pytest.raises(RuntimeError, match="pickle support was removed"):
+            fm._load_default_kernel(pkl_path=str(fake_pkl), compute_Hg=False)

@@ -399,17 +399,17 @@ def test_example_multi_config_loads():
 def test_dfxm_identify_cli_end_to_end(tmp_path):
     """Invoke `dfxm-identify` via subprocess on a tiny config; confirm exit 0.
 
-    Skipped if the default Resq_i kernel pickle is missing (CI runners
-    without the pickle just skip; local dev with the pickle exercises the
+    Skipped if the default Resq_i kernel npz is missing (CI runners
+    without the npz just skip; local dev with the npz exercises the
     full forward call).
     """
     import subprocess
     import sys as _sys
 
     repo_root = Path(__file__).resolve().parents[1]
-    pkl = repo_root / "reciprocal_space" / "pkl_files" / "Resq_i_20230913_1308.pkl"
+    pkl = repo_root / "reciprocal_space" / "pkl_files" / "Resq_i_20230913_1308.npz"
     if not pkl.is_file():
-        pytest.skip(f"kernel pickle missing: {pkl}")
+        pytest.skip(f"kernel npz missing: {pkl}")
 
     toml_text = """
 mode = "single"

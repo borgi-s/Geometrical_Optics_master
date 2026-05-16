@@ -1,7 +1,7 @@
 """Structural smoke tests for direct_space.forward_model.
 
-These guard the lazy-pickle-load refactor: the module must import on a
-clean clone (no reciprocal-space kernel pickle present), and `forward()`
+These guard the lazy-load refactor: the module must import on a
+clean clone (no reciprocal-space kernel npz present), and `forward()`
 must raise a clear error when called before kernel state is loaded.
 
 A future test (Phase 7) will add numerical pinning by generating a tiny

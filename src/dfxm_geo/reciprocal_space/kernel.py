@@ -148,7 +148,7 @@ def cli_main(argv: list[str] | None = None) -> int:
 
     Reads a TOML config (e.g. `configs/default.toml`), parses the
     `[reciprocal]` block, and writes the resulting reciprocal-space kernel
-    pickle to the canonical path that `dfxm-forward`'s stage-0 preflight will
+    npz to the canonical path that `dfxm-forward`'s stage-0 preflight will
     read (`<fm.pkl_fpath>/<fm.pkl_fn>`), or to `--output <path>` if given.
     """
     import argparse
@@ -160,7 +160,7 @@ def cli_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="dfxm-bootstrap",
         description=(
-            "Generate the reciprocal-space resolution kernel pickle for "
+            "Generate the reciprocal-space resolution kernel npz for "
             "dfxm-forward / dfxm-identify. Takes ~50 s wall-clock at the "
             "default Nrays=1e8."
         ),
@@ -176,23 +176,23 @@ def cli_main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help=(
-            "Destination pickle path. Defaults to <pkl_fpath>/<pkl_fn> "
+            "Destination kernel npz path. Defaults to <pkl_fpath>/<pkl_fn> "
             "(the path dfxm-forward reads at import time)."
         ),
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite an existing pickle at the destination.",
+        help="Overwrite an existing kernel npz at the destination.",
     )
     parser.add_argument(
         "--if-missing",
         action="store_true",
         help=(
-            "Skip silently (exit 0) when the destination pickle already exists, "
+            "Skip silently (exit 0) when the destination kernel npz already exists, "
             "instead of returning the usual 'refusing to overwrite' error. "
             "Useful as an idempotent guard in cluster batch templates that don't "
-            "want to hardcode the pickle filename."
+            "want to hardcode the kernel filename."
         ),
     )
     args = parser.parse_args(argv)
@@ -244,7 +244,7 @@ def cli_main(argv: list[str] | None = None) -> int:
             return 0
         if not args.force:
             print(
-                f"refusing to overwrite existing pickle at {output_path}; pass --force to regenerate.",
+                f"refusing to overwrite existing kernel npz at {output_path}; pass --force to regenerate.",
                 file=sys.stderr,
             )
             return 1

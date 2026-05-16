@@ -616,12 +616,12 @@ class TestDfxmForwardSampleRemountCLI:
         import subprocess
         from pathlib import Path as _P
 
-        # Skip if the Resq_i kernel pickle is not on disk — same gating pattern
+        # Skip if the Resq_i kernel npz is not on disk — same gating pattern
         # as Round 16's CLI smoke. The path mirrors what forward_model loads.
         repo_root = _P(__file__).resolve().parents[1]
-        kernel_path = repo_root / "reciprocal_space" / "pkl_files" / "Resq_i_20230913_1308.pkl"
+        kernel_path = repo_root / "reciprocal_space" / "pkl_files" / "Resq_i_20230913_1308.npz"
         if not kernel_path.exists():
-            pytest.skip(f"Kernel pickle {kernel_path} not present; skipping CLI smoke.")
+            pytest.skip(f"Kernel npz {kernel_path} not present; skipping CLI smoke.")
 
         # Run dfxm-forward with the S2 variant config, output to tmp_path
         variant_config = repo_root / "configs" / "variants" / "sample_remount_S2.toml"
