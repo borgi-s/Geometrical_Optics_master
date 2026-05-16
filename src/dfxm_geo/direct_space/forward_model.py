@@ -209,7 +209,7 @@ def Find_Hg(
             "S_remount_matrix": S.tolist(),
         }
 
-        with open(Fg_path.replace(".npy", "_vars.txt"), "w") as data:
+        with open(Fg_path.replace(".npy", "_vars.txt"), "w", encoding="utf-8") as data:
             for key, value in vars.items():
                 # Use pprint for matrices to format them nicely
                 if isinstance(value, list) and isinstance(value[0], list):
@@ -249,7 +249,7 @@ def _load_default_kernel(
     print("Loading Resq_i.")
     with open(pkl_path, "rb") as f:
         Resq_i = pickle.load(f)
-    with open(vars_path) as f:
+    with open(vars_path, encoding="utf-8") as f:
         var_d = eval(f.read())
     qi1_range, npoints1 = var_d["qi1_range"], var_d["npoints1"]
     qi2_range, npoints2 = var_d["qi2_range"], var_d["npoints2"]

@@ -40,7 +40,7 @@ class TestGenerateKernelOutputPath:
         sidecar = tmp_path / "Resq_i_explicit_vars.txt"
         assert sidecar.is_file()
         # Sidecar contains the kwargs (sanity check on serialisation).
-        text = sidecar.read_text()
+        text = sidecar.read_text(encoding="utf-8")
         assert "Nrays" in text
         assert "qi1_range" in text
         # Defensive: the sidecar must land next to the pickle ONLY, not also in CWD.
@@ -119,7 +119,8 @@ class TestCliMain:
             "beamstop = true\n"
             "bs_height = 25e-3\n"
             "aperture = true\n"
-            "knife_edge = false\n"
+            "knife_edge = false\n",
+            encoding="utf-8",
         )
         return cfg
 
@@ -240,7 +241,7 @@ class TestCliMain:
         from dfxm_geo.reciprocal_space.kernel import cli_main
 
         bad = tmp_path / "no_recip.toml"
-        bad.write_text("[scan]\nphi_range = 0.1\n")
+        bad.write_text("[scan]\nphi_range = 0.1\n", encoding="utf-8")
         rc = cli_main(["--config", str(bad)])
         assert rc == 1
         captured = capsys.readouterr()
@@ -268,7 +269,7 @@ class TestCliMain:
         from dfxm_geo.reciprocal_space.kernel import cli_main
 
         cfg = tmp_path / "bogus.toml"
-        cfg.write_text("[reciprocal]\nNrays = 1000\ntotally_invented_key = 99\n")
+        cfg.write_text("[reciprocal]\nNrays = 1000\ntotally_invented_key = 99\n", encoding="utf-8")
         rc = cli_main(["--config", str(cfg)])
         assert rc == 1
         captured = capsys.readouterr()

@@ -6,7 +6,7 @@ README = Path(__file__).resolve().parents[1] / "README.md"
 
 
 def _text() -> str:
-    return README.read_text()
+    return README.read_text(encoding="utf-8")
 
 
 class TestReadmeClusterSection:

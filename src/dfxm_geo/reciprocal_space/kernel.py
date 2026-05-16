@@ -141,7 +141,7 @@ def generate_kernel(
     }
 
     vars_path.parent.mkdir(parents=True, exist_ok=True)
-    vars_path.write_text(str(vars_used))
+    vars_path.write_text(str(vars_used), encoding="utf-8")
 
     return output_path if output_path is not None else Path("pkl_files") / f"Resq_i_{date}.pkl"
 

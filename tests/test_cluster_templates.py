@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _read(rel: str) -> str:
-    return (REPO_ROOT / rel).read_text()
+    return (REPO_ROOT / rel).read_text(encoding="utf-8")
 
 
 class TestLsfForwardSingle:
