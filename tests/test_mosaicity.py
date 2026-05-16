@@ -242,7 +242,7 @@ class TestPlotMosaicityMaps:
         )
 
         assert out.exists()
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert len(content) > 0
         assert content.lstrip().startswith("<?xml") or "<svg" in content
 
@@ -264,6 +264,6 @@ class TestPlotQiCrossSection:
         )
 
         assert out.exists()
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert len(content) > 0
         assert content.lstrip().startswith("<?xml") or "<svg" in content

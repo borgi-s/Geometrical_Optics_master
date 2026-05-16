@@ -141,7 +141,7 @@ def generate_kernel(
     }
 
     vars_path.parent.mkdir(parents=True, exist_ok=True)
-    vars_path.write_text(str(vars_used))
+    vars_path.write_text(str(vars_used), encoding="utf-8")
 
     return output_path if output_path is not None else Path("pkl_files") / f"Resq_i_{date}.pkl"
 
@@ -195,7 +195,24 @@ def cli_main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Overwrite an existing pickle at the destination.",
     )
+    parser.add_argument(
+        "--if-missing",
+        action="store_true",
+        help=(
+            "Skip silently (exit 0) when the destination pickle already exists, "
+            "instead of returning the usual 'refusing to overwrite' error. "
+            "Useful as an idempotent guard in cluster batch templates that don't "
+            "want to hardcode the pickle filename."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.force and args.if_missing:
+        print(
+            "error: --force and --if-missing are mutually exclusive.",
+            file=sys.stderr,
+        )
+        return 1
 
     if not args.config.is_file():
         print(f"error: config file not found: {args.config}", file=sys.stderr)
@@ -231,12 +248,16 @@ def cli_main(argv: list[str] | None = None) -> int:
 
     output_path = args.output if args.output is not None else Path(fm.pkl_fpath) / fm.pkl_fn
 
-    if output_path.exists() and not args.force:
-        print(
-            f"refusing to overwrite existing pickle at {output_path}; pass --force to regenerate.",
-            file=sys.stderr,
-        )
-        return 1
+    if output_path.exists():
+        if args.if_missing:
+            print(f"kernel already present at {output_path}; skipping.")
+            return 0
+        if not args.force:
+            print(
+                f"refusing to overwrite existing pickle at {output_path}; pass --force to regenerate.",
+                file=sys.stderr,
+            )
+            return 1
 
     kwargs = dict(data["reciprocal"])
     written = generate_kernel(output_path=output_path, **kwargs)

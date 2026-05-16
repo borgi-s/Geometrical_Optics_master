@@ -59,7 +59,10 @@ class TestSimulationConfigFromToml:
     def test_omitted_optional_sections_use_defaults(self, tmp_path: Path) -> None:
         """[crystal] and [io] are optional; only [scan] is required."""
         p = tmp_path / "minimal.toml"
-        p.write_text("[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n")
+        p.write_text(
+            "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n",
+            encoding="utf-8",
+        )
         cfg = SimulationConfig.from_toml(p)
         assert cfg.crystal == CrystalConfig()
         assert cfg.scan == ScanConfig(0.1, 10, 0.2, 20)
@@ -68,7 +71,7 @@ class TestSimulationConfigFromToml:
     def test_missing_scan_section_raises(self, tmp_path: Path) -> None:
         """The [scan] section is mandatory."""
         p = tmp_path / "no_scan.toml"
-        p.write_text("[crystal]\ndis = 1\nndis = 1\n")
+        p.write_text("[crystal]\ndis = 1\nndis = 1\n", encoding="utf-8")
         with pytest.raises(KeyError):
             SimulationConfig.from_toml(p)
 
@@ -131,7 +134,7 @@ chi_range = 0.05
 chi_steps = 5
 """
         path = tmp_path / "cfg.toml"
-        path.write_text(toml_text)
+        path.write_text(toml_text, encoding="utf-8")
         cfg = SimulationConfig.from_toml(path)
         assert cfg.crystal.sample_remount == "S3"
 
@@ -156,7 +159,8 @@ class TestPostprocessConfigFromToml:
         p = tmp_path / "with_pp.toml"
         p.write_text(
             "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n"
-            "\n[postprocess]\nenabled = false\nchi_oversample = 5\n"
+            "\n[postprocess]\nenabled = false\nchi_oversample = 5\n",
+            encoding="utf-8",
         )
         cfg = SimulationConfig.from_toml(p)
         assert cfg.postprocess.enabled is False
@@ -166,7 +170,10 @@ class TestPostprocessConfigFromToml:
 
     def test_section_absent_uses_defaults(self, tmp_path: Path) -> None:
         p = tmp_path / "no_pp.toml"
-        p.write_text("[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n")
+        p.write_text(
+            "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n",
+            encoding="utf-8",
+        )
         cfg = SimulationConfig.from_toml(p)
         assert cfg.postprocess == PostprocessConfig()
 
@@ -440,7 +447,7 @@ class TestRunPostprocess:
         assert (data_dir / "qi_field.npy").exists()
         assert (data_dir / "chi_shift_deg.txt").exists()
         # File contents must be a bare float for downstream parsing
-        chi_shift_value = float((data_dir / "chi_shift_deg.txt").read_text())
+        chi_shift_value = float((data_dir / "chi_shift_deg.txt").read_text(encoding="utf-8"))
         assert chi_shift_value == result["chi_shift"]
         # Figures
         fig_dir = output_dir / "figures"
@@ -499,7 +506,9 @@ class TestCliMainFlags:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config_path = tmp_path / "cfg.toml"
-        config_path.write_text("[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n")
+        config_path.write_text(
+            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n", encoding="utf-8"
+        )
         calls: list[str] = []
         monkeypatch.setattr(
             "dfxm_geo.pipeline.run_simulation",
@@ -519,7 +528,9 @@ class TestCliMainFlags:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config_path = tmp_path / "cfg.toml"
-        config_path.write_text("[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n")
+        config_path.write_text(
+            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n", encoding="utf-8"
+        )
         calls: list[str] = []
         monkeypatch.setattr(
             "dfxm_geo.pipeline.run_simulation",
@@ -547,7 +558,9 @@ class TestCliMainFlags:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config_path = tmp_path / "cfg.toml"
-        config_path.write_text("[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n")
+        config_path.write_text(
+            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n", encoding="utf-8"
+        )
         calls: list[str] = []
         monkeypatch.setattr(
             "dfxm_geo.pipeline.run_simulation",
@@ -578,7 +591,8 @@ class TestCliMainFlags:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
             "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n"
-            "\n[postprocess]\nenabled = false\n"
+            "\n[postprocess]\nenabled = false\n",
+            encoding="utf-8",
         )
         calls: list[str] = []
         monkeypatch.setattr(

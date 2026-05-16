@@ -64,7 +64,8 @@ def _build_small_config(tmp_dir: Path) -> Path:
         "phi_oversample = 5\n"
         "chi_oversample_for_shift = 20\n"
         'figures_dirname = "figures"\n'
-        'data_dirname = "analysis"\n'
+        'data_dirname = "analysis"\n',
+        encoding="utf-8",
     )
     return cfg
 

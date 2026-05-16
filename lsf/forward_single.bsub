@@ -40,11 +40,11 @@ CONDA_BASE="${HOME}/miniforge3"
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate dfxm-geo
 
-# Stage 0 — generate the kernel pickle if missing. dfxm-bootstrap is idempotent
-# (it refuses to overwrite without --force), so this line is safe to leave in.
-if [ ! -f reciprocal_space/pkl_files/Resq_i_20230913_1308.pkl ]; then
-    dfxm-bootstrap --config "${CONFIG}"
-fi
+# Stage 0 — ensure the reciprocal-space kernel pickle exists. dfxm-bootstrap
+# --if-missing is idempotent: exits 0 silently when the canonical pickle is
+# already present. The destination filename comes from forward_model.pkl_fn,
+# so this template doesn't have to be re-edited whenever pkl_fn rotates.
+dfxm-bootstrap --if-missing --config "${CONFIG}"
 
 # Stage 1 — run the forward simulation.
 dfxm-forward --config "${CONFIG}" --output "${OUTPUT}"

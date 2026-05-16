@@ -147,7 +147,7 @@ perfect_dirname = "ignored"
 include_perfect_crystal = false
 """
     cfg_path = tmp_path / "identification_single.toml"
-    cfg_path.write_text(toml_text)
+    cfg_path.write_text(toml_text, encoding="utf-8")
 
     cfg = load_identification_config(cfg_path)
     assert cfg.mode == "single"
@@ -181,7 +181,7 @@ perfect_dirname = "ignored"
 include_perfect_crystal = false
 """
     cfg_path = tmp_path / "identification_multi.toml"
-    cfg_path.write_text(toml_text)
+    cfg_path.write_text(toml_text, encoding="utf-8")
 
     cfg = load_identification_config(cfg_path)
     assert cfg.mode == "multi"
@@ -193,7 +193,7 @@ include_perfect_crystal = false
 def test_load_identification_config_missing_mode_raises(tmp_path):
     """A TOML missing the top-level `mode = ...` field raises."""
     cfg_path = tmp_path / "bad.toml"
-    cfg_path.write_text("[crystal]\nslip_plane_normal = [1, 1, 1]\n")
+    cfg_path.write_text("[crystal]\nslip_plane_normal = [1, 1, 1]\n", encoding="utf-8")
     with pytest.raises(ValueError, match="missing top-level 'mode'"):
         load_identification_config(cfg_path)
 
@@ -235,7 +235,7 @@ def test_run_identification_single_writes_expected_count(tmp_path, monkeypatch):
     assert len(pngs) == 4
     manifest = output_dir / "manifest.csv"
     assert manifest.is_file()
-    lines = manifest.read_text().strip().splitlines()
+    lines = manifest.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 5  # 1 header + 4 rows
     assert result["n_images"] == 4
 
@@ -272,7 +272,7 @@ def test_run_identification_multi_writes_samples_and_manifest(tmp_path, monkeypa
     assert len(pngs) == 2
     manifest = output_dir / "manifest.csv"
     assert manifest.is_file()
-    lines = manifest.read_text().strip().splitlines()
+    lines = manifest.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 4  # header + 3 rows
     assert result["n_samples"] == 3
 
@@ -301,8 +301,8 @@ def test_run_identification_multi_is_deterministic_for_seed(tmp_path, monkeypatc
     counter["n"] = 0
     _run_identification_multi(cfg, out2)
 
-    m1 = (out1 / "manifest.csv").read_text()
-    m2 = (out2 / "manifest.csv").read_text()
+    m1 = (out1 / "manifest.csv").read_text(encoding="utf-8")
+    m2 = (out2 / "manifest.csv").read_text(encoding="utf-8")
     assert m1 == m2
 
 
@@ -370,7 +370,7 @@ perfect_dirname = "ignored"
 include_perfect_crystal = false
 """
     cfg_path = tmp_path / "id.toml"
-    cfg_path.write_text(toml_text)
+    cfg_path.write_text(toml_text, encoding="utf-8")
     out_dir = tmp_path / "out"
 
     exit_code = cli_main_identify(["--config", str(cfg_path), "--output", str(out_dir)])
@@ -437,7 +437,7 @@ perfect_dirname = "ignored"
 include_perfect_crystal = false
 """
     cfg_path = tmp_path / "smoke.toml"
-    cfg_path.write_text(toml_text)
+    cfg_path.write_text(toml_text, encoding="utf-8")
     out_dir = tmp_path / "out"
 
     result = subprocess.run(
@@ -585,7 +585,7 @@ perfect_dirname = "ignored"
 include_perfect_crystal = false
 """
     cfg_path = tmp_path / "id_zscan.toml"
-    cfg_path.write_text(toml_text)
+    cfg_path.write_text(toml_text, encoding="utf-8")
 
     cfg = load_identification_config(cfg_path)
     assert cfg.mode == "z-scan"
@@ -621,7 +621,7 @@ def test_run_identification_zscan_writes_per_config_rocking_grid(tmp_path, monke
     assert len(npys) == 4  # 2 phi * 2 chi
     manifest = output_dir / "manifest.csv"
     assert manifest.is_file()
-    lines = manifest.read_text().strip().splitlines()
+    lines = manifest.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 2  # header + 1 row
     assert result["n_configurations"] == 1
 
@@ -665,8 +665,8 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
     _run_identification_zscan(cfg, out1)
     _run_identification_zscan(cfg, out2)
 
-    m1 = (out1 / "manifest.csv").read_text()
-    m2 = (out2 / "manifest.csv").read_text()
+    m1 = (out1 / "manifest.csv").read_text(encoding="utf-8")
+    m2 = (out2 / "manifest.csv").read_text(encoding="utf-8")
     assert m1 == m2
 
 
@@ -729,7 +729,7 @@ perfect_dirname = "ignored"
 include_perfect_crystal = false
 """
     cfg_path = tmp_path / "zscan.toml"
-    cfg_path.write_text(toml_text)
+    cfg_path.write_text(toml_text, encoding="utf-8")
     out_dir = tmp_path / "out"
 
     exit_code = cli_main_identify(["--config", str(cfg_path), "--output", str(out_dir)])

@@ -40,5 +40,5 @@ def test_script_exists() -> None:
 
 def test_script_has_small_flag() -> None:
     """The `--small` flag must be supported (used by the bench test + docs)."""
-    text = SCRIPT.read_text()
+    text = SCRIPT.read_text(encoding="utf-8")
     assert "--small" in text

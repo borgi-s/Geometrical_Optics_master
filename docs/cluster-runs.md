@@ -28,9 +28,12 @@ fails loud with a `FileNotFoundError` and a `dfxm-bootstrap` instruction
 when the pickle is missing.
 
 `dfxm-bootstrap` writes to the canonical path that `dfxm-forward` reads
-(`reciprocal_space/pkl_files/Resq_i_20230913_1308.pkl`). If you want a
-different destination, pass `--output <path>`; if you want to regenerate
-an existing pickle, pass `--force`.
+(`reciprocal_space/pkl_files/<pkl_fn>`, where `pkl_fn` is defined in
+`dfxm_geo.direct_space.forward_model` — currently `Resq_i_20230913_1308.pkl`,
+but it rotates whenever the kernel is regenerated). If you want a different
+destination, pass `--output <path>`; if you want to regenerate an existing
+pickle, pass `--force`. The cluster templates use `dfxm-bootstrap --if-missing`
+as an idempotent guard so they don't have to hardcode the rotating filename.
 
 ## DTU HPC (LSF) walkthrough
 
