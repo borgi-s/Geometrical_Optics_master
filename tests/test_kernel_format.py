@@ -262,3 +262,29 @@ class TestCrossPlatformSyntheticKernel:
         assert loaded["Resq_i"].dtype == np.float64
         assert float(loaded["qi1_range"]) == pytest.approx(5e-4)
         assert int(loaded["npoints1"]) == 4
+
+
+class TestNoPickleImportsInRuntime:
+    """Defensive guard: runtime modules must not import pickle.
+
+    Audit scope: src/ files only — accessed via `mod.__file__`, which resolves
+    to the installed/editable src path, never tests/. Test files MAY use
+    pickle (e.g. TestForwardOutputBitEquivalence) without tripping this guard.
+    """
+
+    def test_forward_model_does_not_import_pickle(self) -> None:
+        """forward_model.py (src) must not have `import pickle` or `from pickle`."""
+        import dfxm_geo.direct_space.forward_model as fm
+
+        src = Path(fm.__file__).read_text(encoding="utf-8")
+        assert "import pickle" not in src, "pickle import re-introduced in forward_model.py"
+        assert "from pickle" not in src
+
+    def test_kernel_module_does_not_import_pickle(self) -> None:
+        """kernel.py and resolution.py (src) must not import pickle."""
+        from dfxm_geo.reciprocal_space import kernel, resolution
+
+        for mod in (kernel, resolution):
+            src = Path(mod.__file__).read_text(encoding="utf-8")
+            assert "import pickle" not in src, f"pickle import re-introduced in {mod.__file__}"
+            assert "from pickle" not in src, f"pickle import re-introduced in {mod.__file__}"
