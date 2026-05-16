@@ -406,8 +406,9 @@ def test_dfxm_identify_cli_end_to_end(tmp_path):
     import subprocess
     import sys as _sys
 
-    repo_root = Path(__file__).resolve().parents[1]
-    pkl = repo_root / "reciprocal_space" / "pkl_files" / "Resq_i_20230913_1308.npz"
+    import dfxm_geo.direct_space.forward_model as fm
+
+    pkl = Path(fm.pkl_fpath) / fm.pkl_fn
     if not pkl.is_file():
         pytest.skip(f"kernel npz missing: {pkl}")
 

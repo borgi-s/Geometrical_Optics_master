@@ -55,7 +55,7 @@ NN3 = int(Npixels // 30 * Nsub)
 pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
 # Constant name preserved (`pkl_fn`) so import-time monkeypatches in tests
 # and the dfxm-bootstrap CLI don't break. Value is now the npz canonical.
-pkl_fn = "Resq_i_20230913_1308.npz"  # Update after `dfxm-bootstrap` regen
+pkl_fn = "Resq_i_20260516_2100.npz"  # Update after `dfxm-bootstrap` regen
 
 theta = theta_0
 yl_start = -psize * Npixels / 2 + psize / (
