@@ -320,17 +320,24 @@ def forward(
     # Calculate scattering vector in sample space
     qs = Us @ Hg @ q_hkl
 
-    # Calculate scattering vector in crystal/grain space
+    # Calculate scattering vector in crystal/grain space. After `qc` is built
+    # `qs` and `ang_arr` are not used again; free them before allocating `qi`
+    # so the (3, NN1*NN2*NN3) float64 intermediates don't all live at once.
     qc = qs.squeeze().T + ang_arr
+    del qs, ang_arr
 
-    # Calculate scattering vector in imaging space and reshape it
+    # Calculate scattering vector in imaging space; `qc` is no longer needed.
     qi = Theta @ qc
-    qi_field = qi.reshape(3, NN1, NN2, NN3)
+    del qc
 
     # Calculate indices for Resq_i that pass through the mask
     index1 = np.floor((qi[0] - qi1_start) / qi1_step).astype(np.int16)
     index2 = np.floor((qi[1] - qi2_start) / qi2_step).astype(np.int16)
     index3 = np.floor((qi[2] - qi3_start) / qi3_step).astype(np.int16)
+    # In the qi_return path we need `qi` again to build qi_field; in the
+    # common (non-return) path it is unused after the index1/2/3 floors.
+    if not qi_return:
+        del qi
 
     # Calculate index of values within bounds and extract corresponding values from Resq_i
     idx = (
@@ -342,6 +349,7 @@ def forward(
         * (index3 < npoints3)
     )
     prob = Resq_i[index1[idx], index2[idx], index3[idx]] * prob_z[idx]
+    del index1, index2, index3  # only `idx` and `prob` are needed below
 
     # Scatter-accumulate the probability into the (chi, phi)-rocking image.
     # np.bincount on the precomputed flat indices is ~10x faster than the
@@ -359,12 +367,13 @@ def forward(
         weights=prob.astype(np.float32),
         minlength=im_1.size,
     )
+    del idx, prob
     im_1 += contribution.reshape(im_1.shape)
+    del contribution
     if qi_return:
+        # qi was kept alive above; build qi_field only when actually returned.
         qi_field = qi.reshape(3, NN1, NN2, NN3)
-        # Return scattering vector in imaging space and forward model image
         return im_1, qi_field
-    # Return the forward model image
     return im_1
 
 
