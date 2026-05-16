@@ -274,3 +274,67 @@ class TestCliMain:
         captured = capsys.readouterr()
         out = captured.out + captured.err
         assert "totally_invented_key" in out
+
+    def test_if_missing_exits_zero_when_pickle_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--if-missing skips silently (exit 0) when the destination already exists.
+
+        Lets cluster batch templates call `dfxm-bootstrap --if-missing` as an
+        idempotent guard without parsing pkl_fn or hardcoding the filename.
+        """
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = self._make_config(tmp_path)
+        existing = tmp_path / "existing.pkl"
+        existing.write_bytes(b"prior contents")
+        called = False
+
+        def fake_generate(**kwargs: object) -> Path:
+            nonlocal called
+            called = True
+            return Path()
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate)
+
+        rc = kmod.cli_main(["--config", str(cfg), "--output", str(existing), "--if-missing"])
+        assert rc == 0, "must exit 0 when pickle exists under --if-missing"
+        assert not called, "generate_kernel must not run under --if-missing when output exists"
+        assert existing.read_bytes() == b"prior contents", "existing pickle must not be touched"
+
+    def test_if_missing_generates_when_pickle_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--if-missing falls through to normal generation when the destination is absent."""
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = self._make_config(tmp_path)
+        target = tmp_path / "fresh.pkl"
+        assert not target.exists()
+
+        def fake_generate(**kwargs: object) -> Path:
+            out = kwargs["output_path"]
+            assert isinstance(out, Path)
+            out.write_bytes(b"freshly generated")
+            return out
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate)
+
+        rc = kmod.cli_main(["--config", str(cfg), "--output", str(target), "--if-missing"])
+        assert rc == 0
+        assert target.read_bytes() == b"freshly generated"
+
+    def test_force_and_if_missing_are_mutually_exclusive(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--force and --if-missing can't be combined — the semantics conflict."""
+        from dfxm_geo.reciprocal_space.kernel import cli_main
+
+        cfg = self._make_config(tmp_path)
+        rc = cli_main(
+            ["--config", str(cfg), "--output", str(tmp_path / "x.pkl"), "--force", "--if-missing"]
+        )
+        assert rc == 1
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+        assert "mutually exclusive" in out

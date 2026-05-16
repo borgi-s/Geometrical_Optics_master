@@ -33,9 +33,10 @@ mkdir -p "$(dirname "${OUTPUT}")" logs
 module load conda 2>/dev/null || source ~/miniforge3/etc/profile.d/conda.sh
 conda activate dfxm-geo
 
-if [ ! -f reciprocal_space/pkl_files/Resq_i_20230913_1308.pkl ]; then
-    dfxm-bootstrap --config "${CONFIG}"
-fi
+# Stage 0 — ensure the reciprocal-space kernel pickle exists. dfxm-bootstrap
+# --if-missing is idempotent and reads pkl_fn from forward_model, so this
+# guard doesn't hardcode the filename.
+dfxm-bootstrap --if-missing --config "${CONFIG}"
 
 dfxm-forward --config "${CONFIG}" --output "${OUTPUT}"
 

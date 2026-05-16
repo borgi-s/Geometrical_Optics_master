@@ -192,3 +192,40 @@ class TestLsfNoModuleLoadPython:
         for rel in ["lsf/forward_single.bsub", "lsf/identify_array.bsub"]:
             text = _read(rel)
             assert "CONDA_BASE=" in text, f"{rel} should expose CONDA_BASE as an editable variable"
+
+
+class TestNoHardcodedKernelPickleFilename:
+    """No cluster template should grep its filesystem for a specific
+    `Resq_i_<date>.pkl`. The canonical pickle filename comes from
+    `dfxm_geo.direct_space.forward_model.pkl_fn` and rotates whenever the
+    kernel is regenerated. Templates use `dfxm-bootstrap --if-missing` instead.
+    """
+
+    TEMPLATES = (
+        "lsf/forward_single.bsub",
+        "lsf/identify_array.bsub",
+        "slurm/forward_single.sbatch",
+        "slurm/identify_array.sbatch",
+    )
+
+    def test_templates_do_not_hardcode_pkl_filename(self) -> None:
+        import re
+
+        # The pattern catches both `Resq_i_20230913_1308.pkl` and any future
+        # `Resq_i_<digits>_<digits>.pkl`. Globs (`Resq_i_*.pkl`) are also
+        # discouraged because they don't catch the rotate-without-regen case.
+        pattern = re.compile(r"Resq_i_\d+_\d+\.pkl|Resq_i_\*\.pkl")
+        for rel in self.TEMPLATES:
+            text = _read(rel)
+            match = pattern.search(text)
+            assert match is None, (
+                f"{rel} hardcodes a kernel pickle filename ({match.group()!r}). "
+                "Use `dfxm-bootstrap --if-missing --config <CONFIG>` instead."
+            )
+
+    def test_templates_call_bootstrap_with_if_missing(self) -> None:
+        for rel in self.TEMPLATES:
+            text = _read(rel)
+            assert "dfxm-bootstrap --if-missing" in text, (
+                f"{rel} should call `dfxm-bootstrap --if-missing` as the kernel guard"
+            )
