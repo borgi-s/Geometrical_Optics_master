@@ -148,3 +148,90 @@ class TestLegacyPickleRejection:
 
         with pytest.raises(RuntimeError, match="pickle support was removed"):
             fm._load_default_kernel(pkl_path=str(fake_pkl), compute_Hg=False)
+
+
+class TestForwardOutputBitEquivalence:
+    """Layer 2: forward() output using npz-loaded kernel must match the
+    pickle-era snapshot bit-for-bit.
+
+    Skipped if either the existing pickle (to regenerate the npz from) or the
+    golden snapshot is missing.
+    """
+
+    def test_forward_output_matches_pickle_era_snapshot(self, tmp_path: Path) -> None:
+        import dfxm_geo.direct_space.forward_model as fm
+
+        snapshot_path = GOLDEN_DIR / "forward_snapshot_pickle_era.npy"
+        if not snapshot_path.exists():
+            pytest.skip(f"snapshot not present at {snapshot_path}")
+
+        # Build an npz from the existing pickle on disk by reading it once via
+        # a deliberately-allowed pickle import in the *test*, then writing npz.
+        # This isolates pickle.load to the test harness, not production code.
+        # Task 9's import-audit is scoped to src/ files (via mod.__file__), so
+        # this test-side pickle import does NOT trip the defensive guard.
+        import pickle as _pkl
+
+        legacy_pkl = Path(fm.pkl_fpath) / "Resq_i_20230913_1308.pkl"
+        if not legacy_pkl.exists():
+            pytest.skip(f"legacy pickle not present at {legacy_pkl}; cannot build comparison npz")
+
+        with open(legacy_pkl, "rb") as f:
+            Resq_i_from_pickle = _pkl.load(f)
+
+        # Read the existing _vars.txt one last time (also via eval — test-only)
+        vars_txt = legacy_pkl.with_name(legacy_pkl.stem + "_vars.txt")
+        var_d = eval(vars_txt.read_text())  # noqa: S307
+
+        dst = tmp_path / "Resq_i_from_pickle.npz"
+        np.savez(
+            dst,
+            Resq_i=Resq_i_from_pickle,
+            qi1_range=np.float64(var_d["qi1_range"]),
+            qi2_range=np.float64(var_d["qi2_range"]),
+            qi3_range=np.float64(var_d["qi3_range"]),
+            npoints1=np.int64(var_d["npoints1"]),
+            npoints2=np.int64(var_d["npoints2"]),
+            npoints3=np.int64(var_d["npoints3"]),
+        )
+
+        # Snapshot all globals mutated by _load_default_kernel so this test
+        # doesn't leak state into subsequent tests in the same process.
+        # compute_Hg=True is used (Option A) so Hg is computed from the tmp npz
+        # — this avoids needing fm.Hg to be pre-set, which it won't be on a
+        # clean checkout where the default .npz doesn't exist yet.
+        saved_state = {
+            name: getattr(fm, name)
+            for name in (
+                "Resq_i",
+                "qi1_range",
+                "qi2_range",
+                "qi3_range",
+                "npoints1",
+                "npoints2",
+                "npoints3",
+                "qi1_start",
+                "qi2_start",
+                "qi3_start",
+                "qi1_step",
+                "qi2_step",
+                "qi3_step",
+                "qi_starts",
+                "qi_steps",
+                "Hg",
+                "q_hkl",
+            )
+        }
+        try:
+            # compute_Hg=True: _load_default_kernel calls Find_Hg which loads
+            # the cached Fg from disk (direct_space/deformation_gradient_tensors/).
+            # This sets fm.Hg and fm.q_hkl, which forward() requires.
+            fm._load_default_kernel(pkl_path=str(dst), compute_Hg=True)
+            out = fm.forward(fm.Hg, phi=0.0, chi=0.0)
+            if isinstance(out, tuple):
+                out = out[0]
+            golden = np.load(snapshot_path)
+            assert np.array_equal(out, golden), "forward() output differs from pickle-era snapshot"
+        finally:
+            for name, value in saved_state.items():
+                setattr(fm, name, value)
