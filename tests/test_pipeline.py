@@ -179,10 +179,10 @@ class TestPostprocessConfigFromToml:
 
 
 class TestPreflight:
-    def test_raises_when_kernel_not_loaded_and_pickle_missing(
+    def test_raises_when_kernel_not_loaded_and_kernel_missing(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """Pickle absent -> FileNotFoundError with the dfxm-bootstrap hint."""
+        """Kernel absent -> FileNotFoundError with the dfxm-bootstrap hint."""
         monkeypatch.setattr(fm, "Resq_i", None)
         # Point the canonical path at an empty tmp dir; nothing to find.
         monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + "/")
@@ -194,10 +194,10 @@ class TestPreflight:
         assert "docs/cluster-runs.md" in msg
         assert "missing_kernel.pkl" in msg
 
-    def test_recovers_when_pickle_on_disk_but_not_loaded(
+    def test_recovers_when_kernel_on_disk_but_not_loaded(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Pickle present but Resq_i not loaded -> call _load_default_kernel."""
+        """Kernel present but Resq_i not loaded -> call _load_default_kernel."""
         monkeypatch.setattr(fm, "Resq_i", None)
         called: dict[str, str] = {}
 
@@ -419,7 +419,7 @@ class TestRunPostprocess:
     ) -> None:
         output_dir, config = tiny_simulation_output
 
-        # Mock forward() to avoid needing the kernel pickle.
+        # Mock forward() to avoid needing the kernel npz.
         fake_qi = np.zeros((3, 4, 4, 4))
         fake_im = np.zeros((4, 4))
         monkeypatch.setattr(

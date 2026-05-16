@@ -30,7 +30,7 @@ class TestGenerateKernelOutputPath:
         assert isinstance(arr, np.ndarray)
         assert arr.shape == (20, 20, 20)
 
-    def test_writes_vars_sidecar_next_to_pickle(self, tmp_path: Path) -> None:
+    def test_no_sidecar_written(self, tmp_path: Path) -> None:
         """Params are bundled into the .npz; no `<stem>_vars.txt` sidecar is written."""
         from dfxm_geo.reciprocal_space.kernel import generate_kernel
 
@@ -269,7 +269,7 @@ class TestCliMain:
         out = captured.out + captured.err
         assert "totally_invented_key" in out
 
-    def test_if_missing_exits_zero_when_pickle_present(
+    def test_if_missing_exits_zero_when_kernel_present(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """--if-missing skips silently (exit 0) when the destination already exists.
@@ -296,14 +296,14 @@ class TestCliMain:
         assert not called, "generate_kernel must not run under --if-missing when output exists"
         assert existing.read_bytes() == b"prior contents", "existing kernel npz must not be touched"
 
-    def test_if_missing_generates_when_pickle_absent(
+    def test_if_missing_generates_when_kernel_absent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """--if-missing falls through to normal generation when the destination is absent."""
         from dfxm_geo.reciprocal_space import kernel as kmod
 
         cfg = self._make_config(tmp_path)
-        target = tmp_path / "fresh.pkl"
+        target = tmp_path / "fresh.npz"
         assert not target.exists()
 
         def fake_generate(**kwargs: object) -> Path:
@@ -326,7 +326,7 @@ class TestCliMain:
 
         cfg = self._make_config(tmp_path)
         rc = cli_main(
-            ["--config", str(cfg), "--output", str(tmp_path / "x.pkl"), "--force", "--if-missing"]
+            ["--config", str(cfg), "--output", str(tmp_path / "x.npz"), "--force", "--if-missing"]
         )
         assert rc == 1
         captured = capsys.readouterr()
