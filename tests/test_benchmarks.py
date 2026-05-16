@@ -8,6 +8,8 @@ Pickle-dependent paths (`forward`, `Find_Hg`, `load_or_generate_Hg`) are
 deferred until a fixture kernel exists — see plan Phase 7.x.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -177,3 +179,53 @@ def test_np_add_at_scatter_bench(
         np.add.at(im, (rows, cols), weights)
 
     benchmark(_run)
+
+
+@pytest.mark.bench
+def test_load_default_kernel_bench(benchmark, tmp_path: Path) -> None:
+    """Regression baseline for _load_default_kernel on the canonical npz size.
+
+    The canonical kernel is (400, 200, 200) float64 = 128 MB; cold np.load
+    typically lands at 100-300 ms on Sina's laptop. `pytest -m bench
+    --benchmark-compare=baseline_v1_0_1` will flag regressions beyond the
+    saved baseline's std-dev threshold.
+    """
+    import dfxm_geo.direct_space.forward_model as fm
+
+    rng = np.random.default_rng(0)
+    dst = tmp_path / "Resq_i_bench.npz"
+    np.savez(
+        dst,
+        Resq_i=rng.random((400, 200, 200), dtype=np.float64),
+        qi1_range=np.float64(5e-4),
+        qi2_range=np.float64(0.75e-2),
+        qi3_range=np.float64(0.75e-2),
+        npoints1=np.int64(400),
+        npoints2=np.int64(200),
+        npoints3=np.int64(200),
+    )
+
+    # Save all 15 globals that _load_default_kernel mutates for clean state restoration
+    saved = {
+        "Resq_i": fm.Resq_i,
+        "qi1_range": fm.qi1_range,
+        "qi2_range": fm.qi2_range,
+        "qi3_range": fm.qi3_range,
+        "npoints1": fm.npoints1,
+        "npoints2": fm.npoints2,
+        "npoints3": fm.npoints3,
+        "qi1_start": fm.qi1_start,
+        "qi2_start": fm.qi2_start,
+        "qi3_start": fm.qi3_start,
+        "qi1_step": fm.qi1_step,
+        "qi2_step": fm.qi2_step,
+        "qi3_step": fm.qi3_step,
+        "qi_starts": fm.qi_starts,
+        "qi_steps": fm.qi_steps,
+    }
+    try:
+        benchmark(fm._load_default_kernel, pkl_path=str(dst), compute_Hg=False)
+    finally:
+        # Restore all 15 globals to prevent state leakage to subsequent tests
+        for key, val in saved.items():
+            setattr(fm, key, val)
