@@ -5,15 +5,14 @@ beam profile) at import time, then exposes `forward()` which projects a
 displacement-gradient field `Hg` through the imaging system into a 2D image.
 
 The reciprocal-space resolution kernel `Resq_i` is loaded lazily by
-`_load_default_kernel()` — at module import iff the default pickle is on
+`_load_default_kernel()` — at module import iff the default .npz is on
 disk, otherwise on explicit call. This lets the module be imported on a
-clean clone or in CI without the precomputed pickle present.
+clean clone or in CI without the precomputed kernel present.
 
 Default geometry constants match ID06 at the ESRF; see `dfxm_geo.constants`.
 """
 
 import os
-import pickle
 from pathlib import Path
 from pprint import pprint
 
@@ -52,10 +51,11 @@ NN3 = int(Npixels // 30 * Nsub)
 # Default reciprocal-space resolution kernel paths.
 # These are loaded lazily by `_load_default_kernel()` only if the file exists,
 # so the module can be imported on a clean checkout that lacks the precomputed
-# pickle (e.g. CI, tests, fresh clones).
+# kernel (e.g. CI, tests, fresh clones).
 pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
-pkl_fn = "Resq_i_20230913_1308.pkl"  # Change accordingly
-vars_fn = os.path.splitext(pkl_fn)[0] + "_vars.txt"
+# Constant name preserved (`pkl_fn`) so import-time monkeypatches in tests
+# and the dfxm-bootstrap CLI don't break. Value is now the npz canonical.
+pkl_fn = "Resq_i_20230913_1308.npz"  # Update after `dfxm-bootstrap` regen
 
 theta = theta_0
 yl_start = -psize * Npixels / 2 + psize / (
@@ -113,8 +113,8 @@ prob_z = np.exp(-0.5 * (rl[2] / zl_rms) ** 2)
 ndis = 151  # number of dislocations
 dis = 4  # units of micrometer
 
-# Pickle-dependent globals — populated by `_load_default_kernel()` if the
-# default pickle exists; otherwise these stay `None` and `forward()` will
+# Kernel-dependent globals — populated by `_load_default_kernel()` if the
+# default kernel exists; otherwise these stay `None` and `forward()` will
 # raise a clear error at call time.
 Resq_i = None
 qi1_range = qi2_range = qi3_range = None
@@ -223,12 +223,11 @@ def Find_Hg(
 
 def _load_default_kernel(
     pkl_path: str | None = None,
-    vars_path: str | None = None,
     compute_Hg: bool = True,
 ) -> None:
     """Load the reciprocal-space resolution kernel from disk into module state.
 
-    Called at import time iff the default pickle exists. Can be called
+    Called at import time iff the default .npz exists. Can be called
     manually with an explicit path to bootstrap the module after a clean
     import (e.g. from tests with a fixture kernel).
 
@@ -243,18 +242,24 @@ def _load_default_kernel(
 
     if pkl_path is None:
         pkl_path = os.path.join(pkl_fpath, pkl_fn)
-    if vars_path is None:
-        vars_path = os.path.join(pkl_fpath, vars_fn)
 
-    print("Loading Resq_i.")
-    with open(pkl_path, "rb") as f:
-        Resq_i = pickle.load(f)
-    with open(vars_path, encoding="utf-8") as f:
-        var_d = eval(f.read())
-    qi1_range, npoints1 = var_d["qi1_range"], var_d["npoints1"]
-    qi2_range, npoints2 = var_d["qi2_range"], var_d["npoints2"]
-    qi3_range, npoints3 = var_d["qi3_range"], var_d["npoints3"]
-    print("Resq_i loaded.")
+    if str(pkl_path).endswith(".pkl"):
+        raise RuntimeError(
+            f"Detected legacy pickle at {pkl_path!r}; pickle support was "
+            "removed in v1.0.3. Run `dfxm-bootstrap --config configs/default.toml` "
+            "to regenerate the kernel as .npz."
+        )
+
+    print(f"Loading kernel from {pkl_path}.")
+    with np.load(pkl_path) as arch:
+        Resq_i = np.array(arch["Resq_i"])
+        qi1_range = float(arch["qi1_range"])
+        qi2_range = float(arch["qi2_range"])
+        qi3_range = float(arch["qi3_range"])
+        npoints1 = int(arch["npoints1"])
+        npoints2 = int(arch["npoints2"])
+        npoints3 = int(arch["npoints3"])
+    print("Kernel loaded.")
 
     qi1_start, qi1_step = -qi1_range / 2, qi1_range / (npoints1 - 1)
     qi2_start, qi2_step = -qi2_range / 2, qi2_range / (npoints2 - 1)
@@ -292,7 +297,7 @@ def forward(
     if Resq_i is None:
         raise RuntimeError(
             "forward_model state is not initialized. Call "
-            "_load_default_kernel(pkl_path, vars_path) before calling forward()."
+            "_load_default_kernel(pkl_path) before calling forward()."
         )
 
     if TwoDeltaTheta != 0:
@@ -413,6 +418,6 @@ if os.path.exists(os.path.join(pkl_fpath, pkl_fn)):
     _load_default_kernel()
 else:
     print(
-        f"NOTE: default kernel pickle not found at {os.path.join(pkl_fpath, pkl_fn)!r}; "
-        f"call _load_default_kernel(pkl_path, vars_path) before forward()."
+        f"NOTE: default kernel npz not found at {os.path.join(pkl_fpath, pkl_fn)!r}; "
+        f"call _load_default_kernel(pkl_path) before forward(), or run `dfxm-bootstrap`."
     )

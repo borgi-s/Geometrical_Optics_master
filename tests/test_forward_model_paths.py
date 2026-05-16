@@ -58,7 +58,7 @@ def test_pkl_fpath_independent_of_cwd(tmp_path):
         text=True,
         check=True,
     )
-    # forward_model prints a "Loading Resq_i" or "default kernel pickle not
+    # forward_model prints a "Loading kernel from" or "default kernel npz not
     # found" line during import; strip it by parsing only the last stdout line.
     stdout_line = [line for line in result.stdout.strip().splitlines() if "|" in line][-1]
     repo_root_str, pkl_fpath = stdout_line.split("|", 1)

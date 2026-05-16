@@ -9,20 +9,26 @@ layout, see [`architecture.md`](architecture.md).
 ## Prerequisites
 
 - Python 3.11+ in a clean virtual environment.
-- A precomputed reciprocal-space resolution kernel pickle (`Resq_i_*.pkl`)
-  with its sidecar `_vars.txt`. This is **not** in the repo (it is large
-  and depends on instrument parameters). Generate it once with:
+- A precomputed reciprocal-space resolution kernel npz (`Resq_i_*.npz`)
+  with all generation parameters bundled into the same archive. This is
+  **not** in the repo (it is large and depends on instrument parameters).
+  Generate it once with:
+
+  > **v1.0.3 migration note:** Legacy `.pkl` files from before v1.0.3 are no
+  > longer supported by `_load_default_kernel`. Regenerate via
+  > `dfxm-bootstrap --config configs/default.toml` (~50 s); the resulting
+  > `.npz` is a drop-in replacement at the same canonical path.
 
   ```bash
   python reciprocal_space/generate_Resq_i.py
   ```
 
-  Place the resulting `Resq_i_<timestamp>.pkl` + `<timestamp>_vars.txt`
+  Place the resulting `Resq_i_<timestamp>.npz`
   under `reciprocal_space/pkl_files/`. The default kernel filename the
   loader looks for is set in
   `dfxm_geo.direct_space.forward_model.pkl_fn`. To use a different
   filename, edit that module-level constant or call
-  `_load_default_kernel(pkl_path, vars_path)` explicitly before invoking
+  `_load_default_kernel(pkl_path)` explicitly before invoking
   the pipeline.
 
 - Install the package in editable mode so the `dfxm-forward` console
@@ -129,7 +135,7 @@ re-simulating (useful after tweaking `[postprocess]` parameters):
 > full pipeline.
 
 The post-processing stage requires the reciprocal-space resolution kernel
-pickle (same as the simulation stage) to compute the qi field.
+npz (same as the simulation stage) to compute the qi field.
 
 ## Reproducing paper figures
 
@@ -188,7 +194,7 @@ When publishing or sharing a simulation run, record:
 - Git commit SHA of the package (`git rev-parse HEAD`).
 - Package version (`python -c "import dfxm_geo; print(dfxm_geo.__version__)"`).
 - The exact TOML config used.
-- The `Resq_i_*.pkl` filename and its `_vars.txt` sidecar.
+- The `Resq_i_*.npz` filename (params bundled, no separate sidecar).
 - Output of `pip freeze` (or a lockfile) for the venv.
 
 The CLI does not yet emit a run-metadata sidecar automatically; this is

@@ -16,8 +16,8 @@
 #   ratio_outside: The fraction of rays not within the range defined by
 #                                       qi1_range, qi2_range, qi3_range.
 
-import pickle
 from pathlib import Path
+from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -175,6 +175,7 @@ def reciprocal_res_func(
     aperture: bool = False,
     knife_edge: bool = False,
     output_path: Path | None = None,
+    kernel_meta: dict | None = None,
 ) -> tuple[np.ndarray, ...] | None:
     print("Defining properties of rays")
     if rng is None:
@@ -317,22 +318,18 @@ def reciprocal_res_func(
         plt.grid(True)
         plt.show()
     if save_resqi == 1:
+        meta_arrays = {k: np.asarray(v) for k, v in (kernel_meta or {}).items()}
         if output_path is not None:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "wb") as output:
-                pickle.dump(normResq_i, output)
+            np.savez(output_path, Resq_i=normResq_i, **cast(Any, meta_arrays))
             print(f"Resq_i saved to {output_path}")
         else:
-            # Legacy default: write to pkl_files/Resq_i_<date>.pkl in CWD.
-            # Ensure pkl_files/ exists in the CWD only when we're about to write
-            # to it. Previously this was done as a module-level side effect on
-            # import, which silently created a stray directory anywhere the
-            # module was imported.
+            # Legacy default: write to pkl_files/Resq_i_<date>.npz in CWD.
             check_folder("", "pkl_files")
-            with open(f"pkl_files/Resq_i_{date}.pkl", "wb") as output:
-                pickle.dump(normResq_i, output)
-            print(f"Resq_i saved as Resq_i_{date}.pkl")
+            default_path = Path("pkl_files") / f"Resq_i_{date}.npz"
+            np.savez(default_path, Resq_i=normResq_i, **cast(Any, meta_arrays))
+            print(f"Resq_i saved as Resq_i_{date}.npz")
 
     # %%%%%%%%%%%%  For test purposes, plots %%%%%%%%%%%
 

@@ -17,7 +17,7 @@ src/dfxm_geo/
 │   └── forward_model.py     The DFXM forward model (Find_Hg, forward)
 ├── reciprocal_space/
 │   ├── resolution.py        Monte Carlo resolution function (Resq_i)
-│   ├── kernel.py            Driver script: generates Resq_i pickle
+│   ├── kernel.py            Driver script: generates Resq_i npz
 │   └── exposure.py          Auxiliary exposure-time model
 ├── io/
 │   ├── __init__.py          check_folder
@@ -56,10 +56,11 @@ The end-to-end pipeline has five stages. Stages 1–3 are the forward simulation
    python -m dfxm_geo.reciprocal_space.kernel
    ```
 
-   This writes `pkl_files/Resq_i_<timestamp>.pkl` plus a sidecar
-   `_vars.txt` describing the parameters used. The pickle is picked up at
-   import time by `dfxm_geo.direct_space.forward_model` if its filename
-   matches `pkl_fn` there.
+   This writes `pkl_files/Resq_i_<timestamp>.npz` with the array and all
+   generation parameters bundled into the single archive (no separate
+   sidecar). The npz is picked up at import time by
+   `_load_default_kernel()` whenever its filename matches `pkl_fn` in
+   `forward_model.py`.
 
 2. **Compute or load the displacement-gradient field `Hg`** for a given
    dislocation configuration. The first call generates Hg from the
@@ -113,7 +114,7 @@ below).
 detector grid, the rotation matrices `Ud`/`Us`/`Theta`, the coordinate
 grid `rl`, and the beam profile `prob_z` at import time, all from the
 constants near the top of the file. It then either auto-loads the default
-Resq_i pickle (if present on disk) via `_load_default_kernel()`, or
+Resq_i npz (if present on disk) via `_load_default_kernel()`, or
 defers loading until the user calls `_load_default_kernel(pkl_path)`
 explicitly.
 
@@ -180,7 +181,7 @@ viz.mosaicity      ────────────────────�
 ```
 
 `reciprocal_space.{resolution, kernel, exposure}` interact with
-`direct_space.forward_model` only through the pickle file produced by
+`direct_space.forward_model` only through the npz file produced by
 `kernel.py`. They have no Python-level imports of `direct_space`.
 
 `analysis.mosaicity` depends only on `numpy` and `scipy.ndimage`; it has no

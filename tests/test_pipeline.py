@@ -179,10 +179,10 @@ class TestPostprocessConfigFromToml:
 
 
 class TestPreflight:
-    def test_raises_when_kernel_not_loaded_and_pickle_missing(
+    def test_raises_when_kernel_not_loaded_and_kernel_missing(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """Pickle absent -> FileNotFoundError with the dfxm-bootstrap hint."""
+        """Kernel absent -> FileNotFoundError with the dfxm-bootstrap hint."""
         monkeypatch.setattr(fm, "Resq_i", None)
         # Point the canonical path at an empty tmp dir; nothing to find.
         monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + "/")
@@ -194,10 +194,10 @@ class TestPreflight:
         assert "docs/cluster-runs.md" in msg
         assert "missing_kernel.pkl" in msg
 
-    def test_recovers_when_pickle_on_disk_but_not_loaded(
+    def test_recovers_when_kernel_on_disk_but_not_loaded(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Pickle present but Resq_i not loaded -> call _load_default_kernel."""
+        """Kernel present but Resq_i not loaded -> call _load_default_kernel."""
         monkeypatch.setattr(fm, "Resq_i", None)
         called: dict[str, str] = {}
 
@@ -419,7 +419,7 @@ class TestRunPostprocess:
     ) -> None:
         output_dir, config = tiny_simulation_output
 
-        # Mock forward() to avoid needing the kernel pickle.
+        # Mock forward() to avoid needing the kernel npz.
         fake_qi = np.zeros((3, 4, 4, 4))
         fake_im = np.zeros((4, 4))
         monkeypatch.setattr(
@@ -616,12 +616,12 @@ class TestDfxmForwardSampleRemountCLI:
         import subprocess
         from pathlib import Path as _P
 
-        # Skip if the Resq_i kernel pickle is not on disk — same gating pattern
+        # Skip if the Resq_i kernel npz is not on disk — same gating pattern
         # as Round 16's CLI smoke. The path mirrors what forward_model loads.
         repo_root = _P(__file__).resolve().parents[1]
-        kernel_path = repo_root / "reciprocal_space" / "pkl_files" / "Resq_i_20230913_1308.pkl"
+        kernel_path = repo_root / "reciprocal_space" / "pkl_files" / "Resq_i_20230913_1308.npz"
         if not kernel_path.exists():
-            pytest.skip(f"Kernel pickle {kernel_path} not present; skipping CLI smoke.")
+            pytest.skip(f"Kernel npz {kernel_path} not present; skipping CLI smoke.")
 
         # Run dfxm-forward with the S2 variant config, output to tmp_path
         variant_config = repo_root / "configs" / "variants" / "sample_remount_S2.toml"

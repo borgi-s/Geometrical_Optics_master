@@ -249,9 +249,9 @@ def load_identification_config(path: Path) -> IdentificationConfig:
 def _ensure_kernel_loaded() -> None:
     """Pre-flight: verify the reciprocal-space kernel is loaded.
 
-    If the canonical pickle is on disk but the import-time auto-load didn't
+    If the canonical kernel npz is on disk but the import-time auto-load didn't
     populate state (e.g. it ran before bootstrap in the same process), this
-    function calls ``fm._load_default_kernel(...)`` to recover. If the pickle
+    function calls ``fm._load_default_kernel(...)`` to recover. If the kernel npz
     is missing altogether, raises ``FileNotFoundError`` with a clear
     `dfxm-bootstrap` instruction.
     """
@@ -260,12 +260,12 @@ def _ensure_kernel_loaded() -> None:
     pkl_path = Path(fm.pkl_fpath) / fm.pkl_fn
     if not pkl_path.is_file():
         raise FileNotFoundError(
-            f"Reciprocal-space kernel pickle not found at {pkl_path}.\n"
+            f"Reciprocal-space kernel npz not found at {pkl_path}.\n"
             "Run 'dfxm-bootstrap --config <your.toml>' to generate it "
             "(takes ~50 s for default Nrays=1e8). See docs/cluster-runs.md "
             "for the full cluster workflow."
         )
-    # Pickle is on disk but Resq_i is None — load it explicitly.
+    # Kernel npz is on disk but Resq_i is None — load it explicitly.
     fm._load_default_kernel(str(pkl_path))
 
 
@@ -353,7 +353,7 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
     Raises:
         FileNotFoundError: if either expected stack directory is absent.
         FileNotFoundError: from :func:`_ensure_kernel_loaded` if the
-            reciprocal-space kernel pickle is missing.
+            reciprocal-space kernel npz is missing.
     """
     _ensure_kernel_loaded()
 

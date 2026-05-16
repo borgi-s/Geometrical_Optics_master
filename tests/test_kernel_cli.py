@@ -5,7 +5,6 @@ Uses Nrays=1000 + a 20**3 grid to keep each test under ~1 s.
 
 from __future__ import annotations
 
-import pickle
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +15,7 @@ class TestGenerateKernelOutputPath:
     def test_writes_to_explicit_path(self, tmp_path: Path) -> None:
         from dfxm_geo.reciprocal_space.kernel import generate_kernel
 
-        out = tmp_path / "subdir" / "Resq_i_test.pkl"
+        out = tmp_path / "subdir" / "Resq_i_test.npz"
         result_path = generate_kernel(
             Nrays=1000,
             npoints1=20,
@@ -26,26 +25,20 @@ class TestGenerateKernelOutputPath:
         )
         assert Path(result_path) == out
         assert out.is_file()
-        with out.open("rb") as f:
-            arr = pickle.load(f)
+        loaded = np.load(out)
+        arr = loaded["Resq_i"]
         assert isinstance(arr, np.ndarray)
         assert arr.shape == (20, 20, 20)
 
-    def test_writes_vars_sidecar_next_to_pickle(self, tmp_path: Path) -> None:
-        """The `<stem>_vars.txt` sidecar lands next to the pickle, not in CWD."""
+    def test_no_sidecar_written(self, tmp_path: Path) -> None:
+        """Params are bundled into the .npz; no `<stem>_vars.txt` sidecar is written."""
         from dfxm_geo.reciprocal_space.kernel import generate_kernel
 
-        out = tmp_path / "Resq_i_explicit.pkl"
+        out = tmp_path / "Resq_i_explicit.npz"
         generate_kernel(Nrays=1000, npoints1=20, npoints2=20, npoints3=20, output_path=out)
         sidecar = tmp_path / "Resq_i_explicit_vars.txt"
-        assert sidecar.is_file()
-        # Sidecar contains the kwargs (sanity check on serialisation).
-        text = sidecar.read_text(encoding="utf-8")
-        assert "Nrays" in text
-        assert "qi1_range" in text
-        # Defensive: the sidecar must land next to the pickle ONLY, not also in CWD.
-        # Mirrors the Round 11 fix that hoisted check_folder("", "pkl_files") out of
-        # module-import time.
+        assert not sidecar.exists(), f"unexpected sidecar at {sidecar}"
+        # Defensive: no sidecar in CWD/pkl_files either.
         assert not (Path.cwd() / "pkl_files" / "Resq_i_explicit_vars.txt").exists()
 
 
@@ -149,7 +142,7 @@ class TestCliMain:
 
         monkeypatch.setattr(kmod, "generate_kernel", fake_generate)
 
-        out = tmp_path / "canonical.pkl"
+        out = tmp_path / "canonical.npz"
         rc = kmod.cli_main(["--config", str(cfg), "--output", str(out)])
         assert rc == 0
         assert out.is_file()
@@ -170,9 +163,9 @@ class TestCliMain:
         from dfxm_geo.reciprocal_space import kernel as kmod
 
         # Redirect the canonical path into tmp_path so we don't trip the
-        # overwrite-guard on a checkout that already has the real pickle.
+        # overwrite-guard on a checkout that already has the real kernel npz.
         monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + os.sep)
-        monkeypatch.setattr(fm, "pkl_fn", "Resq_i_canonical.pkl")
+        monkeypatch.setattr(fm, "pkl_fn", "Resq_i_canonical.npz")
 
         cfg = self._make_config(tmp_path)
         seen: dict[str, object] = {}
@@ -276,7 +269,7 @@ class TestCliMain:
         out = captured.out + captured.err
         assert "totally_invented_key" in out
 
-    def test_if_missing_exits_zero_when_pickle_present(
+    def test_if_missing_exits_zero_when_kernel_present(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """--if-missing skips silently (exit 0) when the destination already exists.
@@ -299,18 +292,18 @@ class TestCliMain:
         monkeypatch.setattr(kmod, "generate_kernel", fake_generate)
 
         rc = kmod.cli_main(["--config", str(cfg), "--output", str(existing), "--if-missing"])
-        assert rc == 0, "must exit 0 when pickle exists under --if-missing"
+        assert rc == 0, "must exit 0 when kernel npz exists under --if-missing"
         assert not called, "generate_kernel must not run under --if-missing when output exists"
-        assert existing.read_bytes() == b"prior contents", "existing pickle must not be touched"
+        assert existing.read_bytes() == b"prior contents", "existing kernel npz must not be touched"
 
-    def test_if_missing_generates_when_pickle_absent(
+    def test_if_missing_generates_when_kernel_absent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """--if-missing falls through to normal generation when the destination is absent."""
         from dfxm_geo.reciprocal_space import kernel as kmod
 
         cfg = self._make_config(tmp_path)
-        target = tmp_path / "fresh.pkl"
+        target = tmp_path / "fresh.npz"
         assert not target.exists()
 
         def fake_generate(**kwargs: object) -> Path:
@@ -333,7 +326,7 @@ class TestCliMain:
 
         cfg = self._make_config(tmp_path)
         rc = cli_main(
-            ["--config", str(cfg), "--output", str(tmp_path / "x.pkl"), "--force", "--if-missing"]
+            ["--config", str(cfg), "--output", str(tmp_path / "x.npz"), "--force", "--if-missing"]
         )
         assert rc == 1
         captured = capsys.readouterr()

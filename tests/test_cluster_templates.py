@@ -211,15 +211,16 @@ class TestNoHardcodedKernelPickleFilename:
     def test_templates_do_not_hardcode_pkl_filename(self) -> None:
         import re
 
-        # The pattern catches both `Resq_i_20230913_1308.pkl` and any future
-        # `Resq_i_<digits>_<digits>.pkl`. Globs (`Resq_i_*.pkl`) are also
-        # discouraged because they don't catch the rotate-without-regen case.
-        pattern = re.compile(r"Resq_i_\d+_\d+\.pkl|Resq_i_\*\.pkl")
+        # The pattern catches both `Resq_i_20230913_1308.pkl` (legacy) and any
+        # future `Resq_i_<digits>_<digits>.npz`. Globs (`Resq_i_*.pkl` or
+        # `Resq_i_*.npz`) are also discouraged because they don't catch the
+        # rotate-without-regen case.
+        pattern = re.compile(r"Resq_i_\d+_\d+\.(pkl|npz)|Resq_i_\*\.(pkl|npz)")
         for rel in self.TEMPLATES:
             text = _read(rel)
             match = pattern.search(text)
             assert match is None, (
-                f"{rel} hardcodes a kernel pickle filename ({match.group()!r}). "
+                f"{rel} hardcodes a kernel filename ({match.group()!r}). "
                 "Use `dfxm-bootstrap --if-missing --config <CONFIG>` instead."
             )
 

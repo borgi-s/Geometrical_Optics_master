@@ -318,16 +318,16 @@ class TestNotEnoughSamplesGuards:
 
 
 class TestExplicitOutputPath:
-    """The `output_path` kwarg lets callers pin the pickle to a specific file
-    instead of writing under `pkl_files/Resq_i_<date>.pkl` in CWD. Required
+    """The `output_path` kwarg lets callers pin the kernel npz to a specific file
+    instead of writing under `pkl_files/Resq_i_<date>.npz` in CWD. Required
     by `dfxm-bootstrap`, which must write to the path stage 0 will read.
     """
 
     def test_writes_to_explicit_path(self, tmp_path: Path) -> None:
-        """When `output_path` is provided, pickle goes there (not to CWD/pkl_files)."""
+        """When `output_path` is provided, kernel npz goes there (not to CWD/pkl_files)."""
         from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func
 
-        out = tmp_path / "kernel.pkl"
+        out = tmp_path / "kernel.npz"
         reciprocal_res_func(
             Nrays=1000,
             npoints1=20,
@@ -348,14 +348,14 @@ class TestExplicitOutputPath:
             rng=np.random.default_rng(42),
             output_path=out,
         )
-        assert out.is_file(), "expected pickle written to explicit output_path"
+        assert out.is_file(), "expected kernel npz written to explicit output_path"
         # And the legacy default path was NOT created.
         assert not (tmp_path / "pkl_files").exists(), (
             "explicit output_path must not also create the legacy pkl_files/ dir"
         )
 
     def test_default_path_unchanged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """With no `output_path`, falls back to `pkl_files/Resq_i_<date>.pkl` in CWD."""
+        """With no `output_path`, falls back to `pkl_files/Resq_i_<date>.npz` in CWD."""
         from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func
 
         monkeypatch.chdir(tmp_path)
@@ -378,4 +378,4 @@ class TestExplicitOutputPath:
             date="legacy",
             rng=np.random.default_rng(42),
         )
-        assert (tmp_path / "pkl_files" / "Resq_i_legacy.pkl").is_file()
+        assert (tmp_path / "pkl_files" / "Resq_i_legacy.npz").is_file()
