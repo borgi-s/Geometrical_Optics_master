@@ -17,6 +17,7 @@
 #                                       qi1_range, qi2_range, qi3_range.
 
 from pathlib import Path
+from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -321,13 +322,13 @@ def reciprocal_res_func(
         if output_path is not None:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            np.savez(output_path, Resq_i=normResq_i, **meta_arrays)
+            np.savez(output_path, Resq_i=normResq_i, **cast(Any, meta_arrays))
             print(f"Resq_i saved to {output_path}")
         else:
             # Legacy default: write to pkl_files/Resq_i_<date>.npz in CWD.
             check_folder("", "pkl_files")
             default_path = Path("pkl_files") / f"Resq_i_{date}.npz"
-            np.savez(default_path, Resq_i=normResq_i, **meta_arrays)
+            np.savez(default_path, Resq_i=normResq_i, **cast(Any, meta_arrays))
             print(f"Resq_i saved as Resq_i_{date}.npz")
 
     # %%%%%%%%%%%%  For test purposes, plots %%%%%%%%%%%
