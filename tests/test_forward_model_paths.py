@@ -8,6 +8,9 @@ This regression test pins the new ``__file__``-relative derivation.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from dfxm_geo.direct_space import forward_model as fm  # noqa: E402
@@ -28,3 +31,46 @@ def test_repo_root_is_a_real_directory():
     assert repo_root.is_dir()
     # Sanity: pyproject.toml is in the repo root.
     assert (repo_root / "pyproject.toml").is_file()
+
+
+def test_pkl_fpath_independent_of_cwd(tmp_path):
+    """Importing forward_model from an unrelated cwd must still resolve
+    pkl_fpath to <repo>/reciprocal_space/pkl_files/.
+
+    Stronger regression guard than the same-process check above: spawns a
+    subprocess in an unrelated tmp_path cwd (mimicking the original failure
+    mode where `dfxm-forward` was invoked via the installed entry point or
+    `python -c` from /tmp). With the pre-cleanup `pkl_fpath = sys.path[0]
+    + "/reciprocal_space/pkl_files/"` derivation, this would resolve to
+    absolute `/reciprocal_space/...` and forward() would silently skip the
+    kernel autoload.
+    """
+    # Capture both the discovered _REPO_ROOT and pkl_fpath from the subprocess.
+    # Use a `|` separator so we can tolerate Windows backslashes in the paths.
+    code = (
+        "import dfxm_geo.direct_space.forward_model as fm; "
+        "print(fm._REPO_ROOT, fm.pkl_fpath, sep='|')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    # forward_model prints a "Loading Resq_i" or "default kernel pickle not
+    # found" line during import; strip it by parsing only the last stdout line.
+    stdout_line = [line for line in result.stdout.strip().splitlines() if "|" in line][-1]
+    repo_root_str, pkl_fpath = stdout_line.split("|", 1)
+
+    repo_root = Path(repo_root_str)
+    # The derived repo root must contain the project marker, not be /tmp/etc.
+    assert (repo_root / "pyproject.toml").is_file(), (
+        f"_REPO_ROOT {repo_root!r} doesn't contain pyproject.toml — "
+        "derivation is cwd-dependent, regressing the sys.path[0] fix."
+    )
+    expected_pkl_fpath = str(repo_root / "reciprocal_space" / "pkl_files") + os.sep
+    assert pkl_fpath == expected_pkl_fpath, (
+        f"pkl_fpath {pkl_fpath!r} != expected {expected_pkl_fpath!r}; "
+        "derivation broke under a non-repo cwd."
+    )
