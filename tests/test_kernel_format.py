@@ -235,3 +235,30 @@ class TestForwardOutputBitEquivalence:
         finally:
             for name, value in saved_state.items():
                 setattr(fm, name, value)
+
+
+class TestCrossPlatformSyntheticKernel:
+    """Layer 3: the committed synthetic golden loads regardless of platform."""
+
+    def test_load_synthetic_kernel_committed_golden(self) -> None:
+        """The 4x4x4 synthetic golden npz loads with all expected keys."""
+        golden = GOLDEN_DIR / "synthetic_kernel.npz"
+        assert golden.exists(), f"missing committed golden at {golden}"
+
+        loaded = np.load(golden)
+        expected_keys = {
+            "Resq_i",
+            "qi1_range",
+            "qi2_range",
+            "qi3_range",
+            "npoints1",
+            "npoints2",
+            "npoints3",
+            "Nrays",
+        }
+        assert set(loaded.files) == expected_keys
+
+        assert loaded["Resq_i"].shape == (4, 4, 4)
+        assert loaded["Resq_i"].dtype == np.float64
+        assert float(loaded["qi1_range"]) == pytest.approx(5e-4)
+        assert int(loaded["npoints1"]) == 4
