@@ -127,3 +127,53 @@ def test_Fd_find_parallel_bench(
     Fd_find(rl_small * 1e6, Ud, Us, Theta, 1.0, 151)  # warmup JIT + threads
     capsys.readouterr()  # drop the "print(chunks)" output from the warmup
     benchmark(Fd_find, rl_small * 1e6, Ud, Us, Theta, 1.0, 151)
+
+
+@pytest.fixture
+def _scatter_inputs(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Production-shaped inputs for the forward() scatter benchmark.
+
+    Detector image is 510 x 170 (the post-Nsub output of forward()). The
+    valid-ray count (200k) is a representative idx.sum() in a real run —
+    most NN1*NN2*NN3 grid points fall outside the Resq_i lookup mask.
+    """
+    H, W = 510, 170
+    n_valid = 200_000
+    flat_indices = rng.integers(0, H * W, size=n_valid, dtype=np.int64)
+    weights = rng.standard_normal(n_valid).astype(np.float32)
+    return flat_indices, weights, np.zeros((H, W))
+
+
+@pytest.mark.bench
+def test_bincount_scatter_bench(
+    benchmark,
+    _scatter_inputs: tuple[np.ndarray, np.ndarray, np.ndarray],
+) -> None:
+    """The Phase 8 bincount-based scatter replacing np.add.at in forward()."""
+    flat_indices, weights, _ = _scatter_inputs
+
+    def _run() -> None:
+        contribution = np.bincount(flat_indices, weights=weights, minlength=510 * 170)
+        contribution.reshape((510, 170))
+
+    benchmark(_run)
+
+
+@pytest.mark.bench
+def test_np_add_at_scatter_bench(
+    benchmark,
+    _scatter_inputs: tuple[np.ndarray, np.ndarray, np.ndarray],
+) -> None:
+    """The pre-Phase 8 np.add.at scatter, kept as a regression reference.
+
+    Should be ~5-10x slower than `test_bincount_scatter_bench` on the same
+    inputs. If they ever come within 2x of each other, numpy made np.add.at
+    a lot faster and we can consider reverting (the old code was simpler).
+    """
+    flat_indices, weights, im = _scatter_inputs
+
+    def _run() -> None:
+        rows, cols = np.divmod(flat_indices, 170)
+        np.add.at(im, (rows, cols), weights)
+
+    benchmark(_run)
