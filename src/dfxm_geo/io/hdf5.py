@@ -11,6 +11,7 @@ See docs/output-format.md for the full schema.
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib as _hashlib
 import socket as _socket
 import subprocess as _subprocess
 import sys as _sys
@@ -41,7 +42,15 @@ def _get_git_sha_and_dirty() -> tuple[str, bool]:
         return "unknown", False
 
 
-def _write_provenance(f: h5py.File, *, cli: str = "") -> None:
+def _sha256_of(path: Path) -> str:
+    h = _hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _write_provenance(f: h5py.File, *, cli: str = "", kernel_npz: Path | None = None) -> None:
     """Write the global /dfxm_geo/ provenance group at file root.
 
     Idempotent: safe to call on a file that already has /dfxm_geo/.
@@ -67,6 +76,23 @@ def _write_provenance(f: h5py.File, *, cli: str = "") -> None:
         if name in g:
             del g[name]
         g.create_dataset(name, data=val)
+
+    if kernel_npz is not None:
+        k = g.require_group("kernel")
+        if "pkl_fn" in k:
+            del k["pkl_fn"]
+        k.create_dataset("pkl_fn", data=Path(kernel_npz).name)
+        if "sha256" in k:
+            del k["sha256"]
+        k.create_dataset("sha256", data=_sha256_of(Path(kernel_npz)))
+        # Mirror the kernel's bundled params for self-description.
+        with np.load(kernel_npz) as arch:
+            for key in arch.files:
+                if key == "Resq_i":
+                    continue  # the array itself, not metadata
+                if key in k:
+                    del k[key]
+                k.create_dataset(key, data=arch[key])
 
 
 def write_h5_scan(
