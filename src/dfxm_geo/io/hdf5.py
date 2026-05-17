@@ -10,6 +10,11 @@ See docs/output-format.md for the full schema.
 
 from __future__ import annotations
 
+import datetime as _dt
+import socket as _socket
+import subprocess as _subprocess
+import sys as _sys
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
 import h5py
@@ -18,6 +23,50 @@ import numpy as np
 
 def _set_nx_class(grp: h5py.Group, cls: str) -> None:
     grp.attrs["NX_class"] = cls
+
+
+def _get_git_sha_and_dirty() -> tuple[str, bool]:
+    """Return (sha, dirty) for the current repo, or ("unknown", False)."""
+    try:
+        sha = _subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], stderr=_subprocess.DEVNULL, text=True
+        ).strip()
+        dirty = bool(
+            _subprocess.check_output(
+                ["git", "status", "--porcelain"], stderr=_subprocess.DEVNULL, text=True
+            ).strip()
+        )
+        return sha, dirty
+    except (_subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown", False
+
+
+def _write_provenance(f: h5py.File, *, cli: str = "") -> None:
+    """Write the global /dfxm_geo/ provenance group at file root.
+
+    Idempotent: safe to call on a file that already has /dfxm_geo/.
+    """
+    g = f.require_group("/dfxm_geo")
+    sha, dirty = _get_git_sha_and_dirty()
+    try:
+        ver = _pkg_version("dfxm-geo")
+    except Exception:
+        ver = "unknown"
+
+    fields = {
+        "version": ver,
+        "git_sha": sha,
+        "git_dirty": dirty,
+        "hostname": _socket.gethostname(),
+        "python_version": _sys.version.split()[0],
+        "numpy_version": np.__version__,
+        "generated_at": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
+        "cli": cli,
+    }
+    for name, val in fields.items():
+        if name in g:
+            del g[name]
+        g.create_dataset(name, data=val)
 
 
 def write_h5_scan(
