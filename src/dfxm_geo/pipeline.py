@@ -40,7 +40,11 @@ from dfxm_geo.crystal.dislocations import (
 )
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
-from dfxm_geo.io.images import load_images, save_images_parallel
+from dfxm_geo.io.hdf5 import write_simulation_h5
+from dfxm_geo.io.images import (  # load_images: run_postprocess (Task 18); save_images_parallel: zscan runner
+    load_images,
+    save_images_parallel,
+)
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
 
@@ -272,13 +276,9 @@ def _ensure_kernel_loaded() -> None:
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
     """Execute a DFXM forward-simulation run from a config object.
 
-    Computes Hg via `Find_Hg(dis, ndis, psize, zl_rms)`, then sweeps the
-    (phi, chi) grid and writes one .npy per (phi_step, chi_step) into
-    `output_dir/<io.dislocs_dirname>/`. If `io.include_perfect_crystal` is
-    true, also runs a parallel sweep with Hg=0 into
-    `output_dir/<io.perfect_dirname>/`.
-
-    Returns a dict with the resolved output paths and the computed Hg/q_hkl.
+    Writes one `<output_dir>/dfxm_geo.h5` containing BLISS scan `/1.1`
+    (dislocations) and, if `io.include_perfect_crystal=True`, `/2.1`
+    (Hg=0 reference). Provenance + per-scan metadata are also embedded.
     """
     _ensure_kernel_loaded()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -292,46 +292,63 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         S=S,
         remount_name=config.crystal.sample_remount,
     )
-    # Forward() reads the module-level q_hkl global. Find_Hg() returns a new
-    # one based on its h/k/l args but does not update the global itself. Sync
-    # them so the rocking sweep uses the same reflection that Hg was built for.
     fm.Hg = Hg
     fm.q_hkl = q_hkl
 
-    dislocs_path = output_dir / config.io.dislocs_dirname
-    save_images_parallel(
-        Hg,
-        config.scan.phi_range,
-        config.scan.phi_steps,
-        config.scan.chi_range,
-        config.scan.chi_steps,
-        str(dislocs_path),
-        config.io.fn_prefix,
-        config.io.ftype,
+    config_toml = _dataclass_to_toml_str(config)
+
+    h5_path = output_dir / "dfxm_geo.h5"
+    write_simulation_h5(
+        h5_path,
+        Hg=Hg,
+        q_hkl=q_hkl,
+        phi_range=config.scan.phi_range,
+        phi_steps=config.scan.phi_steps,
+        chi_range=config.scan.chi_range,
+        chi_steps=config.scan.chi_steps,
+        include_perfect_crystal=config.io.include_perfect_crystal,
+        sample_dis=config.crystal.dis,
+        sample_ndis=config.crystal.ndis,
+        sample_remount=config.crystal.sample_remount,
+        config_toml=config_toml,
+        cli=" ".join(sys.argv),
         max_workers=config.io.max_workers,
     )
-
-    perfect_path: Path | None = None
-    if config.io.include_perfect_crystal:
-        perfect_path = output_dir / config.io.perfect_dirname
-        save_images_parallel(
-            np.zeros_like(Hg),
-            config.scan.phi_range,
-            config.scan.phi_steps,
-            config.scan.chi_range,
-            config.scan.chi_steps,
-            str(perfect_path),
-            config.io.fn_prefix,
-            config.io.ftype,
-            max_workers=config.io.max_workers,
-        )
-
     return {
-        "dislocs_path": dislocs_path,
-        "perfect_path": perfect_path,
+        "h5_path": h5_path,
         "Hg": Hg,
         "q_hkl": q_hkl,
+        "include_perfect_crystal": config.io.include_perfect_crystal,
     }
+
+
+def _dataclass_to_toml_str(config: SimulationConfig) -> str:
+    """Serialize a SimulationConfig back to TOML-formatted text.
+
+    Simple implementation: write the four sub-sections as TOML tables.
+    """
+    from dataclasses import asdict as _asdict
+
+    sections = {
+        "crystal": _asdict(config.crystal),
+        "scan": _asdict(config.scan),
+        "io": _asdict(config.io),
+        "postprocess": _asdict(config.postprocess),
+    }
+    lines: list[str] = []
+    for name, body in sections.items():
+        lines.append(f"[{name}]")
+        for k, v in body.items():
+            if v is None:
+                continue  # TOML has no null; skip
+            if isinstance(v, str):
+                lines.append(f'{k} = "{v}"')
+            elif isinstance(v, bool):
+                lines.append(f"{k} = {'true' if v else 'false'}")
+            else:
+                lines.append(f"{k} = {v}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any]:
