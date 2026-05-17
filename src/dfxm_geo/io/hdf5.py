@@ -50,7 +50,9 @@ def _sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
-def _write_provenance(f: h5py.File, *, cli: str = "", kernel_npz: Path | None = None) -> None:
+def _write_provenance(
+    f: h5py.File, *, cli: str = "", kernel_npz: Path | None = None, config_toml: str | None = None
+) -> None:
     """Write the global /dfxm_geo/ provenance group at file root.
 
     Idempotent: safe to call on a file that already has /dfxm_geo/.
@@ -93,6 +95,11 @@ def _write_provenance(f: h5py.File, *, cli: str = "", kernel_npz: Path | None = 
                 if key in k:
                     del k[key]
                 k.create_dataset(key, data=arch[key])
+
+    if config_toml is not None:
+        if "config_toml" in g:
+            del g["config_toml"]
+        g.create_dataset("config_toml", data=config_toml)
 
 
 def write_h5_scan(

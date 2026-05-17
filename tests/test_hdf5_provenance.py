@@ -53,3 +53,18 @@ def test_write_provenance_kernel_subgroup(tmp_path: Path) -> None:
         assert len(sha) == 64  # hex digest
         assert float(k["qi1_range"][()]) == 1.0
         assert int(k["Nrays"][()]) == int(1e6)
+
+
+def test_write_provenance_config_toml(tmp_path: Path) -> None:
+    config_str = "[crystal]\ndis = 4.0\nndis = 151\n"
+    out = tmp_path / "test.h5"
+    with h5py.File(out, "w") as f:
+        _write_provenance(f, cli="x", config_toml=config_str)
+    with h5py.File(out, "r") as f:
+        got = f["/dfxm_geo/config_toml"][()].decode()
+        assert got == config_str
+        # And it must round-trip through tomllib.
+        import tomllib
+
+        parsed = tomllib.loads(got)
+        assert parsed["crystal"]["dis"] == 4.0
