@@ -78,3 +78,16 @@ def test_write_h5_scan_title_and_times(tmp_path: Path) -> None:
         assert f["/1.1/title"][()].decode() == ("fscan2d phi -0.001 0.001 2 chi -0.002 0.002 2 1.0")
         assert f["/1.1/start_time"][()].decode() == "2026-05-17T10:00:00"
         assert f["/1.1/end_time"][()].decode() == "2026-05-17T10:00:30"
+
+
+def test_write_h5_scan_nx_class_attrs(tmp_path: Path) -> None:
+    images = np.zeros((4, 8, 8), dtype=np.float64)
+    phi = np.array([-0.001, 0.001, -0.001, 0.001])
+    chi = np.array([-0.002, -0.002, 0.002, 0.002])
+    out = tmp_path / "test.h5"
+    write_h5_scan(out, scan_id="1.1", images=images, phi=phi, chi=chi)
+    with h5py.File(out, "r") as f:
+        assert f["/1.1"].attrs["NX_class"] == "NXentry"
+        assert f["/1.1/instrument"].attrs["NX_class"] == "NXinstrument"
+        assert f["/1.1/instrument/dfxm_sim_detector"].attrs["NX_class"] == "NXdetector"
+        assert f["/1.1/instrument/positioners"].attrs["NX_class"] == "NXcollection"

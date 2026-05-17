@@ -16,6 +16,10 @@ import h5py
 import numpy as np
 
 
+def _set_nx_class(grp: h5py.Group, cls: str) -> None:
+    grp.attrs["NX_class"] = cls
+
+
 def write_h5_scan(
     path: Path,
     scan_id: str,
@@ -43,6 +47,7 @@ def write_h5_scan(
     mode = "a" if path.exists() else "w"
     with h5py.File(path, mode) as f:
         scan = f.require_group(scan_id)
+        _set_nx_class(scan, "NXentry")
         if title is not None:
             scan.create_dataset("title", data=title)
         if start_time is not None:
@@ -50,9 +55,12 @@ def write_h5_scan(
         if end_time is not None:
             scan.create_dataset("end_time", data=end_time)
         det = scan.require_group("instrument/dfxm_sim_detector")
+        _set_nx_class(scan["instrument"], "NXinstrument")
+        _set_nx_class(det, "NXdetector")
         det.create_dataset("data", data=images)
         if phi is not None and chi is not None:
             pos = scan.require_group("instrument/positioners")
+            _set_nx_class(pos, "NXcollection")
             phi_ds = pos.create_dataset("phi", data=np.degrees(phi))
             phi_ds.attrs["units"] = "degree"
             chi_ds = pos.create_dataset("chi", data=np.degrees(chi))
