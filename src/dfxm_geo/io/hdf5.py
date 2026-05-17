@@ -278,18 +278,19 @@ def write_h5_scan(
             scan.create_dataset("start_time", data=start_time)
         if end_time is not None:
             scan.create_dataset("end_time", data=end_time)
-        det = scan.require_group("instrument/dfxm_sim_detector")
-        _set_nx_class(scan["instrument"], "NXinstrument")
-        _set_nx_class(det, "NXdetector")
-        n_frames, h, w = images.shape
-        det.create_dataset(
-            "data",
-            data=images,
-            chunks=(1, h, w),
-            compression="gzip",
-            compression_opts=4,
-            shuffle=True,
-        )
+        if images.size > 0:
+            det = scan.require_group("instrument/dfxm_sim_detector")
+            _set_nx_class(scan["instrument"], "NXinstrument")
+            _set_nx_class(det, "NXdetector")
+            n_frames, h, w = images.shape
+            det.create_dataset(
+                "data",
+                data=images,
+                chunks=(1, h, w),
+                compression="gzip",
+                compression_opts=4,
+                shuffle=True,
+            )
         if phi is not None and chi is not None:
             pos = scan.require_group("instrument/positioners")
             _set_nx_class(pos, "NXcollection")
@@ -298,7 +299,10 @@ def write_h5_scan(
             chi_ds = pos.create_dataset("chi", data=np.degrees(chi))
             chi_ds.attrs["units"] = "degree"
         meas = scan.require_group("measurement")
-        meas["dfxm_sim_detector"] = h5py.SoftLink(f"/{scan_id}/instrument/dfxm_sim_detector/data")
+        if images.size > 0:
+            meas["dfxm_sim_detector"] = h5py.SoftLink(
+                f"/{scan_id}/instrument/dfxm_sim_detector/data"
+            )
         if phi is not None and chi is not None:
             meas["phi"] = h5py.SoftLink(f"/{scan_id}/instrument/positioners/phi")
             meas["chi"] = h5py.SoftLink(f"/{scan_id}/instrument/positioners/chi")
@@ -325,3 +329,129 @@ def write_h5_scan(
                 d.create_dataset("psize", data=float(psize))
             if zl_rms is not None:
                 d.create_dataset("zl_rms", data=float(zl_rms))
+
+
+def _scan_title(phi_range: float, phi_steps: int, chi_range: float, chi_steps: int) -> str:
+    """fscan2d title string that darfix auto-detects on."""
+    return (
+        f"fscan2d phi {-phi_range:.6f} {phi_range:.6f} {phi_steps} "
+        f"chi {-chi_range:.6f} {chi_range:.6f} {chi_steps} 1.0"
+    )
+
+
+def write_simulation_h5(
+    path: Path,
+    *,
+    Hg: np.ndarray,
+    q_hkl: np.ndarray,
+    phi_range: float,
+    phi_steps: int,
+    chi_range: float,
+    chi_steps: int,
+    include_perfect_crystal: bool = True,
+    sample_dis: float,
+    sample_ndis: int,
+    sample_remount: str,
+    config_toml: str,
+    cli: str,
+    kernel_npz: Path | None = None,
+    max_workers: int | None = None,
+) -> None:
+    """One-call entry point: writes /dfxm_geo/ provenance + /1.1 + optional /2.1.
+
+    Called by pipeline.run_simulation. Holds all info needed for a fully
+    self-contained, reproducible output file.
+    """
+    import datetime as _dt2
+
+    # Resolve kernel path for provenance hashing if not given.
+    if kernel_npz is None:
+        kernel_npz = Path(_fm.pkl_fpath) / _fm.pkl_fn
+
+    Phi = np.linspace(-np.deg2rad(phi_range), np.deg2rad(phi_range), phi_steps)
+    Chi = np.linspace(-np.deg2rad(chi_range), np.deg2rad(chi_range), chi_steps)
+    n = phi_steps * chi_steps
+    phi_per_frame = np.empty(n, dtype=np.float64)
+    chi_per_frame = np.empty(n, dtype=np.float64)
+    for chi_idx in range(chi_steps):
+        for phi_idx in range(phi_steps):
+            k = chi_idx * phi_steps + phi_idx
+            phi_per_frame[k] = Phi[phi_idx]
+            chi_per_frame[k] = Chi[chi_idx]
+
+    title = _scan_title(phi_range, phi_steps, chi_range, chi_steps)
+
+    def _now() -> str:
+        return _dt2.datetime.now(_dt2.UTC).isoformat(timespec="seconds")
+
+    # Phase 1: /1.1 dislocations — image data first via the parallel writer,
+    # then metadata-only append via write_h5_scan.
+    start_dislocs = _now()
+    _save_scan_parallel_to_h5(
+        path,
+        "1.1",
+        Hg,
+        phi_range,
+        phi_steps,
+        chi_range,
+        chi_steps,
+        max_workers=max_workers,
+    )
+    end_dislocs = _now()
+    write_h5_scan(
+        path,
+        scan_id="1.1",
+        images=np.empty(0),  # metadata-only append
+        phi=phi_per_frame,
+        chi=chi_per_frame,
+        title=title,
+        start_time=start_dislocs,
+        end_time=end_dislocs,
+        sample_name="simulated, dislocations",
+        sample_dis=sample_dis,
+        sample_ndis=sample_ndis,
+        sample_remount=sample_remount,
+        Hg=Hg,
+        q_hkl=q_hkl,
+        theta=float(_fm.theta),
+        psize=float(_fm.psize),
+        zl_rms=float(_fm.zl_rms),
+    )
+
+    # Phase 2: global provenance
+    with h5py.File(path, "a") as f:
+        _write_provenance(f, cli=cli, kernel_npz=kernel_npz, config_toml=config_toml)
+
+    # Phase 3: optional perfect-crystal scan /2.1
+    if include_perfect_crystal:
+        start_perf = _now()
+        _save_scan_parallel_to_h5(
+            path,
+            "2.1",
+            np.zeros_like(Hg),
+            phi_range,
+            phi_steps,
+            chi_range,
+            chi_steps,
+            max_workers=max_workers,
+        )
+        end_perf = _now()
+        write_h5_scan(
+            path,
+            scan_id="2.1",
+            images=np.empty(0),
+            phi=phi_per_frame,
+            chi=chi_per_frame,
+            title=title,
+            start_time=start_perf,
+            end_time=end_perf,
+            sample_name="simulated, perfect crystal",
+            sample_dis=sample_dis,
+            sample_ndis=sample_ndis,
+            sample_remount=sample_remount,
+            Hg=np.zeros_like(Hg),
+            q_hkl=q_hkl,
+            theta=float(_fm.theta),
+            psize=float(_fm.psize),
+            zl_rms=float(_fm.zl_rms),
+        )
