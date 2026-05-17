@@ -19,6 +19,7 @@ import sys as _sys
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+from typing import cast
 
 import h5py
 import numpy as np
@@ -97,7 +98,7 @@ def _compute_frame(args: tuple) -> tuple[int, np.ndarray]:
     args = (frame_idx, Hg, phi, chi)
     """
     frame_idx, Hg, phi, chi = args
-    im = _fm.forward(Hg, phi=phi, chi=chi)
+    im = cast(np.ndarray, _fm.forward(Hg, phi=phi, chi=chi))
     return frame_idx, im
 
 
@@ -132,7 +133,7 @@ def _save_scan_parallel_to_h5(
 
     if detector_shape is None:
         # Run one frame to learn the detector shape, so we can pre-allocate.
-        probe = _fm.forward(Hg, phi=float(Phi[0]), chi=float(Chi[0]))
+        probe = cast(np.ndarray, _fm.forward(Hg, phi=float(Phi[0]), chi=float(Chi[0])))
         H, W = probe.shape
     else:
         H, W = detector_shape

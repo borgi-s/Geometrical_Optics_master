@@ -12,6 +12,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 import h5py
 import numpy as np
@@ -131,7 +132,7 @@ def migrate_npy_dir_to_h5(
         psize=float(_fm.psize),
         zl_rms=float(_fm.zl_rms),
     )
-    if has_perfect:
+    if has_perfect and perfect is not None:
         write_h5_scan(
             h5_path,
             scan_id="2.1",
@@ -160,9 +161,19 @@ def migrate_npy_dir_to_h5(
         )
 
 
+class _MigrateParams(TypedDict):
+    phi_steps: int
+    chi_steps: int
+    phi_range_deg: float
+    chi_range_deg: float
+    dis: float
+    ndis: int
+    sample_remount: str
+
+
 # IUCrJ-2024 defaults: 61x61 with the canonical Borgi 2024 ranges. Used when
 # the user runs `dfxm-migrate-output <old_dir>` with no --config.
-_IUCRJ_2024_DEFAULTS = {
+_IUCRJ_2024_DEFAULTS: _MigrateParams = {
     "phi_steps": 61,
     "chi_steps": 61,
     "phi_range_deg": 0.0006 * 180 / np.pi,
@@ -196,6 +207,7 @@ def cli_main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     out = args.output or (args.input_dir / "dfxm_geo.h5")
 
+    params: _MigrateParams
     if args.config is None:
         params = _IUCRJ_2024_DEFAULTS
         print(f"No --config given; using IUCrJ-2024 defaults: {params}", file=sys.stderr)
@@ -205,13 +217,13 @@ def cli_main(argv: list[str] | None = None) -> int:
         with args.config.open("rb") as f:
             raw = tomllib.load(f)
         params = {
-            "phi_steps": raw["scan"]["phi_steps"],
-            "chi_steps": raw["scan"]["chi_steps"],
-            "phi_range_deg": raw["scan"]["phi_range"],
-            "chi_range_deg": raw["scan"]["chi_range"],
-            "dis": raw["crystal"]["dis"],
-            "ndis": raw["crystal"]["ndis"],
-            "sample_remount": raw["crystal"]["sample_remount"],
+            "phi_steps": int(raw["scan"]["phi_steps"]),
+            "chi_steps": int(raw["scan"]["chi_steps"]),
+            "phi_range_deg": float(raw["scan"]["phi_range"]),
+            "chi_range_deg": float(raw["scan"]["chi_range"]),
+            "dis": float(raw["crystal"]["dis"]),
+            "ndis": int(raw["crystal"]["ndis"]),
+            "sample_remount": str(raw["crystal"]["sample_remount"]),
         }
 
     migrate_npy_dir_to_h5(npy_dir=args.input_dir, h5_path=out, **params)
