@@ -29,6 +29,10 @@ def write_h5_scan(
     title: str | None = None,
     start_time: str | None = None,
     end_time: str | None = None,
+    sample_name: str | None = None,
+    sample_dis: float | None = None,
+    sample_ndis: int | None = None,
+    sample_remount: str | None = None,
 ) -> None:
     """Write a single BLISS scan to an HDF5 file (creates or appends).
 
@@ -43,6 +47,10 @@ def write_h5_scan(
         title: Human-readable scan title string (e.g. BLISS fscan2d command).
         start_time: ISO-8601 start timestamp, e.g. "2026-05-17T10:00:00".
         end_time: ISO-8601 end timestamp, e.g. "2026-05-17T10:00:30".
+        sample_name: Human-readable sample description string.
+        sample_dis: Dislocation density (1/µm²).
+        sample_ndis: Number of dislocations in the simulation.
+        sample_remount: Sample remount label, e.g. "S1".
     """
     mode = "a" if path.exists() else "w"
     with h5py.File(path, mode) as f:
@@ -70,3 +78,14 @@ def write_h5_scan(
         if phi is not None and chi is not None:
             meas["phi"] = h5py.SoftLink(f"/{scan_id}/instrument/positioners/phi")
             meas["chi"] = h5py.SoftLink(f"/{scan_id}/instrument/positioners/chi")
+        if any(x is not None for x in (sample_name, sample_dis, sample_ndis, sample_remount)):
+            samp = scan.require_group("sample")
+            _set_nx_class(samp, "NXsample")
+            if sample_name is not None:
+                samp.create_dataset("name", data=sample_name)
+            if sample_dis is not None:
+                samp.create_dataset("dis", data=float(sample_dis))
+            if sample_ndis is not None:
+                samp.create_dataset("ndis", data=int(sample_ndis))
+            if sample_remount is not None:
+                samp.create_dataset("sample_remount", data=sample_remount)

@@ -91,3 +91,24 @@ def test_write_h5_scan_nx_class_attrs(tmp_path: Path) -> None:
         assert f["/1.1/instrument"].attrs["NX_class"] == "NXinstrument"
         assert f["/1.1/instrument/dfxm_sim_detector"].attrs["NX_class"] == "NXdetector"
         assert f["/1.1/instrument/positioners"].attrs["NX_class"] == "NXcollection"
+
+
+def test_write_h5_scan_sample_group(tmp_path: Path) -> None:
+    images = np.zeros((4, 8, 8), dtype=np.float64)
+    out = tmp_path / "test.h5"
+    write_h5_scan(
+        out,
+        scan_id="1.1",
+        images=images,
+        sample_name="simulated, dislocations",
+        sample_dis=4.0,
+        sample_ndis=151,
+        sample_remount="S1",
+    )
+    with h5py.File(out, "r") as f:
+        s = f["/1.1/sample"]
+        assert s["name"][()].decode() == "simulated, dislocations"
+        assert float(s["dis"][()]) == 4.0
+        assert int(s["ndis"][()]) == 151
+        assert s["sample_remount"][()].decode() == "S1"
+        assert s.attrs["NX_class"] == "NXsample"
