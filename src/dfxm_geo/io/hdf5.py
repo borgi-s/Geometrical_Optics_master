@@ -75,7 +75,15 @@ def write_h5_scan(
         det = scan.require_group("instrument/dfxm_sim_detector")
         _set_nx_class(scan["instrument"], "NXinstrument")
         _set_nx_class(det, "NXdetector")
-        det.create_dataset("data", data=images)
+        n_frames, h, w = images.shape
+        det.create_dataset(
+            "data",
+            data=images,
+            chunks=(1, h, w),
+            compression="gzip",
+            compression_opts=4,
+            shuffle=True,
+        )
         if phi is not None and chi is not None:
             pos = scan.require_group("instrument/positioners")
             _set_nx_class(pos, "NXcollection")

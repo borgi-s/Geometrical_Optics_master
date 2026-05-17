@@ -114,6 +114,18 @@ def test_write_h5_scan_sample_group(tmp_path: Path) -> None:
         assert s.attrs["NX_class"] == "NXsample"
 
 
+def test_write_h5_scan_image_compression(tmp_path: Path) -> None:
+    images = np.zeros((4, 8, 8), dtype=np.float64)
+    out = tmp_path / "test.h5"
+    write_h5_scan(out, scan_id="1.1", images=images)
+    with h5py.File(out, "r") as f:
+        ds = f["/1.1/instrument/dfxm_sim_detector/data"]
+        assert ds.chunks == (1, 8, 8)
+        assert ds.compression == "gzip"
+        assert ds.compression_opts == 4
+        assert ds.shuffle is True
+
+
 def test_write_h5_scan_dfxm_geo_per_scan(tmp_path: Path) -> None:
     images = np.zeros((4, 8, 8), dtype=np.float64)
     Hg = np.random.default_rng(0).standard_normal((100, 3, 3))
