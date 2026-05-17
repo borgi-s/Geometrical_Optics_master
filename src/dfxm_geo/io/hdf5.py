@@ -331,6 +331,50 @@ def write_h5_scan(
                 d.create_dataset("zl_rms", data=float(zl_rms))
 
 
+def load_h5_scan(
+    path: Path,
+    scan_id: str = "1.1",
+    phi_steps: int | None = None,
+    chi_steps: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, int, int]:
+    """Load a BLISS scan stack from a dfxm-geo HDF5.
+
+    Returns the same tuple shape `load_images` did so postprocess code
+    stays unchanged.
+
+    Args:
+        path: HDF5 file path.
+        scan_id: BLISS scan id, default "1.1" (dislocations).
+        phi_steps, chi_steps: needed for the (phi, chi, H, W) reshape. If
+            omitted, both are inferred from the embedded /dfxm_geo/config_toml.
+
+    Returns:
+        (stack, stack_reshape, dim_1, dim_2) — same as the legacy
+        `load_images` signature.
+    """
+    with h5py.File(path, "r") as f:
+        data = f[f"/{scan_id}/instrument/dfxm_sim_detector/data"][...]
+        if phi_steps is None or chi_steps is None:
+            import tomllib
+
+            cfg = tomllib.loads(f["/dfxm_geo/config_toml"][()].decode())
+            phi_steps = phi_steps or cfg["scan"]["phi_steps"]
+            chi_steps = chi_steps or cfg["scan"]["chi_steps"]
+
+    n, h, w = data.shape
+    if n != phi_steps * chi_steps:
+        raise ValueError(
+            f"Scan {scan_id} has {n} frames, expected "
+            f"{phi_steps}*{chi_steps}={phi_steps * chi_steps}"
+        )
+    # Reshape: fscan2d order is phi-inner, chi-outer.
+    # data[k] for k = chi_idx * phi_steps + phi_idx
+    # We want stack_reshape[phi_idx, chi_idx] == data[chi_idx*phi_steps + phi_idx]
+    # which means reshape to (chi_steps, phi_steps, H, W) then transpose.
+    stack_reshape = data.reshape(chi_steps, phi_steps, h, w).transpose(1, 0, 2, 3)
+    return data, stack_reshape, h, w
+
+
 def _scan_title(phi_range: float, phi_steps: int, chi_range: float, chi_steps: int) -> str:
     """fscan2d title string that darfix auto-detects on."""
     return (
