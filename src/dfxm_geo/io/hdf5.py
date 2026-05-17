@@ -22,6 +22,9 @@ def write_h5_scan(
     images: np.ndarray,
     phi: np.ndarray | None = None,
     chi: np.ndarray | None = None,
+    title: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
 ) -> None:
     """Write a single BLISS scan to an HDF5 file (creates or appends).
 
@@ -33,10 +36,19 @@ def write_h5_scan(
             Stored on disk in degrees with units attr.
         chi: Chi motor positions per frame, shape (N_frames,), in radians.
             Stored on disk in degrees with units attr.
+        title: Human-readable scan title string (e.g. BLISS fscan2d command).
+        start_time: ISO-8601 start timestamp, e.g. "2026-05-17T10:00:00".
+        end_time: ISO-8601 end timestamp, e.g. "2026-05-17T10:00:30".
     """
     mode = "a" if path.exists() else "w"
     with h5py.File(path, mode) as f:
         scan = f.require_group(scan_id)
+        if title is not None:
+            scan.create_dataset("title", data=title)
+        if start_time is not None:
+            scan.create_dataset("start_time", data=start_time)
+        if end_time is not None:
+            scan.create_dataset("end_time", data=end_time)
         det = scan.require_group("instrument/dfxm_sim_detector")
         det.create_dataset("data", data=images)
         if phi is not None and chi is not None:

@@ -61,3 +61,20 @@ def test_write_h5_scan_measurement_soft_links(tmp_path: Path) -> None:
             f["/1.1/measurement/chi"][...],
             f["/1.1/instrument/positioners/chi"][...],
         )
+
+
+def test_write_h5_scan_title_and_times(tmp_path: Path) -> None:
+    images = np.zeros((4, 8, 8), dtype=np.float64)
+    out = tmp_path / "test.h5"
+    write_h5_scan(
+        out,
+        scan_id="1.1",
+        images=images,
+        title="fscan2d phi -0.001 0.001 2 chi -0.002 0.002 2 1.0",
+        start_time="2026-05-17T10:00:00",
+        end_time="2026-05-17T10:00:30",
+    )
+    with h5py.File(out, "r") as f:
+        assert f["/1.1/title"][()].decode() == ("fscan2d phi -0.001 0.001 2 chi -0.002 0.002 2 1.0")
+        assert f["/1.1/start_time"][()].decode() == "2026-05-17T10:00:00"
+        assert f["/1.1/end_time"][()].decode() == "2026-05-17T10:00:30"
