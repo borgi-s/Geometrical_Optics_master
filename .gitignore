@@ -31,6 +31,7 @@ Thumbs.db
 *.npy
 *.pkl
 *.npz
+*.h5
 *.edf
 *.mp4
 output/
@@ -42,6 +43,7 @@ final_figures/
 # Project — keep small reference data
 !tests/data/golden/*.npy
 !tests/data/golden/*.npz
+!tests/data/golden/*.h5
 !docs/figures/*.png
 
 # Environment
