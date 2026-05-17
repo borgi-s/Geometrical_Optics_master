@@ -45,3 +45,8 @@ def write_h5_scan(
             phi_ds.attrs["units"] = "degree"
             chi_ds = pos.create_dataset("chi", data=np.degrees(chi))
             chi_ds.attrs["units"] = "degree"
+        meas = scan.require_group("measurement")
+        meas["dfxm_sim_detector"] = h5py.SoftLink(f"/{scan_id}/instrument/dfxm_sim_detector/data")
+        if phi is not None and chi is not None:
+            meas["phi"] = h5py.SoftLink(f"/{scan_id}/instrument/positioners/phi")
+            meas["chi"] = h5py.SoftLink(f"/{scan_id}/instrument/positioners/chi")
