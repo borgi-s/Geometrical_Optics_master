@@ -33,6 +33,11 @@ def write_h5_scan(
     sample_dis: float | None = None,
     sample_ndis: int | None = None,
     sample_remount: str | None = None,
+    Hg: np.ndarray | None = None,
+    q_hkl: np.ndarray | None = None,
+    theta: float | None = None,
+    psize: float | None = None,
+    zl_rms: float | None = None,
 ) -> None:
     """Write a single BLISS scan to an HDF5 file (creates or appends).
 
@@ -51,6 +56,11 @@ def write_h5_scan(
         sample_dis: Dislocation density (1/µm²).
         sample_ndis: Number of dislocations in the simulation.
         sample_remount: Sample remount label, e.g. "S1".
+        Hg: Grain orientation matrices, shape (N_grains, 3, 3).
+        q_hkl: Scattering vector in crystal coordinates, shape (3,).
+        theta: Bragg angle in degrees.
+        psize: Pixel size in mm.
+        zl_rms: RMS depth-of-field parameter in µm.
     """
     mode = "a" if path.exists() else "w"
     with h5py.File(path, mode) as f:
@@ -89,3 +99,15 @@ def write_h5_scan(
                 samp.create_dataset("ndis", data=int(sample_ndis))
             if sample_remount is not None:
                 samp.create_dataset("sample_remount", data=sample_remount)
+        if any(x is not None for x in (Hg, q_hkl, theta, psize, zl_rms)):
+            d = scan.require_group("dfxm_geo")
+            if Hg is not None:
+                d.create_dataset("Hg", data=Hg)
+            if q_hkl is not None:
+                d.create_dataset("q_hkl", data=q_hkl)
+            if theta is not None:
+                d.create_dataset("theta", data=float(theta))
+            if psize is not None:
+                d.create_dataset("psize", data=float(psize))
+            if zl_rms is not None:
+                d.create_dataset("zl_rms", data=float(zl_rms))

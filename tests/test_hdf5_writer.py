@@ -112,3 +112,27 @@ def test_write_h5_scan_sample_group(tmp_path: Path) -> None:
         assert int(s["ndis"][()]) == 151
         assert s["sample_remount"][()].decode() == "S1"
         assert s.attrs["NX_class"] == "NXsample"
+
+
+def test_write_h5_scan_dfxm_geo_per_scan(tmp_path: Path) -> None:
+    images = np.zeros((4, 8, 8), dtype=np.float64)
+    Hg = np.random.default_rng(0).standard_normal((100, 3, 3))
+    q_hkl = np.array([0.0, 0.0, 1.0])
+    out = tmp_path / "test.h5"
+    write_h5_scan(
+        out,
+        scan_id="1.1",
+        images=images,
+        Hg=Hg,
+        q_hkl=q_hkl,
+        theta=8.545,
+        psize=0.05,
+        zl_rms=0.6,
+    )
+    with h5py.File(out, "r") as f:
+        g = f["/1.1/dfxm_geo"]
+        np.testing.assert_array_equal(g["Hg"][...], Hg)
+        np.testing.assert_array_equal(g["q_hkl"][...], q_hkl)
+        assert float(g["theta"][()]) == 8.545
+        assert float(g["psize"][()]) == 0.05
+        assert float(g["zl_rms"][()]) == 0.6
