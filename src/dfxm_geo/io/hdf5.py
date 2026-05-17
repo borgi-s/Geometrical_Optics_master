@@ -12,14 +12,19 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib as _hashlib
+import os
 import socket as _socket
 import subprocess as _subprocess
 import sys as _sys
+from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
 import h5py
 import numpy as np
+from tqdm import tqdm
+
+from dfxm_geo.direct_space import forward_model as _fm
 
 
 def _set_nx_class(grp: h5py.Group, cls: str) -> None:
@@ -48,6 +53,125 @@ def _sha256_of(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _auto_max_workers() -> int:
+    """Cap thread-pool workers by both CPU count and free memory.
+
+    Each ``forward()`` call needs ~1 GiB of intermediates (``qs.squeeze().T``
+    and ``qi`` are each ~270 MiB float64 at the default 510-pixel detector,
+    plus the ``prob``/``pro``/``index`` arrays). We aim for ~1 GiB headroom
+    per worker.
+
+    Resolution order (highest precedence wins):
+      1. ``DFXM_MAX_WORKERS`` env var, if set to a positive int.
+      2. ``min(cpu_count, max(1, available_memory_gb - 2))`` if psutil is
+         installed (subtracting ~2 GiB reserved for persistent forward_model
+         state + OS).
+      3. ``min(cpu_count, 4)`` fixed conservative cap when psutil is missing.
+    """
+    env = os.environ.get("DFXM_MAX_WORKERS")
+    if env is not None:
+        try:
+            n = int(env)
+            if n >= 1:
+                return n
+        except ValueError:
+            pass  # fall through to auto-detect
+
+    cpu = os.cpu_count() or 1
+    try:
+        import psutil
+    except ImportError:
+        return min(cpu, 4)
+
+    avail_gb = psutil.virtual_memory().available / (1024**3)
+    usable_gb = max(1.0, avail_gb - 2.0)  # reserve 2 GiB for persistent state + OS
+    mem_cap = max(1, int(usable_gb // 1))
+    return min(cpu, mem_cap)
+
+
+def _compute_frame(args: tuple) -> tuple[int, np.ndarray]:
+    """Worker function: run forward() and return (frame_idx, image).
+
+    args = (frame_idx, Hg, phi, chi)
+    """
+    frame_idx, Hg, phi, chi = args
+    im = _fm.forward(Hg, phi=phi, chi=chi)
+    return frame_idx, im
+
+
+def _save_scan_parallel_to_h5(
+    path: Path,
+    scan_id: str,
+    Hg: np.ndarray,
+    phi_range: float,
+    phi_steps: int,
+    chi_range: float,
+    chi_steps: int,
+    max_workers: int | None = None,
+    detector_shape: tuple[int, int] | None = None,
+) -> None:
+    """W2 producer-consumer: workers compute forward() and return; main thread writes to HDF5.
+
+    Pre-allocates `(N_frames, H, W)` dataset, dispatches workers, and writes
+    each result into its frame_idx slot as it returns. Frame ordering follows
+    fscan2d convention: phi inner, chi outer. frame_idx = chi_idx * phi_steps + phi_idx.
+
+    Args:
+        path: Output HDF5 file (created or appended).
+        scan_id: BLISS scan id like "1.1".
+        Hg: Strain field passed to forward().
+        phi_range, phi_steps, chi_range, chi_steps: rocking grid params (degrees + counts).
+        max_workers: Override for `_auto_max_workers()`.
+        detector_shape: (H, W) of the forward() output. If None, probes one frame
+            up-front to discover the shape.
+    """
+    Phi = np.linspace(-np.deg2rad(phi_range), np.deg2rad(phi_range), phi_steps)
+    Chi = np.linspace(-np.deg2rad(chi_range), np.deg2rad(chi_range), chi_steps)
+
+    if detector_shape is None:
+        # Run one frame to learn the detector shape, so we can pre-allocate.
+        probe = _fm.forward(Hg, phi=float(Phi[0]), chi=float(Chi[0]))
+        H, W = probe.shape
+    else:
+        H, W = detector_shape
+        probe = None
+
+    N = phi_steps * chi_steps
+    mode = "a" if path.exists() else "w"
+    workers = max_workers if max_workers is not None else _auto_max_workers()
+
+    with h5py.File(path, mode) as f:
+        scan = f.require_group(scan_id)
+        _set_nx_class(scan, "NXentry")
+        det = scan.require_group("instrument/dfxm_sim_detector")
+        _set_nx_class(scan["instrument"], "NXinstrument")
+        _set_nx_class(det, "NXdetector")
+        if "data" in det:
+            del det["data"]
+        ds = det.create_dataset(
+            "data",
+            shape=(N, H, W),
+            dtype=np.float64,
+            chunks=(1, H, W),
+            compression="gzip",
+            compression_opts=4,
+            shuffle=True,
+        )
+
+        args_list = []
+        for chi_idx in range(chi_steps):
+            for phi_idx in range(phi_steps):
+                k = chi_idx * phi_steps + phi_idx
+                if probe is not None and k == 0:
+                    ds[0] = probe  # we already computed frame 0
+                    continue
+                args_list.append((k, Hg, float(Phi[phi_idx]), float(Chi[chi_idx])))
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for k, im in tqdm(ex.map(_compute_frame, args_list), total=len(args_list)):
+                ds[k] = im
 
 
 def _write_provenance(
