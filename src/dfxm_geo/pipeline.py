@@ -299,27 +299,46 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     )
 
 
-def _ensure_kernel_loaded() -> None:
-    """Pre-flight: verify the reciprocal-space kernel is loaded.
+def _lookup_and_load_kernel(
+    hkl: tuple[int, int, int],
+    keV: float,
+) -> None:
+    """Pre-flight: look up the kernel npz matching (hkl, keV) and load it.
 
-    If the canonical kernel npz is on disk but the import-time auto-load didn't
-    populate state (e.g. it ran before bootstrap in the same process), this
-    function calls ``fm._load_default_kernel(...)`` to recover. If the kernel npz
-    is missing altogether, raises ``FileNotFoundError`` with a clear
-    `dfxm-bootstrap` instruction.
+    Sub-project D replacement for `_ensure_kernel_loaded()`. Composes:
+    1. `fm._lookup_kernel_path(hkl, keV, fm.pkl_fpath)` — glob + newest pick.
+    2. `fm._load_default_kernel(path, expected_hkl=hkl, expected_keV=keV)` —
+       load + bundled-metadata verification.
+
+    Idempotent for the same (hkl, keV): if `fm._loaded_kernel_path` already
+    matches what we'd look up, skip the reload. (Helpful for test loops and
+    interactive REPL.)
+
+    Raises FileNotFoundError on lookup miss, ValueError on metadata mismatch,
+    KeyError on pre-sub-project-D legacy npz lacking metadata.
     """
-    if fm.Resq_i is not None:
-        return  # auto-load already populated state at import (common case)
-    pkl_path = Path(fm.pkl_fpath) / fm.pkl_fn
-    if not pkl_path.is_file():
-        raise FileNotFoundError(
-            f"Reciprocal-space kernel npz not found at {pkl_path}.\n"
-            "Run 'dfxm-bootstrap --config <your.toml>' to generate it "
-            "(takes ~50 s for default Nrays=1e8). See docs/cluster-runs.md "
-            "for the full cluster workflow."
-        )
-    # Kernel npz is on disk but Resq_i is None — load it explicitly.
-    fm._load_default_kernel(str(pkl_path))
+    target = fm._lookup_kernel_path(hkl, keV, fm.pkl_fpath)
+    if fm._loaded_kernel_path == target:
+        return
+    fm._load_default_kernel(
+        str(target),
+        expected_hkl=hkl,
+        expected_keV=keV,
+    )
+
+
+def _ensure_kernel_loaded() -> None:
+    """Deprecated: use `_lookup_and_load_kernel(hkl, keV)` instead.
+
+    Retained for one transitional task; Task 6 of sub-project D removes it
+    entirely. Stale callers will get this clean NotImplementedError instead
+    of a silent stale-kernel result.
+    """
+    raise NotImplementedError(
+        "_ensure_kernel_loaded() is removed in sub-project D — "
+        "use _lookup_and_load_kernel(hkl, keV) instead. "
+        "Task 6 deletes this stub entirely."
+    )
 
 
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
@@ -341,17 +360,23 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         fm.Nsub,
         config.crystal.sample_remount,
     )
+    if config.reciprocal is None:
+        raise ValueError(
+            "SimulationConfig.reciprocal is None — must specify [reciprocal] "
+            "block in TOML or set it programmatically before calling run_simulation."
+        )
+    _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
+
     print(
         f"[dfxm-forward] effective config:\n"
         f"  Nsub={fm.Nsub}  Npixels={fm.Npixels}  NN1={fm.NN1}  NN2={fm.NN2}\n"
-        f"  kernel={fm.pkl_fpath}{fm.pkl_fn}\n"
+        f"  kernel={fm._loaded_kernel_path}\n"
         f"  Fg cache={_expected_fg}\n"
         f"  dis={config.crystal.dis}  ndis={config.crystal.ndis}  "
         f"remount={config.crystal.sample_remount}",
         flush=True,
     )
 
-    _ensure_kernel_loaded()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     S = SAMPLE_REMOUNT_OPTIONS[config.crystal.sample_remount]
@@ -1008,6 +1033,13 @@ def run_identification(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode."""
+    if config.reciprocal is None:
+        raise ValueError(
+            "IdentificationConfig.reciprocal is None — must specify [reciprocal] "
+            "block in TOML or set it programmatically before calling run_identification."
+        )
+    _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
+
     if config.mode == "single":
         return _run_identification_single(config, output_dir)
     if config.mode == "multi":
