@@ -5,6 +5,7 @@ Uses Nrays=1000 + a 20**3 grid to keep each test under ~1 s.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -450,3 +451,95 @@ class TestBuildKernelFilename:
 
         result = _build_kernel_filename((2, -1, 3), 8.0, "20260520_2100")
         assert result == "Resq_i_h2_k-1_l3_8keV_20260520_2100.npz"
+
+
+class TestCliMainMultiReflection:
+    @staticmethod
+    def _write_minimal_toml(tmp_path: Path, body: str) -> Path:
+        cfg = tmp_path / "config.toml"
+        cfg.write_text(body)
+        return cfg
+
+    def test_happy_path_hkl_keV(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """TOML with hkl + keV → exit 0, expected filename, computed θ echoed."""
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        captured_theta: list[float] = []
+        captured_output_path: list[Path] = []
+
+        def fake_generate_kernel(
+            date: str | None = None,
+            *,
+            output_path: Path | None = None,
+            theta: float = 0.0,
+            **kwargs: object,
+        ) -> Path:
+            captured_theta.append(theta)
+            assert output_path is not None
+            captured_output_path.append(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"")
+            return output_path
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate_kernel)
+
+        cfg = self._write_minimal_toml(
+            tmp_path,
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\nNrays = 1000\n",
+        )
+        out_dir = tmp_path / "out"
+        rc = kmod.cli_main(["--config", str(cfg), "--output", str(out_dir / "kernel.npz")])
+        assert rc == 0
+
+        # θ computed correctly (matches default Al 111 helper)
+        assert captured_theta[0] == kmod._default_theta_al_111(17)
+
+        # stdout echo
+        out = capsys.readouterr().out
+        assert "reflection: hkl=(-1, 1, -1)" in out
+        assert "keV=17" in out
+        assert "θ" in out or "theta" in out.lower()
+
+    def test_happy_path_filename_built_when_no_output_flag(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No --output → cli_main builds <pkl_fpath>/Resq_i_h<h>_k<k>_l<l>_<keV>keV_<date>.npz."""
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        captured_output_path: list[Path] = []
+
+        def fake_generate_kernel(
+            date: str | None = None,
+            *,
+            output_path: Path | None = None,
+            theta: float = 0.0,
+            **kwargs: object,
+        ) -> Path:
+            assert output_path is not None
+            captured_output_path.append(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"")
+            return output_path
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate_kernel)
+
+        # Redirect pkl_fpath to tmp_path so we don't pollute the repo
+        import dfxm_geo.direct_space.forward_model as fm
+
+        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + os.sep, raising=True)
+
+        cfg = self._write_minimal_toml(
+            tmp_path,
+            "[reciprocal]\nhkl = [2, 0, 0]\nkeV = 17.0\nNrays = 1000\n",
+        )
+        rc = kmod.cli_main(["--config", str(cfg)])
+        assert rc == 0
+        assert captured_output_path[0].name.startswith("Resq_i_h2_k0_l0_17keV_")
+        assert captured_output_path[0].suffix == ".npz"
