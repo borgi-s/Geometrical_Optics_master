@@ -42,6 +42,8 @@ data_dirname = "analysis"
 # reciprocal-space resolution kernel pickle. Defaults reproduce the CDD_inc
 # canonical recipe (Al 111 reflection at 17 keV, square-aperture beamstop
 # 25 mm at the BFP). Takes ~50 s wall-clock on a laptop at Nrays=1e8.
+hkl        = [-1, 1, -1]   # Al 111 reflection (default)
+keV        = 17.0           # beam energy in keV
 Nrays      = 100_000_000   # 1e8
 npoints1   = 400
 npoints2   = 200

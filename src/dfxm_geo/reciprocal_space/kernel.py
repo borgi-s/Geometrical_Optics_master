@@ -29,6 +29,83 @@ def _default_theta_al_111(keV: float = 17) -> float:
     return float(np.arcsin(wavelength / (2 * d_111)))
 
 
+def _validate_reflection(
+    hkl: tuple[int, int, int],
+    keV: float,
+    a: float,
+) -> float:
+    """Compute and validate the Bragg angle θ for an arbitrary cubic reflection.
+
+    Args:
+        hkl: Miller indices (must be ints, length 3, not all zero).
+        keV: beam energy in keV (must be > 0).
+        a: cubic lattice parameter in metres.
+
+    Returns:
+        Bragg angle θ in radians.
+
+    Raises:
+        ValueError: on structural input errors or unsatisfiable Bragg geometry.
+
+    Emits warnings to stderr when θ ∉ [5°, 85°] (unusual but valid reflections).
+    """
+    import sys
+
+    if len(hkl) != 3:
+        raise ValueError(f"hkl must have 3 components, got {len(hkl)}.")
+    if not all(isinstance(x, int) and not isinstance(x, bool) for x in hkl):
+        raise ValueError(f"hkl components must be int, got {hkl}.")
+    if all(c == 0 for c in hkl):
+        raise ValueError("hkl=(0,0,0) is not a valid reflection (no diffraction).")
+    if keV <= 0:
+        raise ValueError(f"keV must be > 0, got {keV}.")
+    if a <= 0:
+        raise ValueError(f"lattice parameter `a` must be > 0, got {a}.")
+
+    h, k, l = hkl
+    d_hkl = a / np.sqrt(h * h + k * k + l * l)
+    wavelength = 1.239841984e-9 / keV  # hc/E, metres
+    sin_theta = wavelength / (2 * d_hkl)
+    if sin_theta > 1:
+        lam_A = wavelength * 1e10
+        two_d_A = 2 * d_hkl * 1e10
+        raise ValueError(
+            f"Bragg condition unsatisfiable: lam={lam_A:.4f} A, "
+            f"2*d_hkl={two_d_A:.4f} A, sin(theta) = {sin_theta:.4f} > 1 for "
+            f"hkl={hkl} at {keV} keV. Pick a lower-order reflection or "
+            f"higher beam energy."
+        )
+
+    theta = float(np.arcsin(sin_theta))
+    theta_deg = float(np.degrees(theta))
+    if theta_deg < 5.0:
+        print(
+            f"warning: theta = {theta_deg:.2f} deg is very low (< 5 deg); reflection unusual but valid.",
+            file=sys.stderr,
+        )
+    elif theta_deg > 85.0:
+        print(
+            f"warning: theta = {theta_deg:.2f} deg near back-reflection (> 85 deg); "
+            f"reflection unusual but valid.",
+            file=sys.stderr,
+        )
+    return theta
+
+
+def _build_kernel_filename(
+    hkl: tuple[int, int, int],
+    keV: float,
+    date: str,
+) -> str:
+    """Per-reflection kernel npz basename: `Resq_i_h{h}_k{k}_l{l}_{keV}keV_{date}.npz`.
+
+    `:g` formatting drops trailing zeros on keV (17.0 → "17", 17.5 → "17.5").
+    Negative hkl components render naturally (-1 → "h-1").
+    """
+    h, k, l = hkl
+    return f"Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_{date}.npz"
+
+
 def generate_kernel(
     date: str | None = None,
     *,
@@ -226,7 +303,9 @@ def cli_main(argv: list[str] | None = None) -> int:
     sig = inspect.signature(_generate_kernel_original)
     valid_params = set(sig.parameters)
     # `date` and `output_path` are CLI-managed kwargs, not TOML-driven.
-    valid_recip_keys = valid_params - {"date", "output_path"}
+    # `hkl` and `keV` are cli_main-scope reflection inputs, not
+    # `generate_kernel` kwargs — added explicitly to the allow-list.
+    valid_recip_keys = (valid_params - {"date", "output_path"}) | {"hkl", "keV"}
     unknown = set(data["reciprocal"]) - valid_recip_keys
     if unknown:
         print(
@@ -236,7 +315,60 @@ def cli_main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    output_path = args.output if args.output is not None else Path(fm.pkl_fpath) / fm.pkl_fn
+    # Pop hkl/keV — they are cli_main-scope, not generate_kernel kwargs.
+    reciprocal_kwargs = dict(data["reciprocal"])
+    raw_hkl = reciprocal_kwargs.pop("hkl", None)
+    raw_keV = reciprocal_kwargs.pop("keV", None)
+
+    if (raw_hkl is None) != (raw_keV is None):
+        print(
+            "error: must provide both `hkl` and `keV`, or neither.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if (raw_hkl is not None or raw_keV is not None) and "theta" in reciprocal_kwargs:
+        print(
+            "error: cannot specify both `theta` and `hkl`+`keV`; pick one.",
+            file=sys.stderr,
+        )
+        return 1
+
+    a_lattice = 4.0495e-10  # Al lattice parameter, m
+    if raw_hkl is not None and raw_keV is not None:
+        try:
+            hkl_tuple: tuple[int, int, int] = tuple(raw_hkl)
+            theta = _validate_reflection(hkl_tuple, float(raw_keV), a_lattice)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        keV_for_filename: float = float(raw_keV)
+    else:
+        print(
+            "warning: [reciprocal] has no `hkl`/`keV`; defaulting to Al (-1, 1, -1) @ 17 keV.",
+            file=sys.stderr,
+        )
+        hkl_tuple = (-1, 1, -1)
+        keV_for_filename = 17.0
+        theta = _default_theta_al_111(17)
+
+    # Inject the computed theta so generate_kernel uses our value, not its
+    # module-load default. (Skip if the TOML already set theta — that path
+    # was rejected above when hkl/keV also present, so it only fires when
+    # neither hkl/keV were given AND theta was.)
+    if "theta" not in reciprocal_kwargs:
+        reciprocal_kwargs["theta"] = theta
+
+    # Echo computed θ for sanity (Q4).
+    theta_deg = float(np.degrees(theta))
+    print(f"reflection: hkl={hkl_tuple}, keV={keV_for_filename:g} -> theta = {theta_deg:.4f} deg")
+
+    # Build output path.
+    if args.output is not None:
+        output_path = args.output
+    else:
+        date = datetime.now().strftime("%Y%m%d_%H%M")
+        output_path = Path(fm.pkl_fpath) / _build_kernel_filename(hkl_tuple, keV_for_filename, date)
 
     if output_path.exists():
         if args.if_missing:
@@ -244,13 +376,13 @@ def cli_main(argv: list[str] | None = None) -> int:
             return 0
         if not args.force:
             print(
-                f"refusing to overwrite existing kernel npz at {output_path}; pass --force to regenerate.",
+                f"refusing to overwrite existing kernel npz at {output_path}; "
+                f"pass --force to regenerate.",
                 file=sys.stderr,
             )
             return 1
 
-    kwargs = dict(data["reciprocal"])
-    written = generate_kernel(output_path=output_path, **kwargs)
+    written = generate_kernel(output_path=output_path, **reciprocal_kwargs)
     print(f"wrote {written}")
     return 0
 
