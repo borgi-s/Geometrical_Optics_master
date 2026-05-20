@@ -7,6 +7,10 @@
 
 mode = "multi"
 
+[reciprocal]
+hkl = [-1, 1, -1]   # Al 111 reflection — preserves pre-D implicit default
+keV = 17.0
+
 [crystal]
 slip_plane_normal = [1, 1, 1]      # ignored in mode='multi'; required by validation
 # angle_*_deg and b_vector_indices are also unused in 'multi' mode

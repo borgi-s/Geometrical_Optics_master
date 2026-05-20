@@ -8,6 +8,10 @@
 
 mode = "single"
 
+[reciprocal]
+hkl = [-1, 1, -1]   # Al 111 reflection — preserves pre-D implicit default
+keV = 17.0
+
 [crystal]
 slip_plane_normal = [1, 1, 1]      # starting plane; sweep_all_slip_planes overrides
 angle_start_deg = 0.0

@@ -60,7 +60,8 @@ class TestSimulationConfigFromToml:
         """[crystal] and [io] are optional; only [scan] is required."""
         p = tmp_path / "minimal.toml"
         p.write_text(
-            "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n",
+            "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n"
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
             encoding="utf-8",
         )
         cfg = SimulationConfig.from_toml(p)
@@ -132,6 +133,10 @@ phi_range = 0.05
 phi_steps = 5
 chi_range = 0.05
 chi_steps = 5
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
 """
         path = tmp_path / "cfg.toml"
         path.write_text(toml_text, encoding="utf-8")
@@ -159,7 +164,8 @@ class TestPostprocessConfigFromToml:
         p = tmp_path / "with_pp.toml"
         p.write_text(
             "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n"
-            "\n[postprocess]\nenabled = false\nchi_oversample = 5\n",
+            "\n[postprocess]\nenabled = false\nchi_oversample = 5\n"
+            "\n[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
             encoding="utf-8",
         )
         cfg = SimulationConfig.from_toml(p)
@@ -171,7 +177,8 @@ class TestPostprocessConfigFromToml:
     def test_section_absent_uses_defaults(self, tmp_path: Path) -> None:
         p = tmp_path / "no_pp.toml"
         p.write_text(
-            "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n",
+            "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n"
+            "\n[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
             encoding="utf-8",
         )
         cfg = SimulationConfig.from_toml(p)
@@ -519,7 +526,9 @@ class TestCliMainFlags:
     ) -> None:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
-            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n", encoding="utf-8"
+            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n"
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            encoding="utf-8",
         )
         calls: list[str] = []
         monkeypatch.setattr(
@@ -541,7 +550,9 @@ class TestCliMainFlags:
     ) -> None:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
-            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n", encoding="utf-8"
+            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n"
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            encoding="utf-8",
         )
         calls: list[str] = []
         monkeypatch.setattr(
@@ -571,7 +582,9 @@ class TestCliMainFlags:
     ) -> None:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
-            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n", encoding="utf-8"
+            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n"
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            encoding="utf-8",
         )
         calls: list[str] = []
         monkeypatch.setattr(
@@ -603,7 +616,8 @@ class TestCliMainFlags:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
             "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n"
-            "\n[postprocess]\nenabled = false\n",
+            "\n[postprocess]\nenabled = false\n"
+            "\n[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
             encoding="utf-8",
         )
         calls: list[str] = []
@@ -768,3 +782,29 @@ class TestReciprocalConfigParsing:
         )
         with pytest.raises(ValueError, match=r"hkl=\(0,0,0\) is not a valid reflection"):
             SimulationConfig.from_toml(cfg)
+
+    def test_identification_config_parses_reciprocal_block(self) -> None:
+        from dfxm_geo.pipeline import load_identification_config
+
+        config = load_identification_config(Path("configs/identification_single.toml"))
+        assert config.reciprocal is not None
+        assert config.reciprocal.hkl == (-1, 1, -1)
+        assert config.reciprocal.keV == 17.0
+
+    def test_identification_config_missing_reciprocal_raises(self, tmp_path: Path) -> None:
+        from dfxm_geo.pipeline import load_identification_config
+
+        cfg = tmp_path / "identify.toml"
+        cfg.write_text(
+            'mode = "single"\n'
+            "[crystal]\nslip_plane_normal = [1, 1, 1]\n"
+            "angle_start_deg = 0.0\nangle_stop_deg = 10.0\nangle_step_deg = 1.0\n"
+            "sweep_all_slip_planes = false\nexclude_invisibility = false\n"
+            "invisibility_threshold_deg = 10.0\n"
+            "[scan]\nphi_rad = 1.5e-4\npoisson_noise = false\n"
+            "rng_seed = 0\nintensity_scale = 7.0\n"
+            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
+            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = false\n'
+        )
+        with pytest.raises(ValueError, match=r"missing \[reciprocal\] block"):
+            load_identification_config(cfg)
