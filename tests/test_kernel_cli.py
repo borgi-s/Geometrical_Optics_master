@@ -42,6 +42,27 @@ class TestGenerateKernelOutputPath:
         # Defensive: no sidecar in CWD/pkl_files either.
         assert not (Path.cwd() / "pkl_files" / "Resq_i_explicit_vars.txt").exists()
 
+    def test_npz_bundles_hkl_and_keV_metadata(self, tmp_path: Path) -> None:
+        """Sub-project D: the npz must include `hkl` and `keV` as bundled scalars
+        so downstream load verification can confirm filename ↔ contents agree."""
+        from dfxm_geo.reciprocal_space.kernel import generate_kernel
+
+        out = tmp_path / "Resq_i_h2_k0_l0_17keV_test.npz"
+        generate_kernel(
+            Nrays=1000,
+            npoints1=20,
+            npoints2=20,
+            npoints3=20,
+            output_path=out,
+            hkl=(2, 0, 0),
+            keV=17.0,
+        )
+        loaded = np.load(out)
+        assert "hkl" in loaded.files
+        assert "keV" in loaded.files
+        assert tuple(int(x) for x in loaded["hkl"]) == (2, 0, 0)
+        assert float(loaded["keV"]) == 17.0
+
 
 class TestDefaultConfigReciprocalBlock:
     def test_default_toml_has_reciprocal_block(self) -> None:

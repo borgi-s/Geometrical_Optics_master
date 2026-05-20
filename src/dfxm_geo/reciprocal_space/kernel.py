@@ -129,6 +129,8 @@ def generate_kernel(
     knife_edge: bool = False,
     dphi_range: float = 0.0,
     output_path: Path | None = None,
+    hkl: tuple[int, int, int] | None = None,
+    keV: float | None = None,
 ) -> Path:
     """Run the kernel-generation Monte Carlo and write the npz to ``pkl_files/``.
 
@@ -149,6 +151,11 @@ def generate_kernel(
         beamstop/bs_height/aperture/knife_edge: beamstop config; see
             :func:`dfxm_geo.reciprocal_space.resolution.reciprocal_res_func`.
         dphi_range: rocking-curve sweep half-width (rad).
+        hkl: Miller indices of the reflection (optional). Bundled into the
+            npz scalar metadata for downstream load verification
+            (sub-project D — multi-reflection lookup).
+        keV: beam energy in keV (optional). Bundled into the npz scalar
+            metadata for downstream load verification (sub-project D).
 
     Returns:
         The path the npz was written to.
@@ -182,6 +189,10 @@ def generate_kernel(
         "aperture": np.bool_(aperture),
         "knife_edge": np.bool_(knife_edge),
         "dphi_range": np.float64(dphi_range),
+        # Sub-project D: reflection identity. Verified by
+        # _load_default_kernel when a lookup expects a specific (hkl, keV).
+        "hkl": np.array(hkl if hkl is not None else (0, 0, 0), dtype=np.int64),
+        "keV": np.float64(keV if keV is not None else 0.0),
     }
 
     reciprocal_res_func(
@@ -382,6 +393,8 @@ def cli_main(argv: list[str] | None = None) -> int:
             )
             return 1
 
+    reciprocal_kwargs["hkl"] = hkl_tuple
+    reciprocal_kwargs["keV"] = keV_for_filename
     written = generate_kernel(output_path=output_path, **reciprocal_kwargs)
     print(f"wrote {written}")
     return 0
