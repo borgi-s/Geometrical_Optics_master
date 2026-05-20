@@ -417,6 +417,12 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
         "io": _asdict(config.io),
         "postprocess": _asdict(config.postprocess),
     }
+    # Sub-project D: include [reciprocal] so the HDF5-embedded config_toml
+    # round-trips through SimulationConfig.from_toml without raising
+    # "missing [reciprocal] block". Skipped if None (legacy SimulationConfig()
+    # programmatic construction without reciprocal).
+    if config.reciprocal is not None:
+        sections["reciprocal"] = _asdict(config.reciprocal)
     lines: list[str] = []
     for name, body in sections.items():
         lines.append(f"[{name}]")
@@ -427,6 +433,9 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
                 lines.append(f'{k} = "{v}"')
             elif isinstance(v, bool):
                 lines.append(f"{k} = {'true' if v else 'false'}")
+            elif isinstance(v, tuple):
+                # Tuples (e.g. reciprocal.hkl = (h, k, l)) render as TOML arrays.
+                lines.append(f"{k} = {list(v)}")
             else:
                 lines.append(f"{k} = {v}")
         lines.append("")
