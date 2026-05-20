@@ -55,10 +55,12 @@ def _validate_reflection(
         raise ValueError(f"hkl must have 3 components, got {len(hkl)}.")
     if not all(isinstance(x, int) and not isinstance(x, bool) for x in hkl):
         raise ValueError(f"hkl components must be int, got {hkl}.")
-    if hkl == (0, 0, 0):
+    if all(c == 0 for c in hkl):
         raise ValueError("hkl=(0,0,0) is not a valid reflection (no diffraction).")
     if keV <= 0:
         raise ValueError(f"keV must be > 0, got {keV}.")
+    if a <= 0:
+        raise ValueError(f"lattice parameter `a` must be > 0, got {a}.")
 
     h, k, l = hkl
     d_hkl = a / np.sqrt(h * h + k * k + l * l)

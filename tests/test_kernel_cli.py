@@ -381,10 +381,10 @@ class TestValidateReflection:
     def test_known_reflection_200_at_17keV(self) -> None:
         from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
-        # Al (2,0,0): d_200 = a/2 = 2.02475 Å; λ at 17 keV ≈ 0.7293 Å.
-        # sin θ = λ / (2d) = 0.18012; θ = 10.376° = 0.18112 rad.
+        # Al (2,0,0): d_200 = a/2 = 2.02475 Å; λ at 17 keV ≈ 0.72932 Å.
+        # sin θ = λ / (2d) = 0.18010; θ ≈ 10.37564° ≈ 0.181089 rad.
         theta = _validate_reflection((2, 0, 0), 17.0, 4.0495e-10)
-        assert theta == pytest.approx(np.deg2rad(10.376), abs=1e-3)
+        assert theta == pytest.approx(0.181089082735763, abs=1e-6)
 
     def test_low_theta_warns(self, capsys: pytest.CaptureFixture[str]) -> None:
         from dfxm_geo.reciprocal_space.kernel import _validate_reflection
@@ -403,3 +403,18 @@ class TestValidateReflection:
         _validate_reflection((3, 2, 1), 5.74, 4.0495e-10)
         captured = capsys.readouterr()
         assert "near back-reflection" in captured.err
+
+    def test_bool_component_raises(self) -> None:
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        # bool is technically a Python int subclass — must still be rejected.
+        with pytest.raises(ValueError, match=r"hkl components must be int"):
+            _validate_reflection((True, 1, -1), 17.0, 4.0495e-10)
+
+    def test_nonpositive_a_raises(self) -> None:
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        with pytest.raises(ValueError, match=r"lattice parameter `a` must be > 0, got 0"):
+            _validate_reflection((-1, 1, -1), 17.0, 0.0)
+        with pytest.raises(ValueError, match=r"lattice parameter `a` must be > 0, got -"):
+            _validate_reflection((-1, 1, -1), 17.0, -1e-10)
