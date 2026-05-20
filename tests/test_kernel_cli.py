@@ -679,7 +679,7 @@ class TestCliMainMultiReflection:
         assert rc == 1
         err = capsys.readouterr().err
         assert "Bragg condition unsatisfiable" in err
-        assert "λ=" in err
+        assert "lam=" in err or "lambda" in err.lower()
 
 
 class TestPklFnRegression:

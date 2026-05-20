@@ -70,8 +70,8 @@ def _validate_reflection(
         lam_A = wavelength * 1e10
         two_d_A = 2 * d_hkl * 1e10
         raise ValueError(
-            f"Bragg condition unsatisfiable: λ={lam_A:.4f} Å, "
-            f"2·d_hkl={two_d_A:.4f} Å, sin θ = {sin_theta:.4f} > 1 for "
+            f"Bragg condition unsatisfiable: lam={lam_A:.4f} A, "
+            f"2*d_hkl={two_d_A:.4f} A, sin(theta) = {sin_theta:.4f} > 1 for "
             f"hkl={hkl} at {keV} keV. Pick a lower-order reflection or "
             f"higher beam energy."
         )
@@ -80,12 +80,12 @@ def _validate_reflection(
     theta_deg = float(np.degrees(theta))
     if theta_deg < 5.0:
         print(
-            f"warning: θ = {theta_deg:.2f}° is very low (< 5°); reflection unusual but valid.",
+            f"warning: theta = {theta_deg:.2f} deg is very low (< 5 deg); reflection unusual but valid.",
             file=sys.stderr,
         )
     elif theta_deg > 85.0:
         print(
-            f"warning: θ = {theta_deg:.2f}° near back-reflection (> 85°); "
+            f"warning: theta = {theta_deg:.2f} deg near back-reflection (> 85 deg); "
             f"reflection unusual but valid.",
             file=sys.stderr,
         )
@@ -361,7 +361,7 @@ def cli_main(argv: list[str] | None = None) -> int:
 
     # Echo computed θ for sanity (Q4).
     theta_deg = float(np.degrees(theta))
-    print(f"reflection: hkl={hkl_tuple}, keV={keV_for_filename:g} → θ = {theta_deg:.4f}°")
+    print(f"reflection: hkl={hkl_tuple}, keV={keV_for_filename:g} -> theta = {theta_deg:.4f} deg")
 
     # Build output path.
     if args.output is not None:
