@@ -134,8 +134,8 @@ rsync -avh --partial \
 | Workload | Wall time | Memory |
 |---|---|---|
 | `dfxm-bootstrap` (Nrays=1e8) | ~50 s | ~5 GB peak (chunked truncnorm) |
-| `dfxm-forward` (61×61 grid, Nsub=2, ndis=151) | ~10–20 min | ~4 GB |
-| `dfxm-forward` (61×61, Nsub=1 — fast iteration) | ~2–3 min | ~2 GB |
+| `dfxm-forward` (61×61 grid, Nsub=1, ndis=151) — default | ~2–3 min | ~2 GB |
+| `dfxm-forward` (61×61, Nsub=2 — publication quality, Borgi 2024) | ~10–20 min | ~4 GB |
 | `dfxm-identify --mode multi` (10 samples) | ~2 min | ~4 GB |
 
 These numbers are rough — verify against your cluster before scaling up.

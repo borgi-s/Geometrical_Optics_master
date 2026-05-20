@@ -43,7 +43,10 @@ theta_0 = 17.953 / 2 * np.pi / 180  # in rad
 
 # INPUT FOV
 Npixels = 510  # nr of pixels on detector (same in both y and z) - sets the FOV.
-Nsub = 2  # NN1^3 = (Nsub*Npixels)^3 is the total number of "rays" probed
+Nsub = 1  # NN1^3 = (Nsub*Npixels)^3 is the total number of "rays" probed.
+# Nsub = 1 is the typical real-run choice (~8x faster forward calls).
+# Borgi 2024 (IUCrJ; doi:10.1107/S1600576724001183) used Nsub = 2 for
+# publication-quality figures — flip to 2 to reproduce paper-grade output.
 NN1 = int(Npixels // 3 * Nsub)  # 3 is used as 1/sin(2*~18 deg) = 3.24
 NN2 = int(Npixels * Nsub)
 NN3 = int(Npixels // 30 * Nsub)

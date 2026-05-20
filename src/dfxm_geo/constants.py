@@ -39,7 +39,7 @@ ID06_THETA_0: Final[float] = 17.953 / 2 * np.pi / 180
 
 # Detector field of view.
 ID06_NPIXELS: Final[int] = 510
-ID06_NSUB: Final[int] = 2
+ID06_NSUB: Final[int] = 1  # Borgi 2024 (IUCrJ) used 2 for publication; 1 is the typical real-run.
 
 # Miller indices of the default active reflection.
 HKL_DEFAULT: Final[tuple[int, int, int]] = (-1, 1, -1)
