@@ -413,7 +413,7 @@ class TestValidateReflection:
         _validate_reflection((1, 1, 1), 80.0, 4.0495e-10)
         captured = capsys.readouterr()
         assert "is very low" in captured.err
-        assert "θ" in captured.err or "theta" in captured.err.lower()
+        assert "theta" in captured.err.lower()
 
     def test_high_theta_warns(self, capsys: pytest.CaptureFixture[str]) -> None:
         from dfxm_geo.reciprocal_space.kernel import _validate_reflection
