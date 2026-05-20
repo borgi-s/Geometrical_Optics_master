@@ -96,6 +96,39 @@ class PostprocessConfig:
 
 
 @dataclass
+class ReciprocalConfig:
+    """Sub-project D: reflection identity for kernel lookup.
+
+    The TOML ``[reciprocal]`` block carries both this (small, consumed by
+    forward + identify) and bootstrap's MC params (large, consumed only by
+    `dfxm-bootstrap`). This dataclass holds only the lookup-relevant keys.
+    """
+
+    hkl: tuple[int, int, int]
+    keV: float
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> ReciprocalConfig:
+        if data is None:
+            raise ValueError(
+                "missing [reciprocal] block — forward/identify require explicit "
+                "hkl + keV; see configs/default.toml."
+            )
+        if "hkl" not in data:
+            raise ValueError("missing `hkl` in [reciprocal] — required for kernel lookup.")
+        if "keV" not in data:
+            raise ValueError("missing `keV` in [reciprocal] — required for kernel lookup.")
+        hkl = tuple(data["hkl"])
+        keV = float(data["keV"])
+        # Early validation per spec — catches typos / Bragg-unsatisfiable
+        # before the kernel lookup. Propagates A's ValueErrors verbatim.
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        _validate_reflection(hkl, keV, 4.0495e-10)
+        return cls(hkl=hkl, keV=keV)
+
+
+@dataclass
 class SimulationConfig:
     crystal: CrystalConfig = field(default_factory=CrystalConfig)
     scan: ScanConfig = field(
@@ -108,6 +141,10 @@ class SimulationConfig:
     )
     io: IOConfig = field(default_factory=IOConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
+    # Sub-project D: optional in Python construction (defaults to None for
+    # back-compat with test fixtures). `from_toml` requires it; `run_simulation`
+    # raises if None at runtime.
+    reciprocal: ReciprocalConfig | None = None
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -118,7 +155,10 @@ class SimulationConfig:
         scan = ScanConfig(**raw["scan"])
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
-        return cls(crystal=crystal, scan=scan, io=io, postprocess=postprocess)
+        reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
+        return cls(
+            crystal=crystal, scan=scan, io=io, postprocess=postprocess, reciprocal=reciprocal
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -186,6 +226,9 @@ class IdentificationConfig:
     io: IOConfig
     multi: IdentificationMonteCarloConfig | None = None
     zscan: IdentificationZScanConfig | None = None
+    # Sub-project D: optional in Python construction; load_identification_config
+    # requires it.
+    reciprocal: ReciprocalConfig | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in ("single", "multi", "z-scan"):
@@ -239,6 +282,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         IdentificationMonteCarloConfig(**data["multi"]) if data.get("multi") is not None else None
     )
     zscan = IdentificationZScanConfig(**data["zscan"]) if data.get("zscan") is not None else None
+    reciprocal = ReciprocalConfig.from_dict(data.get("reciprocal"))
 
     return IdentificationConfig(
         mode=data["mode"],
@@ -247,6 +291,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         io=io,
         multi=multi,
         zscan=zscan,
+        reciprocal=reciprocal,
     )
 
 

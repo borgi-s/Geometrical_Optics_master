@@ -673,3 +673,98 @@ class TestDfxmForwardSampleRemountCLI:
         # Output dir was populated with the HDF5 file
         h5_out = tmp_path / "out" / "dfxm_geo.h5"
         assert h5_out.is_file(), "dfxm_geo.h5 missing from output"
+
+
+class TestReciprocalConfigParsing:
+    """Sub-project D: SimulationConfig + IdentificationConfig parse [reciprocal]."""
+
+    def _write_minimal_sim_toml(self, tmp_path: Path, body: str) -> Path:
+        cfg = tmp_path / "config.toml"
+        cfg.write_text(body)
+        return cfg
+
+    def test_simulation_config_parses_reciprocal_block(self, tmp_path: Path) -> None:
+        from dfxm_geo.pipeline import SimulationConfig
+
+        cfg = self._write_minimal_sim_toml(
+            tmp_path,
+            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
+            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
+            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
+            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
+            "[postprocess]\nenabled = false\n"
+            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
+            'figures_dirname = "f"\ndata_dirname = "a"\n'
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+        )
+        config = SimulationConfig.from_toml(cfg)
+        assert config.reciprocal is not None
+        assert config.reciprocal.hkl == (-1, 1, -1)
+        assert config.reciprocal.keV == 17.0
+
+    def test_simulation_config_missing_reciprocal_raises(self, tmp_path: Path) -> None:
+        from dfxm_geo.pipeline import SimulationConfig
+
+        cfg = self._write_minimal_sim_toml(
+            tmp_path,
+            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
+            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
+            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
+            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
+            "[postprocess]\nenabled = false\n"
+            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
+            'figures_dirname = "f"\ndata_dirname = "a"\n',
+        )
+        with pytest.raises(ValueError, match=r"missing \[reciprocal\] block"):
+            SimulationConfig.from_toml(cfg)
+
+    def test_simulation_config_missing_hkl_raises(self, tmp_path: Path) -> None:
+        from dfxm_geo.pipeline import SimulationConfig
+
+        cfg = self._write_minimal_sim_toml(
+            tmp_path,
+            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
+            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
+            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
+            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
+            "[postprocess]\nenabled = false\n"
+            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
+            'figures_dirname = "f"\ndata_dirname = "a"\n'
+            "[reciprocal]\nkeV = 17.0\n",
+        )
+        with pytest.raises(ValueError, match=r"missing `hkl` in \[reciprocal\]"):
+            SimulationConfig.from_toml(cfg)
+
+    def test_simulation_config_missing_keV_raises(self, tmp_path: Path) -> None:
+        from dfxm_geo.pipeline import SimulationConfig
+
+        cfg = self._write_minimal_sim_toml(
+            tmp_path,
+            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
+            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
+            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
+            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
+            "[postprocess]\nenabled = false\n"
+            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
+            'figures_dirname = "f"\ndata_dirname = "a"\n'
+            "[reciprocal]\nhkl = [-1, 1, -1]\n",
+        )
+        with pytest.raises(ValueError, match=r"missing `keV` in \[reciprocal\]"):
+            SimulationConfig.from_toml(cfg)
+
+    def test_simulation_config_invalid_hkl_propagates_validate_error(self, tmp_path: Path) -> None:
+        from dfxm_geo.pipeline import SimulationConfig
+
+        cfg = self._write_minimal_sim_toml(
+            tmp_path,
+            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
+            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
+            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
+            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
+            "[postprocess]\nenabled = false\n"
+            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
+            'figures_dirname = "f"\ndata_dirname = "a"\n'
+            "[reciprocal]\nhkl = [0, 0, 0]\nkeV = 17.0\n",
+        )
+        with pytest.raises(ValueError, match=r"hkl=\(0,0,0\) is not a valid reflection"):
+            SimulationConfig.from_toml(cfg)
