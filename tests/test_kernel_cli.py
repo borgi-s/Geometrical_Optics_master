@@ -590,3 +590,73 @@ class TestCliMainMultiReflection:
         out_path = captured["output_path"]
         assert isinstance(out_path, Path)
         assert out_path.name.startswith("Resq_i_h-1_k1_l-1_17keV_")
+
+    def test_hkl_only_no_keV_errors(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = tmp_path / "config.toml"
+        cfg.write_text("[reciprocal]\nhkl = [-1, 1, -1]\nNrays = 1000\n")
+        rc = kmod.cli_main(["--config", str(cfg)])
+        assert rc == 1
+        assert "must provide both" in capsys.readouterr().err
+
+    def test_keV_only_no_hkl_errors(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = tmp_path / "config.toml"
+        cfg.write_text("[reciprocal]\nkeV = 17.0\nNrays = 1000\n")
+        rc = kmod.cli_main(["--config", str(cfg)])
+        assert rc == 1
+        assert "must provide both" in capsys.readouterr().err
+
+    def test_theta_plus_hkl_errors(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = tmp_path / "config.toml"
+        cfg.write_text("[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\ntheta = 0.165\nNrays = 1000\n")
+        rc = kmod.cli_main(["--config", str(cfg)])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "cannot specify both" in err
+        assert "`theta`" in err
+
+    def test_zero_hkl_errors_cleanly(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """ValueError from _validate_reflection surfaces as exit 1 + stderr, not a traceback."""
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = tmp_path / "config.toml"
+        cfg.write_text("[reciprocal]\nhkl = [0, 0, 0]\nkeV = 17.0\nNrays = 1000\n")
+        rc = kmod.cli_main(["--config", str(cfg)])
+        assert rc == 1
+        assert "not a valid reflection" in capsys.readouterr().err
+
+    def test_unsatisfiable_bragg_errors_cleanly(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = tmp_path / "config.toml"
+        cfg.write_text("[reciprocal]\nhkl = [10, 10, 10]\nkeV = 1.0\nNrays = 1000\n")
+        rc = kmod.cli_main(["--config", str(cfg)])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "Bragg condition unsatisfiable" in err
+        assert "λ=" in err
