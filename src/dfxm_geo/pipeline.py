@@ -280,6 +280,28 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     (dislocations) and, if `io.include_perfect_crystal=True`, `/2.1`
     (Hg=0 reference). Provenance + per-scan metadata are also embedded.
     """
+    # Catches "I edited Nsub / Npixels and it didn't take effect" in the first
+    # second of the run instead of after a wasted job. Prints the effective
+    # ray-grid params, the exact kernel path that will be loaded, and the
+    # Fg cache filename Find_Hg will look up.
+    _expected_fg = "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}.npy".format(
+        str(config.crystal.dis).replace(".", ""),
+        int(fm.psize * 1e9),
+        int(fm.zl_rms * 2.35e9),
+        fm.Npixels,
+        fm.Nsub,
+        config.crystal.sample_remount,
+    )
+    print(
+        f"[dfxm-forward] effective config:\n"
+        f"  Nsub={fm.Nsub}  Npixels={fm.Npixels}  NN1={fm.NN1}  NN2={fm.NN2}\n"
+        f"  kernel={fm.pkl_fpath}{fm.pkl_fn}\n"
+        f"  Fg cache={_expected_fg}\n"
+        f"  dis={config.crystal.dis}  ndis={config.crystal.ndis}  "
+        f"remount={config.crystal.sample_remount}",
+        flush=True,
+    )
+
     _ensure_kernel_loaded()
     output_dir.mkdir(parents=True, exist_ok=True)
 
