@@ -16,6 +16,19 @@ REPO = Path(__file__).resolve().parents[1]
 GOLDEN = REPO / "tests" / "data" / "golden" / "forward_legacy_writer_4frames_8x8.npy"
 
 
+@pytest.mark.xfail(
+    reason=(
+        "Bit-equivalence golden was captured against a specific Fg cache + Nsub=2. "
+        "Find_Hg uses non-seeded np.random.default_rng(), so fresh checkouts "
+        "regenerate Fg with different dislocation positions; and the Nsub default "
+        "is now 1 (was 2 when the golden was captured). The snapshot therefore "
+        "only matches on machines that retained the original Fg cache AND run "
+        "with Nsub=2 manually. Same root cause as the sibling xfail on "
+        "test_forward_output_matches_pickle_era_snapshot. Follow-up: seed Find_Hg "
+        "for reproducible test fixtures, then regenerate the golden."
+    ),
+    strict=False,
+)
 def test_hdf5_writer_bit_equivalent_to_legacy_npy_golden(tmp_path: Path) -> None:
     """Same Hg + (phi, chi) grid -> identical images via HDF5 writer."""
     if fm.Hg is None:
