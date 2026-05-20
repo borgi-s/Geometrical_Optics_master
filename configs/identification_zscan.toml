@@ -5,11 +5,9 @@
 # dislocation (seeded for reproducibility), then save a phi/chi rocking
 # curve per configuration via save_images_parallel.
 #
-# BEFORE A REAL RUN: flip Nsub = 2 -> 1 in
-# src/dfxm_geo/direct_space/forward_model.py:42 for ~8x faster per-image
-# forward calls. Nsub = 1 is the typical real-run choice; the cleanup
-# default Nsub = 2 is preserved as the publication-quality setting from
-# Borgi 2024/2025.
+# Nsub = 1 is the codebase default (typical real-run setting). To reproduce
+# Borgi 2024 (IUCrJ) publication-quality figures, flip Nsub = 1 -> 2 in
+# src/dfxm_geo/direct_space/forward_model.py.
 
 mode = "z-scan"
 

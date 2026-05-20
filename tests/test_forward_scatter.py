@@ -32,7 +32,7 @@ def test_bincount_scatter_matches_np_add_at_on_production_size() -> None:
     """At realistic detector size and valid-ray count, the two scatter
     accumulators produce bit-identical float64 output."""
     rng = np.random.default_rng(20260516)
-    H, W = 510, 170  # production detector after Nsub=2 on NN1=340, NN2=1020
+    H, W = 510, 170  # production detector: NN2//Nsub x NN1//Nsub, Nsub-invariant
     n_valid = 200_000  # plausible idx.sum() in real runs
     flat_indices = rng.integers(0, H * W, size=n_valid, dtype=np.int64)
     weights = rng.standard_normal(n_valid).astype(np.float32)
