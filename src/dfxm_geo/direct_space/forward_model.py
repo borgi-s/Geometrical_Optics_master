@@ -59,9 +59,9 @@ pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
 # Constant name preserved (`pkl_fn`) so import-time monkeypatches in tests
 # and the dfxm-bootstrap CLI don't break. Value follows the
 # Resq_i_h{h}_k{k}_l{l}_{keV}keV_{date}.npz pattern introduced in
-# sub-project A; the date stamp is a placeholder until the next bootstrap
-# regen produces the real file on each host.
-pkl_fn = "Resq_i_h-1_k1_l-1_17keV_20260520_2100.npz"  # Update after `dfxm-bootstrap` regen (per-reflection pattern)
+# sub-project A; sync to the actual filename produced by
+# `dfxm-bootstrap` on each host (laptop ran 2026-05-20 20:14).
+pkl_fn = "Resq_i_h-1_k1_l-1_17keV_20260520_2014.npz"  # Update after `dfxm-bootstrap` regen (per-reflection pattern)
 
 theta = theta_0
 yl_start = -psize * Npixels / 2 + psize / (
