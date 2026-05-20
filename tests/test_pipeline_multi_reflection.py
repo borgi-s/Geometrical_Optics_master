@@ -48,6 +48,19 @@ def _make_kernel_npz(
 
 
 class TestForwardMultiReflection:
+    @pytest.fixture(autouse=True)
+    def _reset_kernel_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reset fm._loaded_kernel_path between tests to avoid cross-test bleed.
+
+        The module-level global persists across tests; monkeypatch restores
+        fm.pkl_fpath but not _loaded_kernel_path, so the idempotency guard
+        in _lookup_and_load_kernel could (in pathological cases) skip a
+        reload it should perform.
+        """
+        import dfxm_geo.direct_space.forward_model as fm
+
+        monkeypatch.setattr(fm, "_loaded_kernel_path", None)
+
     def test_happy_path_with_explicit_hkl(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
