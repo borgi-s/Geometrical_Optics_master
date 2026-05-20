@@ -124,6 +124,10 @@ class ReciprocalConfig:
         # before the kernel lookup. Propagates A's ValueErrors verbatim.
         from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
+        # TODO(non-Al materials): hardcoded Al lattice parameter; revisit if/when
+        # the codebase supports other crystals. Tracked as deferred work in the
+        # sub-project A spec ("materials other than Al") and in the sub-project D
+        # spec ("out of scope").
         _validate_reflection(hkl, keV, 4.0495e-10)
         return cls(hkl=hkl, keV=keV)
 
