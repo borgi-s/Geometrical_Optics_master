@@ -29,6 +29,67 @@ def _default_theta_al_111(keV: float = 17) -> float:
     return float(np.arcsin(wavelength / (2 * d_111)))
 
 
+def _validate_reflection(
+    hkl: tuple[int, int, int],
+    keV: float,
+    a: float,
+) -> float:
+    """Compute and validate the Bragg angle θ for an arbitrary cubic reflection.
+
+    Args:
+        hkl: Miller indices (must be ints, length 3, not all zero).
+        keV: beam energy in keV (must be > 0).
+        a: cubic lattice parameter in metres.
+
+    Returns:
+        Bragg angle θ in radians.
+
+    Raises:
+        ValueError: on structural input errors or unsatisfiable Bragg geometry.
+
+    Emits warnings to stderr when θ ∉ [5°, 85°] (unusual but valid reflections).
+    """
+    import sys
+
+    if len(hkl) != 3:
+        raise ValueError(f"hkl must have 3 components, got {len(hkl)}.")
+    if not all(isinstance(x, int) and not isinstance(x, bool) for x in hkl):
+        raise ValueError(f"hkl components must be int, got {hkl}.")
+    if hkl == (0, 0, 0):
+        raise ValueError("hkl=(0,0,0) is not a valid reflection (no diffraction).")
+    if keV <= 0:
+        raise ValueError(f"keV must be > 0, got {keV}.")
+
+    h, k, l = hkl
+    d_hkl = a / np.sqrt(h * h + k * k + l * l)
+    wavelength = 1.239841984e-9 / keV  # hc/E, metres
+    sin_theta = wavelength / (2 * d_hkl)
+    if sin_theta > 1:
+        lam_A = wavelength * 1e10
+        two_d_A = 2 * d_hkl * 1e10
+        raise ValueError(
+            f"Bragg condition unsatisfiable: λ={lam_A:.4f} Å, "
+            f"2·d_hkl={two_d_A:.4f} Å, sin θ = {sin_theta:.4f} > 1 for "
+            f"hkl={hkl} at {keV} keV. Pick a lower-order reflection or "
+            f"higher beam energy."
+        )
+
+    theta = float(np.arcsin(sin_theta))
+    theta_deg = float(np.degrees(theta))
+    if theta_deg < 5.0:
+        print(
+            f"warning: θ = {theta_deg:.2f}° is very low (< 5°); reflection unusual but valid.",
+            file=sys.stderr,
+        )
+    elif theta_deg > 85.0:
+        print(
+            f"warning: θ = {theta_deg:.2f}° near back-reflection (> 85°); "
+            f"reflection unusual but valid.",
+            file=sys.stderr,
+        )
+    return theta
+
+
 def generate_kernel(
     date: str | None = None,
     *,

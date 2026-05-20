@@ -332,3 +332,74 @@ class TestCliMain:
         captured = capsys.readouterr()
         out = captured.out + captured.err
         assert "mutually exclusive" in out
+
+
+class TestValidateReflection:
+    def test_len_not_three_raises(self) -> None:
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        with pytest.raises(ValueError, match=r"hkl must have 3 components, got 2\."):
+            _validate_reflection((1, 1), 17.0, 4.0495e-10)
+
+    def test_non_int_component_raises(self) -> None:
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        with pytest.raises(ValueError, match=r"hkl components must be int"):
+            _validate_reflection((1.5, 1, -1), 17.0, 4.0495e-10)
+
+    def test_zero_hkl_raises(self) -> None:
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        with pytest.raises(ValueError, match=r"hkl=\(0,0,0\) is not a valid reflection"):
+            _validate_reflection((0, 0, 0), 17.0, 4.0495e-10)
+
+    def test_nonpositive_keV_raises(self) -> None:
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        with pytest.raises(ValueError, match=r"keV must be > 0, got 0"):
+            _validate_reflection((-1, 1, -1), 0.0, 4.0495e-10)
+        with pytest.raises(ValueError, match=r"keV must be > 0, got -5"):
+            _validate_reflection((-1, 1, -1), -5.0, 4.0495e-10)
+
+    def test_unsatisfiable_bragg_raises(self) -> None:
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        # hkl=(10,10,10) at 1 keV: λ ≈ 12.4 Å, d ≈ 0.234 Å → sin θ ≈ 26 > 1.
+        with pytest.raises(ValueError, match=r"Bragg condition unsatisfiable"):
+            _validate_reflection((10, 10, 10), 1.0, 4.0495e-10)
+
+    def test_default_al_111_matches_existing_helper(self) -> None:
+        from dfxm_geo.reciprocal_space.kernel import (
+            _default_theta_al_111,
+            _validate_reflection,
+        )
+
+        theta_new = _validate_reflection((-1, 1, -1), 17.0, 4.0495e-10)
+        theta_old = _default_theta_al_111(17)
+        assert theta_new == theta_old  # bit-equal
+
+    def test_known_reflection_200_at_17keV(self) -> None:
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        # Al (2,0,0): d_200 = a/2 = 2.02475 Å; λ at 17 keV ≈ 0.7293 Å.
+        # sin θ = λ / (2d) = 0.18012; θ = 10.376° = 0.18112 rad.
+        theta = _validate_reflection((2, 0, 0), 17.0, 4.0495e-10)
+        assert theta == pytest.approx(np.deg2rad(10.376), abs=1e-3)
+
+    def test_low_theta_warns(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        # Al (1,1,1) at 80 keV: very short λ → very small θ.
+        _validate_reflection((1, 1, 1), 80.0, 4.0495e-10)
+        captured = capsys.readouterr()
+        assert "is very low" in captured.err
+        assert "θ" in captured.err or "theta" in captured.err.lower()
+
+    def test_high_theta_warns(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        # Al (3,2,1) at 5.74 keV: λ ≈ 2.16 Å, d ≈ 1.082 Å,
+        # sin θ ≈ 0.998 → θ ≈ 86.3° (solidly > 85°, well under 90°).
+        _validate_reflection((3, 2, 1), 5.74, 4.0495e-10)
+        captured = capsys.readouterr()
+        assert "near back-reflection" in captured.err
