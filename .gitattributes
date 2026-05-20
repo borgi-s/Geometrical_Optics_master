@@ -1,0 +1,29 @@
+# Normalize line endings to LF on commit. Windows working copies can still
+# be CRLF (per core.autocrlf), but the committed blob is always LF — this
+# prevents the pre-commit `mixed-line-ending` hook from auto-fixing files
+# and aborting every commit made from Windows.
+
+* text=auto eol=lf
+
+# Defensive — explicit text types
+*.py     text eol=lf
+*.toml   text eol=lf
+*.md     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.cfg    text eol=lf
+*.ini    text eol=lf
+*.txt    text eol=lf
+*.bsub   text eol=lf
+*.sbatch text eol=lf
+*.sh     text eol=lf
+
+# Binary — never touch these
+*.npy binary
+*.npz binary
+*.pkl binary
+*.h5  binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
