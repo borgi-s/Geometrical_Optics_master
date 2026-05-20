@@ -57,8 +57,11 @@ NN3 = int(Npixels // 30 * Nsub)
 # kernel (e.g. CI, tests, fresh clones).
 pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
 # Constant name preserved (`pkl_fn`) so import-time monkeypatches in tests
-# and the dfxm-bootstrap CLI don't break. Value is now the npz canonical.
-pkl_fn = "Resq_i_20260516_2100.npz"  # Update after `dfxm-bootstrap` regen
+# and the dfxm-bootstrap CLI don't break. Value follows the
+# Resq_i_h{h}_k{k}_l{l}_{keV}keV_{date}.npz pattern introduced in
+# sub-project A; the date stamp is a placeholder until the next bootstrap
+# regen produces the real file on each host.
+pkl_fn = "Resq_i_h-1_k1_l-1_17keV_20260520_2100.npz"  # Update after `dfxm-bootstrap` regen (per-reflection pattern)
 
 theta = theta_0
 yl_start = -psize * Npixels / 2 + psize / (

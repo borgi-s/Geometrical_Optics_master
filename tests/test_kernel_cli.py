@@ -680,3 +680,22 @@ class TestCliMainMultiReflection:
         err = capsys.readouterr().err
         assert "Bragg condition unsatisfiable" in err
         assert "λ=" in err
+
+
+class TestPklFnRegression:
+    def test_pkl_fn_matches_new_pattern(self) -> None:
+        """pkl_fn must follow the per-reflection pattern from sub-project A.
+
+        After bootstrap regen, the user updates the literal value to the
+        produced filename; this regression guard ensures it stays
+        pattern-conforming and doesn't silently revert to the old
+        Resq_i_<date>.npz format.
+        """
+        import re
+
+        import dfxm_geo.direct_space.forward_model as fm
+
+        assert re.fullmatch(
+            r"Resq_i_h-1_k1_l-1_17keV_\d{8}_\d{4}\.npz",
+            fm.pkl_fn,
+        ), f"pkl_fn={fm.pkl_fn!r} does not match the new per-reflection pattern"
