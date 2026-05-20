@@ -24,8 +24,8 @@ import dfxm_geo.direct_space.forward_model as fm
 def main() -> None:
     if fm.Resq_i is None:
         raise RuntimeError(
-            "Resq_i not loaded; this generator requires the existing pickle "
-            f"to be present at {fm.pkl_fpath}{fm.pkl_fn}."
+            "Resq_i not loaded; this generator requires a kernel to be loaded first. "
+            "Call pipeline._lookup_and_load_kernel(hkl, keV) before running this script."
         )
     if fm.Hg is None:
         raise RuntimeError(

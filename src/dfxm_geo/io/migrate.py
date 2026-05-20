@@ -151,7 +151,11 @@ def migrate_npy_dir_to_h5(
             zl_rms=float(_fm.zl_rms),
         )
 
-    kernel_npz = Path(_fm.pkl_fpath) / _fm.pkl_fn
+    kernel_npz = _fm._loaded_kernel_path
+    if kernel_npz is None:
+        raise RuntimeError(
+            "no kernel loaded — migration requires a loaded kernel for provenance recording."
+        )
     with h5py.File(h5_path, "a") as f:
         _write_provenance(
             f,

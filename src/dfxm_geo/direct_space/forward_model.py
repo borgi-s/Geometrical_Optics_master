@@ -4,10 +4,10 @@ Builds the module-level geometry (lab/sample/crystal frames, detector grid,
 beam profile) at import time, then exposes `forward()` which projects a
 displacement-gradient field `Hg` through the imaging system into a 2D image.
 
-The reciprocal-space resolution kernel `Resq_i` is loaded lazily by
-`_load_default_kernel()` — at module import iff the default .npz is on
-disk, otherwise on explicit call. This lets the module be imported on a
-clean clone or in CI without the precomputed kernel present.
+The reciprocal-space resolution kernel `Resq_i` is loaded on demand by
+`_load_default_kernel(pkl_path)` — called via `_lookup_and_load_kernel(hkl, keV)`
+in `dfxm_geo.pipeline`. This lets the module be imported on a clean clone or
+in CI without any precomputed kernel present.
 
 Default geometry constants match ID06 at the ESRF; see `dfxm_geo.constants`.
 """
@@ -51,17 +51,11 @@ NN1 = int(Npixels // 3 * Nsub)  # 3 is used as 1/sin(2*~18 deg) = 3.24
 NN2 = int(Npixels * Nsub)
 NN3 = int(Npixels // 30 * Nsub)
 
-# Default reciprocal-space resolution kernel paths.
-# These are loaded lazily by `_load_default_kernel()` only if the file exists,
-# so the module can be imported on a clean checkout that lacks the precomputed
-# kernel (e.g. CI, tests, fresh clones).
+# Default directory for reciprocal-space resolution kernel files.
+# Kernel files are discovered via _lookup_kernel_path(hkl, keV, pkl_fpath)
+# which globs Resq_i_h{h}_k{k}_l{l}_{keV}keV_*.npz and picks the newest.
+# There is no longer a module-level `pkl_fn` constant — sub-project D removed it.
 pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
-# Constant name preserved (`pkl_fn`) so import-time monkeypatches in tests
-# and the dfxm-bootstrap CLI don't break. Value follows the
-# Resq_i_h{h}_k{k}_l{l}_{keV}keV_{date}.npz pattern introduced in
-# sub-project A; sync to the actual filename produced by
-# `dfxm-bootstrap` on each host (laptop ran 2026-05-20 20:14).
-pkl_fn = "Resq_i_h-1_k1_l-1_17keV_20260520_2014.npz"  # Update after `dfxm-bootstrap` regen (per-reflection pattern)
 
 # Sub-project D: set by `_load_default_kernel` on successful load; read by
 # `io/hdf5.py` and `io/migrate.py` for provenance recording. `None` until a
@@ -204,7 +198,7 @@ def Find_Hg(
 
     if not os.path.exists(Fg_path.replace(".npy", "_vars.txt")):
         vars = {
-            "Resq_i": pkl_fn,
+            "Resq_i": _loaded_kernel_path.name if _loaded_kernel_path else "<not loaded>",
             "psize [nm]": psize,
             "zl_rms": zl_rms,
             "theta_0 [rad]": theta_0,
@@ -241,9 +235,10 @@ def _load_default_kernel(
 ) -> None:
     """Load the reciprocal-space resolution kernel from disk into module state.
 
-    Called at import time iff the default .npz exists. Can be called
-    manually with an explicit path to bootstrap the module after a clean
-    import (e.g. from tests with a fixture kernel).
+    Must be called with an explicit `pkl_path`. Use
+    `_lookup_kernel_path(hkl, keV, pkl_fpath)` to find the matching file,
+    or call via `pipeline._lookup_and_load_kernel(hkl, keV)` which composes
+    the lookup and load together.
 
     Sets module-level globals: `Resq_i`, `qi1_range`/`qi2_range`/`qi3_range`,
     `npoints1`/`npoints2`/`npoints3`, `qi1_start`/`qi1_step`/etc.,
@@ -251,8 +246,8 @@ def _load_default_kernel(
     `Hg`/`q_hkl` by calling `Find_Hg(dis, ndis, psize, zl_rms)`.
 
     Args:
-        pkl_path: Path to the .npz kernel file. Defaults to the module-level
-            ``pkl_fpath / pkl_fn`` constant if None.
+        pkl_path: Path to the .npz kernel file. Required — pass the result
+            of `_lookup_kernel_path(hkl, keV, pkl_fpath)`.
         expected_hkl: If given, verify that the kernel's bundled ``hkl``
             metadata matches. Raises ``KeyError`` if the metadata is absent
             (pre-sub-project-D bootstrap), ``ValueError`` on mismatch.
@@ -270,7 +265,11 @@ def _load_default_kernel(
     global _loaded_kernel_path
 
     if pkl_path is None:
-        pkl_path = os.path.join(pkl_fpath, pkl_fn)
+        raise ValueError(
+            "_load_default_kernel requires an explicit `pkl_path` after sub-project D. "
+            "Use `_lookup_kernel_path(hkl, keV, pkl_fpath)` to find the matching kernel, "
+            "or call via `pipeline._lookup_and_load_kernel(hkl, keV)`."
+        )
 
     if str(pkl_path).endswith(".pkl"):
         raise RuntimeError(
@@ -517,13 +516,7 @@ def Z_shift(offset_um: float) -> np.ndarray:
     ).reshape(3, -1)
 
 
-# Auto-load the default kernel iff it exists on disk. Preserves the
-# pre-cleanup behavior for callers (e.g. init_forward.py) that expect
-# `Resq_i`, `Hg`, `q_hkl`, etc. to be ready at import time.
-if os.path.exists(os.path.join(pkl_fpath, pkl_fn)):
-    _load_default_kernel()
-else:
-    print(
-        f"NOTE: default kernel npz not found at {os.path.join(pkl_fpath, pkl_fn)!r}; "
-        f"call _load_default_kernel(pkl_path) before forward(), or run `dfxm-bootstrap`."
-    )
+# Sub-project D: no module-import auto-load. Kernel is loaded on demand
+# via pipeline._lookup_and_load_kernel(hkl, keV) or an explicit
+# _load_default_kernel(pkl_path) call. This lets the module be imported on
+# any host regardless of whether the kernel npz is on disk.

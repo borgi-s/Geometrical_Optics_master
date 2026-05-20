@@ -236,8 +236,8 @@ def cli_main(argv: list[str] | None = None) -> int:
 
     Reads a TOML config (e.g. `configs/default.toml`), parses the
     `[reciprocal]` block, and writes the resulting reciprocal-space kernel
-    npz to the canonical path that `dfxm-forward`'s stage-0 preflight will
-    read (`<fm.pkl_fpath>/<fm.pkl_fn>`), or to `--output <path>` if given.
+    npz to `<fm.pkl_fpath>/Resq_i_h{h}_k{k}_l{l}_{keV}keV_<date>.npz`,
+    or to `--output <path>` if given.
     """
     import argparse
     import sys
@@ -264,8 +264,9 @@ def cli_main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help=(
-            "Destination kernel npz path. Defaults to <pkl_fpath>/<pkl_fn> "
-            "(the path dfxm-forward reads at import time)."
+            "Destination kernel npz path. Defaults to "
+            "<pkl_fpath>/Resq_i_h{h}_k{k}_l{l}_{keV}keV_<date>.npz "
+            "(discovered at runtime by _lookup_kernel_path)."
         ),
     )
     parser.add_argument(

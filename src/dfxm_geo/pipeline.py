@@ -327,20 +327,6 @@ def _lookup_and_load_kernel(
     )
 
 
-def _ensure_kernel_loaded() -> None:
-    """Deprecated: use `_lookup_and_load_kernel(hkl, keV)` instead.
-
-    Retained for one transitional task; Task 6 of sub-project D removes it
-    entirely. Stale callers will get this clean NotImplementedError instead
-    of a silent stale-kernel result.
-    """
-    raise NotImplementedError(
-        "_ensure_kernel_loaded() is removed in sub-project D — "
-        "use _lookup_and_load_kernel(hkl, keV) instead. "
-        "Task 6 deletes this stub entirely."
-    )
-
-
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
     """Execute a DFXM forward-simulation run from a config object.
 
@@ -457,19 +443,15 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         When invoked via ``--postprocess-only`` against an output dir whose
         stacks were produced with non-default ``dis`` / ``ndis``, the qi field
         is computed against the *module-level* ``fm.Hg``. If no prior
-        ``run_simulation`` set ``fm.Hg`` in this process, it will fall back to
-        the default kernel auto-load — which may not match the saved stacks.
-        For correctness in that workflow, assign ``fm.Hg`` explicitly before
-        calling this function.
+        ``run_simulation`` set ``fm.Hg`` in this process, ``fm.Hg`` will be
+        None and this function will raise RuntimeError. For correctness in that
+        workflow, call ``pipeline._lookup_and_load_kernel(hkl, keV)`` and
+        assign ``fm.Hg`` explicitly before calling this function.
 
     Raises:
         FileNotFoundError: if the expected dfxm_geo.h5 file is absent.
         FileNotFoundError: if /2.1 (perfect crystal scan) is missing from the .h5.
-        FileNotFoundError: from :func:`_ensure_kernel_loaded` if the
-            reciprocal-space kernel npz is missing.
     """
-    _ensure_kernel_loaded()
-
     h5_path = output_dir / "dfxm_geo.h5"
     if not h5_path.is_file():
         raise FileNotFoundError(

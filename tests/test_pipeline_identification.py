@@ -408,9 +408,10 @@ def test_dfxm_identify_cli_end_to_end(tmp_path):
 
     import dfxm_geo.direct_space.forward_model as fm
 
-    pkl = Path(fm.pkl_fpath) / fm.pkl_fn
-    if not pkl.is_file():
-        pytest.skip(f"kernel npz missing: {pkl}")
+    kernel_dir = Path(fm.pkl_fpath)
+    matches = sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz"))
+    if not matches:
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
 
     toml_text = """
 mode = "single"

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import h5py
@@ -32,8 +31,7 @@ def test_migrate_round_trips_images(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         npoints2=np.int64(2),
         npoints3=np.int64(2),
     )
-    monkeypatch.setattr(_fm, "pkl_fpath", str(kernel_dir) + os.sep)
-    monkeypatch.setattr(_fm, "pkl_fn", "fake_kernel.npz")
+    monkeypatch.setattr(_fm, "_loaded_kernel_path", fake_kernel)
 
     # Fake a legacy output dir: a few .npy files in images10/.
     images_dir = tmp_path / "images10"

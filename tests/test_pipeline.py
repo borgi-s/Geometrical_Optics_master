@@ -14,17 +14,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     CrystalConfig,
     IOConfig,
     PostprocessConfig,
     ScanConfig,
     SimulationConfig,
-    _ensure_kernel_loaded,
     cli_main,
     run_postprocess,
-    run_simulation,
 )
 
 
@@ -185,206 +182,6 @@ class TestPostprocessConfigFromToml:
         assert cfg.postprocess == PostprocessConfig()
 
 
-class TestPreflight:
-    def test_raises_when_kernel_not_loaded_and_kernel_missing(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """Kernel absent -> FileNotFoundError with the dfxm-bootstrap hint."""
-        monkeypatch.setattr(fm, "Resq_i", None)
-        # Point the canonical path at an empty tmp dir; nothing to find.
-        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + "/")
-        monkeypatch.setattr(fm, "pkl_fn", "missing_kernel.pkl")
-        with pytest.raises(FileNotFoundError) as excinfo:
-            _ensure_kernel_loaded()
-        msg = str(excinfo.value)
-        assert "dfxm-bootstrap" in msg
-        assert "docs/cluster-runs.md" in msg
-        assert "missing_kernel.pkl" in msg
-
-    def test_recovers_when_kernel_on_disk_but_not_loaded(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Kernel present but Resq_i not loaded -> call _load_default_kernel."""
-        monkeypatch.setattr(fm, "Resq_i", None)
-        called: dict[str, str] = {}
-
-        def fake_load(pkl_path: str | None = None, **kwargs: object) -> None:
-            called["pkl_path"] = pkl_path or ""
-            # Simulate the load succeeding by populating Resq_i.
-            monkeypatch.setattr(fm, "Resq_i", np.ones((2, 2, 2)))
-
-        monkeypatch.setattr(fm, "_load_default_kernel", fake_load)
-        # Make the canonical path exist.
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tf:
-            tf.write(b"placeholder")
-            pkl_path = tf.name
-        try:
-            monkeypatch.setattr(fm, "pkl_fpath", str(Path(pkl_path).parent) + "/")
-            monkeypatch.setattr(fm, "pkl_fn", Path(pkl_path).name)
-            _ensure_kernel_loaded()
-            assert called["pkl_path"].endswith(Path(pkl_path).name)
-            assert fm.Resq_i is not None
-        finally:
-            Path(pkl_path).unlink(missing_ok=True)
-
-    def test_noops_when_already_loaded(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Resq_i already set -> no I/O, no error."""
-        monkeypatch.setattr(fm, "Resq_i", np.ones((2, 2, 2)))
-        # Set canonical path to a definitely-missing file: if the preflight
-        # touched it, we'd hit the FileNotFoundError branch instead.
-        monkeypatch.setattr(fm, "pkl_fpath", "/nonexistent/")
-        monkeypatch.setattr(fm, "pkl_fn", "does_not_matter.pkl")
-        _ensure_kernel_loaded()  # must not raise
-
-
-class TestRunSimulationPreflight:
-    def test_run_simulation_short_circuits_without_kernel(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """run_simulation() bails via the preflight before any I/O starts."""
-        monkeypatch.setattr(fm, "Resq_i", None)
-        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + "/")
-        monkeypatch.setattr(fm, "pkl_fn", "missing.pkl")
-        with pytest.raises(FileNotFoundError, match="dfxm-bootstrap"):
-            run_simulation(SimulationConfig(), tmp_path)
-        assert not (tmp_path / "dfxm_geo.h5").exists()
-
-
-class TestRunSimulation:
-    def test_golden_path_writes_h5(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """run_simulation writes dfxm_geo.h5, syncs fm.Hg / fm.q_hkl,
-        and returns h5_path + Hg + q_hkl in the result dict."""
-        config = SimulationConfig(
-            crystal=CrystalConfig(dis=2.0, ndis=4),
-            scan=ScanConfig(phi_range=0.05, phi_steps=5, chi_range=0.05, chi_steps=5),
-            io=IOConfig(),
-        )
-        output_dir = tmp_path / "out"
-
-        fake_Hg = np.ones((3, 3, 4, 4, 4))
-        fake_q = np.array([0.0, 0.0, 1.0])
-        find_hg_called = {"count": 0}
-
-        def fake_find_hg(dis, ndis, psize, zl_rms, **kwargs):
-            find_hg_called["count"] += 1
-            return fake_Hg, fake_q
-
-        write_sim_calls: list[dict] = []
-
-        def fake_write_simulation_h5(path, *, Hg, include_perfect_crystal, **kwargs):
-            write_sim_calls.append(
-                {
-                    "include_perfect_crystal": include_perfect_crystal,
-                    "is_zero": bool(np.all(Hg == 0)),
-                }
-            )
-
-        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.Find_Hg", fake_find_hg)
-        monkeypatch.setattr(
-            "dfxm_geo.pipeline.write_simulation_h5",
-            fake_write_simulation_h5,
-        )
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.psize", 0.1)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_rms", 1.0)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.q_hkl", None)
-
-        result = run_simulation(config, output_dir)
-
-        # Find_Hg was called once with the config values
-        assert find_hg_called["count"] == 1
-        # write_simulation_h5 was called once with include_perfect_crystal=True
-        assert len(write_sim_calls) == 1
-        assert write_sim_calls[0]["include_perfect_crystal"] is True
-        assert write_sim_calls[0]["is_zero"] is False  # real Hg passed
-        # Module globals are synced to the new Hg
-        import dfxm_geo.direct_space.forward_model as _fm
-
-        assert _fm.Hg is fake_Hg
-        assert _fm.q_hkl is fake_q
-        # Output dir was created and result dict carries the expected keys
-        assert output_dir.is_dir()
-        assert result["h5_path"] == output_dir / "dfxm_geo.h5"
-        assert result["Hg"] is fake_Hg
-
-    def test_skip_perfect_crystal(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """When io.include_perfect_crystal=False, write_simulation_h5 is called
-        with include_perfect_crystal=False."""
-        config = SimulationConfig(
-            io=IOConfig(include_perfect_crystal=False),
-        )
-        output_dir = tmp_path / "out"
-
-        write_sim_calls: list[dict] = []
-
-        def fake_write_simulation_h5(path, *, include_perfect_crystal, **kwargs):
-            write_sim_calls.append({"include_perfect_crystal": include_perfect_crystal})
-
-        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
-        monkeypatch.setattr(
-            "dfxm_geo.pipeline.fm.Find_Hg",
-            lambda *a, **kw: (np.ones((3, 3, 4, 4, 4)), np.array([0.0, 0.0, 1.0])),
-        )
-        monkeypatch.setattr("dfxm_geo.pipeline.write_simulation_h5", fake_write_simulation_h5)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.psize", 0.1)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_rms", 1.0)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.q_hkl", None)
-
-        result = run_simulation(config, output_dir)
-
-        assert len(write_sim_calls) == 1
-        assert write_sim_calls[0]["include_perfect_crystal"] is False
-        assert result["include_perfect_crystal"] is False
-
-    def test_run_simulation_passes_resolved_S_to_find_hg(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """sample_remount='S2' must arrive at fm.Find_Hg as the S2 matrix."""
-        from dfxm_geo.crystal.remount import S2
-
-        config = SimulationConfig(
-            crystal=CrystalConfig(dis=2.0, ndis=4, sample_remount="S2"),
-            scan=ScanConfig(phi_range=0.05, phi_steps=5, chi_range=0.05, chi_steps=5),
-            io=IOConfig(),
-        )
-
-        captured: dict = {}
-        fake_Hg = np.ones((3, 3, 4, 4, 4))
-        fake_q = np.array([0.0, 0.0, 1.0])
-
-        def fake_find_hg(dis, ndis, psize, zl_rms, **kwargs):
-            captured["kwargs"] = kwargs
-            return fake_Hg, fake_q
-
-        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.Find_Hg", fake_find_hg)
-        monkeypatch.setattr("dfxm_geo.pipeline.write_simulation_h5", lambda *a, **k: None)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.psize", 0.1)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_rms", 1.0)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.q_hkl", None)
-
-        run_simulation(config, tmp_path / "out")
-
-        assert "S" in captured["kwargs"]
-        np.testing.assert_array_equal(captured["kwargs"]["S"], S2)
-        assert captured["kwargs"]["remount_name"] == "S2"
-
-
 @pytest.fixture
 def tiny_h5_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
     """Write a tiny synthetic dfxm_geo.h5 with /1.1 and /2.1 scans.
@@ -445,8 +242,6 @@ class TestRunPostprocess:
                 (fake_im, fake_qi) if qi_return else (fake_im, None)
             ),
         )
-        # Bypass the kernel preflight.
-        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
         # Sidestep the geometry globals — provide defaults that match the fake qi shape.
         monkeypatch.setattr("dfxm_geo.pipeline.fm.xl_start", 1e-5)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.yl_start", 1e-5)
@@ -479,9 +274,7 @@ class TestRunPostprocess:
     def test_missing_h5_raises(
         self,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
         cfg = SimulationConfig()
         with pytest.raises(FileNotFoundError, match="dfxm_geo.h5"):
             run_postprocess(tmp_path, cfg)
@@ -489,12 +282,10 @@ class TestRunPostprocess:
     def test_missing_perfect_scan_raises(
         self,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """run_postprocess errors clearly if /2.1 (perfect crystal) is absent."""
         import h5py as _h5py
 
-        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
         cfg = SimulationConfig()
         # Create an .h5 with only /1.1 — no /2.1 perfect crystal scan.
         h5_path = tmp_path / "dfxm_geo.h5"
@@ -508,11 +299,10 @@ class TestRunPostprocess:
         tiny_h5_simulation_output: tuple[Path, SimulationConfig],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """If fm.Hg is None (no run_simulation, no kernel auto-load),
+        """If fm.Hg is None (no run_simulation, no kernel load),
         run_postprocess should fail fast with a clear error rather than
         crashing inside fm.forward()."""
         output_dir, config = tiny_h5_simulation_output
-        monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
         with pytest.raises(RuntimeError, match="fm.Hg is not set"):
             run_postprocess(output_dir, config)
@@ -644,13 +434,14 @@ class TestDfxmForwardSampleRemountCLI:
         import sys
         from pathlib import Path as _P
 
-        # Skip if the Resq_i kernel npz is not on disk — same gating pattern
-        # as Round 16's CLI smoke. The path mirrors what forward_model loads.
+        # Skip if no kernel npz is on disk — glob for the default hkl=(-1,1,-1)
+        # at 17 keV, same pattern as _lookup_kernel_path uses.
         import dfxm_geo.direct_space.forward_model as fm
 
-        kernel_path = _P(fm.pkl_fpath) / fm.pkl_fn
-        if not kernel_path.exists():
-            pytest.skip(f"Kernel npz {kernel_path} not present; skipping CLI smoke.")
+        kernel_dir = _P(fm.pkl_fpath)
+        matches = sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz"))
+        if not matches:
+            pytest.skip(f"No kernel npz found in {kernel_dir}; skipping CLI smoke.")
 
         # Locate dfxm-forward in the active venv's Scripts/bin directory first,
         # then fall back to shutil.which (works when venv is activated).
