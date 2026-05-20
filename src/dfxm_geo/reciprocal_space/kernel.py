@@ -366,13 +366,9 @@ def cli_main(argv: list[str] | None = None) -> int:
     # Build output path.
     if args.output is not None:
         output_path = args.output
-    elif raw_hkl is not None and raw_keV is not None:
-        # hkl + keV were explicitly given → build per-reflection filename.
+    else:
         date = datetime.now().strftime("%Y%m%d_%H%M")
         output_path = Path(fm.pkl_fpath) / _build_kernel_filename(hkl_tuple, keV_for_filename, date)
-    else:
-        # Soft-default branch (no hkl/keV in TOML) → keep legacy canonical path.
-        output_path = Path(fm.pkl_fpath) / fm.pkl_fn
 
     if output_path.exists():
         if args.if_missing:

@@ -157,7 +157,7 @@ class TestCliMain:
     def test_default_output_matches_forward_model_canonical_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With no --output, write to `<fm.pkl_fpath>/<fm.pkl_fn>`."""
+        """With no --output and no hkl/keV in TOML, write to <fm.pkl_fpath>/<per-reflection-filename> using the default Al (-1,1,-1) @ 17 keV pattern."""
         import os
 
         import dfxm_geo.direct_space.forward_model as fm
@@ -166,15 +166,14 @@ class TestCliMain:
         # Redirect the canonical path into tmp_path so we don't trip the
         # overwrite-guard on a checkout that already has the real kernel npz.
         monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + os.sep)
-        monkeypatch.setattr(fm, "pkl_fn", "Resq_i_canonical.npz")
 
         cfg = self._make_config(tmp_path)
-        seen: dict[str, object] = {}
+        captured_output_path: list[Path] = []
 
         def fake_generate(**kwargs: object) -> Path:
-            seen.update(kwargs)
             out = kwargs["output_path"]
             assert isinstance(out, Path)
+            captured_output_path.append(out)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(b"")
             return out
@@ -183,8 +182,8 @@ class TestCliMain:
 
         rc = kmod.cli_main(["--config", str(cfg)])
         assert rc == 0
-        expected = Path(fm.pkl_fpath) / fm.pkl_fn
-        assert seen["output_path"] == expected
+        assert captured_output_path[0].name.startswith("Resq_i_h-1_k1_l-1_17keV_")
+        assert captured_output_path[0].suffix == ".npz"
 
     def test_refuses_to_overwrite_without_force(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
