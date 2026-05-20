@@ -92,6 +92,20 @@ def _validate_reflection(
     return theta
 
 
+def _build_kernel_filename(
+    hkl: tuple[int, int, int],
+    keV: float,
+    date: str,
+) -> str:
+    """Per-reflection kernel npz basename: `Resq_i_h{h}_k{k}_l{l}_{keV}keV_{date}.npz`.
+
+    `:g` formatting drops trailing zeros on keV (17.0 → "17", 17.5 → "17.5").
+    Negative hkl components render naturally (-1 → "h-1").
+    """
+    h, k, l = hkl
+    return f"Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_{date}.npz"
+
+
 def generate_kernel(
     date: str | None = None,
     *,
