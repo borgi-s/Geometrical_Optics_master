@@ -542,3 +542,51 @@ class TestCliMainMultiReflection:
         assert rc == 0
         assert captured_output_path[0].name.startswith("Resq_i_h2_k0_l0_17keV_")
         assert captured_output_path[0].suffix == ".npz"
+
+    def test_no_hkl_no_keV_warns_and_uses_default(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """[reciprocal] without hkl/keV → exit 0, WARN to stderr, default reflection used."""
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        captured: dict[str, object] = {}
+
+        def fake_generate_kernel(
+            date: str | None = None,
+            *,
+            output_path: Path | None = None,
+            theta: float = 0.0,
+            **kwargs: object,
+        ) -> Path:
+            captured["theta"] = theta
+            assert output_path is not None
+            captured["output_path"] = output_path
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"")
+            return output_path
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate_kernel)
+
+        import dfxm_geo.direct_space.forward_model as fm
+
+        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + os.sep, raising=True)
+
+        cfg = tmp_path / "config.toml"
+        cfg.write_text("[reciprocal]\nNrays = 1000\n")
+        rc = kmod.cli_main(["--config", str(cfg)])
+        assert rc == 0
+
+        err = capsys.readouterr().err
+        assert "[reciprocal] has no" in err
+        assert "defaulting to Al" in err
+
+        # Default theta == _default_theta_al_111(17)
+        assert captured["theta"] == kmod._default_theta_al_111(17)
+
+        # Filename uses default reflection
+        out_path = captured["output_path"]
+        assert isinstance(out_path, Path)
+        assert out_path.name.startswith("Resq_i_h-1_k1_l-1_17keV_")
