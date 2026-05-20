@@ -116,6 +116,11 @@ module = [
     "psutil",
     "plotly.*",
     "mpl_toolkits.*",
+    "h5py",
+    "h5py.*",
+    "darfix.*",
+    "darling",
+    "silx.*",
 ]
 ignore_missing_imports = true
 

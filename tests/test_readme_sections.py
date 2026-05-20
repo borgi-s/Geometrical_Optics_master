@@ -1,4 +1,10 @@
-"""Smoke checks that README.md has the cluster + examples sections required by v1.0."""
+"""Smoke checks for essential README.md content.
+
+The exact section structure is fluid (README is rewritten periodically for
+audience changes — e.g. internal-developer-focused vs PyPI-landing-page).
+These tests check for durable substrings any user needs to find, not for
+specific headings.
+"""
 
 from pathlib import Path
 
@@ -9,35 +15,25 @@ def _text() -> str:
     return README.read_text(encoding="utf-8")
 
 
-class TestReadmeClusterSection:
-    def test_has_cluster_section(self) -> None:
-        text = _text()
-        assert "## Running on a cluster" in text or "# Running on a cluster" in text
-
-    def test_links_to_cluster_runs(self) -> None:
-        assert "docs/cluster-runs.md" in _text()
-
+class TestReadmeContent:
     def test_mentions_template_dirs(self) -> None:
+        """HPC users need to find the batch templates."""
         text = _text()
         assert "lsf/" in text
         assert "slurm/" in text
 
     def test_mentions_dfxm_bootstrap(self) -> None:
+        """Two-step workflow is the main install / run sequence."""
         assert "dfxm-bootstrap" in _text()
 
+    def test_mentions_dfxm_forward(self) -> None:
+        """The forward-simulation CLI is the primary user-facing tool."""
+        assert "dfxm-forward" in _text()
 
-class TestReadmeExamplesSection:
-    def test_has_examples_section(self) -> None:
-        text = _text()
-        assert "## Examples" in text or "# Examples" in text
+    def test_mentions_pip_install(self) -> None:
+        """Essential for a publishable package: users need a clear install path."""
+        assert "pip install" in _text()
 
-    def test_references_example_images(self) -> None:
-        text = _text()
-        for img in [
-            "docs/img/example_dislocs_frame.png",
-            "docs/img/example_mosaicity.png",
-        ]:
-            assert img in text, f"missing image reference: {img}"
-
-    def test_references_render_script(self) -> None:
-        assert "scripts/render_readme_examples.py" in _text()
+    def test_mentions_paper_doi(self) -> None:
+        """The IUCrJ 2024 paper is the canonical reference for the model."""
+        assert "10.1107/S1600576724001183" in _text()
