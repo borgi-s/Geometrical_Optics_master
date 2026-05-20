@@ -281,46 +281,47 @@ def _load_default_kernel(
 
     print(f"Loading kernel from {pkl_path}.")
     data = np.load(pkl_path)
+    try:
+        # Sub-project D: verify bundled metadata against the lookup request.
+        if expected_hkl is not None:
+            if "hkl" not in data.files:
+                raise KeyError(
+                    f"kernel at {pkl_path} lacks `hkl` metadata — "
+                    f"pre-sub-project-D bootstrap.\n"
+                    f"Re-run: dfxm-bootstrap --config <yourconfig.toml>"
+                )
+            meta_hkl = tuple(int(x) for x in data["hkl"])
+            if meta_hkl != tuple(expected_hkl):
+                raise ValueError(
+                    f"kernel at {pkl_path} has hkl={meta_hkl} but lookup requested "
+                    f"hkl={tuple(expected_hkl)} — file may have been manually "
+                    f"renamed or copied wrong."
+                )
+        if expected_keV is not None:
+            if "keV" not in data.files:
+                raise KeyError(
+                    f"kernel at {pkl_path} lacks `keV` metadata — "
+                    f"pre-sub-project-D bootstrap.\n"
+                    f"Re-run: dfxm-bootstrap --config <yourconfig.toml>"
+                )
+            meta_keV = float(data["keV"])
+            if meta_keV != expected_keV:
+                raise ValueError(
+                    f"kernel at {pkl_path} has keV={meta_keV} but lookup requested "
+                    f"keV={expected_keV} — file may have been manually renamed or "
+                    f"copied wrong."
+                )
 
-    # Sub-project D: verify bundled metadata against the lookup request.
-    if expected_hkl is not None:
-        if "hkl" not in data.files:
-            raise KeyError(
-                f"kernel at {pkl_path} lacks `hkl` metadata — "
-                f"pre-sub-project-D bootstrap.\n"
-                f"Re-run: dfxm-bootstrap --config <yourconfig.toml>"
-            )
-        meta_hkl = tuple(int(x) for x in data["hkl"])
-        if meta_hkl != tuple(expected_hkl):
-            raise ValueError(
-                f"kernel at {pkl_path} has hkl={meta_hkl} but lookup requested "
-                f"hkl={tuple(expected_hkl)} — file may have been manually "
-                f"renamed or copied wrong."
-            )
-    if expected_keV is not None:
-        if "keV" not in data.files:
-            raise KeyError(
-                f"kernel at {pkl_path} lacks `keV` metadata — "
-                f"pre-sub-project-D bootstrap.\n"
-                f"Re-run: dfxm-bootstrap --config <yourconfig.toml>"
-            )
-        meta_keV = float(data["keV"])
-        if meta_keV != expected_keV:
-            raise ValueError(
-                f"kernel at {pkl_path} has keV={meta_keV} but lookup requested "
-                f"keV={expected_keV} — file may have been manually renamed or "
-                f"copied wrong."
-            )
-
-    Resq_i = np.array(data["Resq_i"])
-    qi1_range = float(data["qi1_range"])
-    qi2_range = float(data["qi2_range"])
-    qi3_range = float(data["qi3_range"])
-    npoints1 = int(data["npoints1"])
-    npoints2 = int(data["npoints2"])
-    npoints3 = int(data["npoints3"])
-    data.close()
-    print("Kernel loaded.")
+        Resq_i = np.array(data["Resq_i"])
+        qi1_range = float(data["qi1_range"])
+        qi2_range = float(data["qi2_range"])
+        qi3_range = float(data["qi3_range"])
+        npoints1 = int(data["npoints1"])
+        npoints2 = int(data["npoints2"])
+        npoints3 = int(data["npoints3"])
+        print("Kernel loaded.")
+    finally:
+        data.close()
 
     qi1_start, qi1_step = -qi1_range / 2, qi1_range / (npoints1 - 1)
     qi2_start, qi2_step = -qi2_range / 2, qi2_range / (npoints2 - 1)
