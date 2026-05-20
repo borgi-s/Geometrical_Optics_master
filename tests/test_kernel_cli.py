@@ -83,12 +83,32 @@ class TestDefaultConfigReciprocalBlock:
             recip = tomllib.load(f)["reciprocal"]
 
         sig = inspect.signature(generate_kernel)
+        # hkl and keV are cli_main-scope reflection inputs, not generate_kernel kwargs.
+        cli_only_keys = {"hkl", "keV"}
         for key, val in recip.items():
+            if key in cli_only_keys:
+                continue
             assert key in sig.parameters, f"unknown kwarg {key} in [reciprocal]"
             default = sig.parameters[key].default
             assert default == val, (
                 f"[reciprocal].{key} = {val!r} drifted from generate_kernel default {default!r}"
             )
+
+    def test_default_toml_has_hkl_key(self) -> None:
+        """configs/default.toml must declare hkl explicitly for the
+        post-sub-project-A bootstrap to record the reflection in the filename."""
+        import tomllib
+
+        with open("configs/default.toml", "rb") as f:
+            data = tomllib.load(f)
+        assert data["reciprocal"]["hkl"] == [-1, 1, -1]
+
+    def test_default_toml_has_keV_key(self) -> None:
+        import tomllib
+
+        with open("configs/default.toml", "rb") as f:
+            data = tomllib.load(f)
+        assert data["reciprocal"]["keV"] == 17.0
 
 
 class TestCliMain:
