@@ -623,6 +623,7 @@ class TestCliMainFlags:
 class TestDfxmForwardSampleRemountCLI:
     """End-to-end CLI smoke: dfxm-forward with sample_remount=S2."""
 
+    @pytest.mark.slow
     def test_dfxm_forward_with_sample_remount_S2_runs(self, tmp_path: Path) -> None:
         import shutil
         import subprocess

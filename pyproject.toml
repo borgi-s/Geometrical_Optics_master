@@ -135,7 +135,8 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -m 'not bench'"
+addopts = "-ra --strict-markers -m 'not bench and not slow'"
 markers = [
     "bench: performance benchmarks (run with `pytest -m bench`); skipped by default",
+    "slow: slow integration tests >~1 min wall-clock (run with `pytest -m slow`); skipped by default",
 ]
