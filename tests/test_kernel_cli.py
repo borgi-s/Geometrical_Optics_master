@@ -42,6 +42,27 @@ class TestGenerateKernelOutputPath:
         # Defensive: no sidecar in CWD/pkl_files either.
         assert not (Path.cwd() / "pkl_files" / "Resq_i_explicit_vars.txt").exists()
 
+    def test_npz_bundles_hkl_and_keV_metadata(self, tmp_path: Path) -> None:
+        """Sub-project D: the npz must include `hkl` and `keV` as bundled scalars
+        so downstream load verification can confirm filename ↔ contents agree."""
+        from dfxm_geo.reciprocal_space.kernel import generate_kernel
+
+        out = tmp_path / "Resq_i_h2_k0_l0_17keV_test.npz"
+        generate_kernel(
+            Nrays=1000,
+            npoints1=20,
+            npoints2=20,
+            npoints3=20,
+            output_path=out,
+            hkl=(2, 0, 0),
+            keV=17.0,
+        )
+        loaded = np.load(out)
+        assert "hkl" in loaded.files
+        assert "keV" in loaded.files
+        assert tuple(int(x) for x in loaded["hkl"]) == (2, 0, 0)
+        assert float(loaded["keV"]) == 17.0
+
 
 class TestDefaultConfigReciprocalBlock:
     def test_default_toml_has_reciprocal_block(self) -> None:
@@ -295,7 +316,7 @@ class TestCliMain:
         """--if-missing skips silently (exit 0) when the destination already exists.
 
         Lets cluster batch templates call `dfxm-bootstrap --if-missing` as an
-        idempotent guard without parsing pkl_fn or hardcoding the filename.
+        idempotent guard without hardcoding the kernel filename.
         """
         from dfxm_geo.reciprocal_space import kernel as kmod
 
@@ -680,22 +701,3 @@ class TestCliMainMultiReflection:
         err = capsys.readouterr().err
         assert "Bragg condition unsatisfiable" in err
         assert "lam=" in err or "lambda" in err.lower()
-
-
-class TestPklFnRegression:
-    def test_pkl_fn_matches_new_pattern(self) -> None:
-        """pkl_fn must follow the per-reflection pattern from sub-project A.
-
-        After bootstrap regen, the user updates the literal value to the
-        produced filename; this regression guard ensures it stays
-        pattern-conforming and doesn't silently revert to the old
-        Resq_i_<date>.npz format.
-        """
-        import re
-
-        import dfxm_geo.direct_space.forward_model as fm
-
-        assert re.fullmatch(
-            r"Resq_i_h-1_k1_l-1_17keV_\d{8}_\d{4}\.npz",
-            fm.pkl_fn,
-        ), f"pkl_fn={fm.pkl_fn!r} does not match the new per-reflection pattern"

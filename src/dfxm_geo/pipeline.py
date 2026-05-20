@@ -96,6 +96,43 @@ class PostprocessConfig:
 
 
 @dataclass
+class ReciprocalConfig:
+    """Sub-project D: reflection identity for kernel lookup.
+
+    The TOML ``[reciprocal]`` block carries both this (small, consumed by
+    forward + identify) and bootstrap's MC params (large, consumed only by
+    `dfxm-bootstrap`). This dataclass holds only the lookup-relevant keys.
+    """
+
+    hkl: tuple[int, int, int]
+    keV: float
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> ReciprocalConfig:
+        if data is None:
+            raise ValueError(
+                "missing [reciprocal] block — forward/identify require explicit "
+                "hkl + keV; see configs/default.toml."
+            )
+        if "hkl" not in data:
+            raise ValueError("missing `hkl` in [reciprocal] — required for kernel lookup.")
+        if "keV" not in data:
+            raise ValueError("missing `keV` in [reciprocal] — required for kernel lookup.")
+        hkl = tuple(data["hkl"])
+        keV = float(data["keV"])
+        # Early validation per spec — catches typos / Bragg-unsatisfiable
+        # before the kernel lookup. Propagates A's ValueErrors verbatim.
+        from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+        # TODO(non-Al materials): hardcoded Al lattice parameter; revisit if/when
+        # the codebase supports other crystals. Tracked as deferred work in the
+        # sub-project A spec ("materials other than Al") and in the sub-project D
+        # spec ("out of scope").
+        _validate_reflection(hkl, keV, 4.0495e-10)
+        return cls(hkl=hkl, keV=keV)
+
+
+@dataclass
 class SimulationConfig:
     crystal: CrystalConfig = field(default_factory=CrystalConfig)
     scan: ScanConfig = field(
@@ -108,6 +145,10 @@ class SimulationConfig:
     )
     io: IOConfig = field(default_factory=IOConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
+    # Sub-project D: optional in Python construction (defaults to None for
+    # back-compat with test fixtures). `from_toml` requires it; `run_simulation`
+    # raises if None at runtime.
+    reciprocal: ReciprocalConfig | None = None
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -118,7 +159,10 @@ class SimulationConfig:
         scan = ScanConfig(**raw["scan"])
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
-        return cls(crystal=crystal, scan=scan, io=io, postprocess=postprocess)
+        reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
+        return cls(
+            crystal=crystal, scan=scan, io=io, postprocess=postprocess, reciprocal=reciprocal
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -186,6 +230,9 @@ class IdentificationConfig:
     io: IOConfig
     multi: IdentificationMonteCarloConfig | None = None
     zscan: IdentificationZScanConfig | None = None
+    # Sub-project D: optional in Python construction; load_identification_config
+    # requires it.
+    reciprocal: ReciprocalConfig | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in ("single", "multi", "z-scan"):
@@ -239,6 +286,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         IdentificationMonteCarloConfig(**data["multi"]) if data.get("multi") is not None else None
     )
     zscan = IdentificationZScanConfig(**data["zscan"]) if data.get("zscan") is not None else None
+    reciprocal = ReciprocalConfig.from_dict(data.get("reciprocal"))
 
     return IdentificationConfig(
         mode=data["mode"],
@@ -247,30 +295,36 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         io=io,
         multi=multi,
         zscan=zscan,
+        reciprocal=reciprocal,
     )
 
 
-def _ensure_kernel_loaded() -> None:
-    """Pre-flight: verify the reciprocal-space kernel is loaded.
+def _lookup_and_load_kernel(
+    hkl: tuple[int, int, int],
+    keV: float,
+) -> None:
+    """Pre-flight: look up the kernel npz matching (hkl, keV) and load it.
 
-    If the canonical kernel npz is on disk but the import-time auto-load didn't
-    populate state (e.g. it ran before bootstrap in the same process), this
-    function calls ``fm._load_default_kernel(...)`` to recover. If the kernel npz
-    is missing altogether, raises ``FileNotFoundError`` with a clear
-    `dfxm-bootstrap` instruction.
+    Sub-project D replacement for `_ensure_kernel_loaded()`. Composes:
+    1. `fm._lookup_kernel_path(hkl, keV, fm.pkl_fpath)` — glob + newest pick.
+    2. `fm._load_default_kernel(path, expected_hkl=hkl, expected_keV=keV)` —
+       load + bundled-metadata verification.
+
+    Idempotent for the same (hkl, keV): if `fm._loaded_kernel_path` already
+    matches what we'd look up, skip the reload. (Helpful for test loops and
+    interactive REPL.)
+
+    Raises FileNotFoundError on lookup miss, ValueError on metadata mismatch,
+    KeyError on pre-sub-project-D legacy npz lacking metadata.
     """
-    if fm.Resq_i is not None:
-        return  # auto-load already populated state at import (common case)
-    pkl_path = Path(fm.pkl_fpath) / fm.pkl_fn
-    if not pkl_path.is_file():
-        raise FileNotFoundError(
-            f"Reciprocal-space kernel npz not found at {pkl_path}.\n"
-            "Run 'dfxm-bootstrap --config <your.toml>' to generate it "
-            "(takes ~50 s for default Nrays=1e8). See docs/cluster-runs.md "
-            "for the full cluster workflow."
-        )
-    # Kernel npz is on disk but Resq_i is None — load it explicitly.
-    fm._load_default_kernel(str(pkl_path))
+    target = fm._lookup_kernel_path(hkl, keV, fm.pkl_fpath)
+    if fm._loaded_kernel_path == target:
+        return
+    fm._load_default_kernel(
+        str(target),
+        expected_hkl=hkl,
+        expected_keV=keV,
+    )
 
 
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
@@ -292,17 +346,23 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         fm.Nsub,
         config.crystal.sample_remount,
     )
+    if config.reciprocal is None:
+        raise ValueError(
+            "SimulationConfig.reciprocal is None — must specify [reciprocal] "
+            "block in TOML or set it programmatically before calling run_simulation."
+        )
+    _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
+
     print(
         f"[dfxm-forward] effective config:\n"
         f"  Nsub={fm.Nsub}  Npixels={fm.Npixels}  NN1={fm.NN1}  NN2={fm.NN2}\n"
-        f"  kernel={fm.pkl_fpath}{fm.pkl_fn}\n"
+        f"  kernel={fm._loaded_kernel_path}\n"
         f"  Fg cache={_expected_fg}\n"
         f"  dis={config.crystal.dis}  ndis={config.crystal.ndis}  "
         f"remount={config.crystal.sample_remount}",
         flush=True,
     )
 
-    _ensure_kernel_loaded()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     S = SAMPLE_REMOUNT_OPTIONS[config.crystal.sample_remount]
@@ -357,6 +417,12 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
         "io": _asdict(config.io),
         "postprocess": _asdict(config.postprocess),
     }
+    # Sub-project D: include [reciprocal] so the HDF5-embedded config_toml
+    # round-trips through SimulationConfig.from_toml without raising
+    # "missing [reciprocal] block". Skipped if None (legacy SimulationConfig()
+    # programmatic construction without reciprocal).
+    if config.reciprocal is not None:
+        sections["reciprocal"] = _asdict(config.reciprocal)
     lines: list[str] = []
     for name, body in sections.items():
         lines.append(f"[{name}]")
@@ -367,6 +433,9 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
                 lines.append(f'{k} = "{v}"')
             elif isinstance(v, bool):
                 lines.append(f"{k} = {'true' if v else 'false'}")
+            elif isinstance(v, tuple):
+                # Tuples (e.g. reciprocal.hkl = (h, k, l)) render as TOML arrays.
+                lines.append(f"{k} = {list(v)}")
             else:
                 lines.append(f"{k} = {v}")
         lines.append("")
@@ -383,19 +452,15 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         When invoked via ``--postprocess-only`` against an output dir whose
         stacks were produced with non-default ``dis`` / ``ndis``, the qi field
         is computed against the *module-level* ``fm.Hg``. If no prior
-        ``run_simulation`` set ``fm.Hg`` in this process, it will fall back to
-        the default kernel auto-load — which may not match the saved stacks.
-        For correctness in that workflow, assign ``fm.Hg`` explicitly before
-        calling this function.
+        ``run_simulation`` set ``fm.Hg`` in this process, ``fm.Hg`` will be
+        None and this function will raise RuntimeError. For correctness in that
+        workflow, call ``pipeline._lookup_and_load_kernel(hkl, keV)`` and
+        assign ``fm.Hg`` explicitly before calling this function.
 
     Raises:
         FileNotFoundError: if the expected dfxm_geo.h5 file is absent.
         FileNotFoundError: if /2.1 (perfect crystal scan) is missing from the .h5.
-        FileNotFoundError: from :func:`_ensure_kernel_loaded` if the
-            reciprocal-space kernel npz is missing.
     """
-    _ensure_kernel_loaded()
-
     h5_path = output_dir / "dfxm_geo.h5"
     if not h5_path.is_file():
         raise FileNotFoundError(
@@ -959,6 +1024,13 @@ def run_identification(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode."""
+    if config.reciprocal is None:
+        raise ValueError(
+            "IdentificationConfig.reciprocal is None — must specify [reciprocal] "
+            "block in TOML or set it programmatically before calling run_identification."
+        )
+    _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
+
     if config.mode == "single":
         return _run_identification_single(config, output_dir)
     if config.mode == "multi":

@@ -12,6 +12,7 @@ from dfxm_geo.pipeline import (
     IdentificationMonteCarloConfig,
     IdentificationScanConfig,
     IOConfig,
+    ReciprocalConfig,
     _run_identification_multi,
     _run_identification_single,
     cli_main_identify,
@@ -145,6 +146,10 @@ ftype = ".npy"
 dislocs_dirname = "identify"
 perfect_dirname = "ignored"
 include_perfect_crystal = false
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
 """
     cfg_path = tmp_path / "identification_single.toml"
     cfg_path.write_text(toml_text, encoding="utf-8")
@@ -179,6 +184,10 @@ ftype = ".npy"
 dislocs_dirname = "identify_multi"
 perfect_dirname = "ignored"
 include_perfect_crystal = false
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
 """
     cfg_path = tmp_path / "identification_multi.toml"
     cfg_path.write_text(toml_text, encoding="utf-8")
@@ -211,6 +220,7 @@ def _tiny_single_config(tmp_path):
             exclude_invisibility=False,  # don't filter
         ),
         scan=IdentificationScanConfig(rng_seed=0, intensity_scale=1.0),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         io=_make_io_config(),
     )
 
@@ -246,6 +256,7 @@ def _tiny_multi_config():
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
         scan=IdentificationScanConfig(rng_seed=0, intensity_scale=1.0),
         multi=IdentificationMonteCarloConfig(n_samples=3, pos_std_um=2.0, n_png_previews=2),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         io=_make_io_config(),
     )
 
@@ -310,10 +321,12 @@ def test_run_identification_dispatches_to_single(tmp_path, monkeypatch):
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo import pipeline
 
     monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+    monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
 
     cfg = _tiny_single_config(tmp_path)
     result = run_identification(cfg, tmp_path / "out")
@@ -324,10 +337,12 @@ def test_run_identification_dispatches_to_multi(tmp_path, monkeypatch):
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo import pipeline
 
     monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+    monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
 
     cfg = _tiny_multi_config()
     result = run_identification(cfg, tmp_path / "out")
@@ -339,10 +354,12 @@ def test_cli_main_identify_parses_args(tmp_path, monkeypatch):
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo import pipeline
 
     monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+    monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
 
     toml_text = """
 mode = "single"
@@ -368,6 +385,10 @@ ftype = ".npy"
 dislocs_dirname = "identify"
 perfect_dirname = "ignored"
 include_perfect_crystal = false
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
 """
     cfg_path = tmp_path / "id.toml"
     cfg_path.write_text(toml_text, encoding="utf-8")
@@ -408,9 +429,10 @@ def test_dfxm_identify_cli_end_to_end(tmp_path):
 
     import dfxm_geo.direct_space.forward_model as fm
 
-    pkl = Path(fm.pkl_fpath) / fm.pkl_fn
-    if not pkl.is_file():
-        pytest.skip(f"kernel npz missing: {pkl}")
+    kernel_dir = Path(fm.pkl_fpath)
+    matches = sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz"))
+    if not matches:
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
 
     toml_text = """
 mode = "single"
@@ -436,6 +458,10 @@ ftype = ".npy"
 dislocs_dirname = "identify"
 perfect_dirname = "ignored"
 include_perfect_crystal = false
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
 """
     cfg_path = tmp_path / "smoke.toml"
     cfg_path.write_text(toml_text, encoding="utf-8")
@@ -513,6 +539,7 @@ def _tiny_zscan_config(slip_plane=(1, 1, 1)):
             chi_steps=2,
             include_secondary=False,
         ),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         io=_make_io_config(),
     )
 
@@ -584,6 +611,10 @@ ftype = ".npy"
 dislocs_dirname = "identify_zscan"
 perfect_dirname = "ignored"
 include_perfect_crystal = false
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
 """
     cfg_path = tmp_path / "id_zscan.toml"
     cfg_path.write_text(toml_text, encoding="utf-8")
@@ -658,6 +689,7 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
             chi_steps=2,
             include_secondary=True,  # exercise the secondary draw
         ),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         io=_make_io_config(),
     )
 
@@ -676,10 +708,12 @@ def test_run_identification_dispatches_to_zscan(tmp_path, monkeypatch):
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo import pipeline
 
     monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+    monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
 
     cfg = _tiny_zscan_config()
     result = run_identification(cfg, tmp_path / "out")
@@ -691,10 +725,12 @@ def test_cli_main_identify_zscan_mode(tmp_path, monkeypatch):
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo import pipeline
 
     monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+    monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
 
     toml_text = """
 mode = "z-scan"
@@ -728,6 +764,10 @@ ftype = ".npy"
 dislocs_dirname = "identify_zscan"
 perfect_dirname = "ignored"
 include_perfect_crystal = false
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
 """
     cfg_path = tmp_path / "zscan.toml"
     cfg_path.write_text(toml_text, encoding="utf-8")

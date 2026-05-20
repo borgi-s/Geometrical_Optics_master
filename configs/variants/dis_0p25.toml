@@ -17,3 +17,7 @@ ftype = ".npy"
 dislocs_dirname = "images_dis0p25"
 perfect_dirname = "images_dis0p25_perf_crystal"
 include_perfect_crystal = true
+
+[reciprocal]
+hkl = [-1, 1, -1]   # Al 111 reflection — preserves pre-D implicit default
+keV = 17.0

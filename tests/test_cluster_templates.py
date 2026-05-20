@@ -195,10 +195,9 @@ class TestLsfNoModuleLoadPython:
 
 
 class TestNoHardcodedKernelPickleFilename:
-    """No cluster template should grep its filesystem for a specific
-    `Resq_i_<date>.pkl`. The canonical pickle filename comes from
-    `dfxm_geo.direct_space.forward_model.pkl_fn` and rotates whenever the
-    kernel is regenerated. Templates use `dfxm-bootstrap --if-missing` instead.
+    """No cluster template should hardcode a specific `Resq_i_<date>.pkl` or
+    `Resq_i_<date>.npz` filename. Kernel files rotate whenever the kernel is
+    regenerated; templates use `dfxm-bootstrap --if-missing` instead.
     """
 
     TEMPLATES = (

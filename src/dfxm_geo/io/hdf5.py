@@ -411,7 +411,12 @@ def write_simulation_h5(
 
     # Resolve kernel path for provenance hashing if not given.
     if kernel_npz is None:
-        kernel_npz = Path(_fm.pkl_fpath) / _fm.pkl_fn
+        kernel_npz = _fm._loaded_kernel_path
+        if kernel_npz is None:
+            raise RuntimeError(
+                "no kernel loaded — call _lookup_and_load_kernel(hkl, keV) "
+                "before writing HDF5 provenance."
+            )
 
     Phi = np.linspace(-np.deg2rad(phi_range), np.deg2rad(phi_range), phi_steps)
     Chi = np.linspace(-np.deg2rad(chi_range), np.deg2rad(chi_range), chi_steps)

@@ -30,3 +30,7 @@ phi_oversample = 20
 chi_oversample_for_shift = 100
 figures_dirname = "figures"
 data_dirname = "analysis"
+
+[reciprocal]
+hkl = [-1, 1, -1]   # Al 111 reflection — preserves pre-D implicit default
+keV = 17.0
