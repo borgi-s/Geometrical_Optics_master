@@ -63,6 +63,11 @@ pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
 # `dfxm-bootstrap` on each host (laptop ran 2026-05-20 20:14).
 pkl_fn = "Resq_i_h-1_k1_l-1_17keV_20260520_2014.npz"  # Update after `dfxm-bootstrap` regen (per-reflection pattern)
 
+# Sub-project D: set by `_load_default_kernel` on successful load; read by
+# `io/hdf5.py` and `io/migrate.py` for provenance recording. `None` until a
+# kernel is loaded.
+_loaded_kernel_path: Path | None = None
+
 theta = theta_0
 yl_start = -psize * Npixels / 2 + psize / (
     2 * Nsub
@@ -228,7 +233,10 @@ def Find_Hg(
 
 
 def _load_default_kernel(
-    pkl_path: str | None = None,
+    pkl_path: str | Path | None = None,
+    *,
+    expected_hkl: tuple[int, int, int] | None = None,
+    expected_keV: float | None = None,
     compute_Hg: bool = True,
 ) -> None:
     """Load the reciprocal-space resolution kernel from disk into module state.
@@ -241,10 +249,25 @@ def _load_default_kernel(
     `npoints1`/`npoints2`/`npoints3`, `qi1_start`/`qi1_step`/etc.,
     `qi_starts`, `qi_steps`. If `compute_Hg=True`, also computes the default
     `Hg`/`q_hkl` by calling `Find_Hg(dis, ndis, psize, zl_rms)`.
+
+    Args:
+        pkl_path: Path to the .npz kernel file. Defaults to the module-level
+            ``pkl_fpath / pkl_fn`` constant if None.
+        expected_hkl: If given, verify that the kernel's bundled ``hkl``
+            metadata matches. Raises ``KeyError`` if the metadata is absent
+            (pre-sub-project-D bootstrap), ``ValueError`` on mismatch.
+        expected_keV: If given, verify that the kernel's bundled ``keV``
+            metadata matches. Raises ``KeyError`` if the metadata is absent,
+            ``ValueError`` on mismatch.
+        compute_Hg: If True (default), also compute the default ``Hg``/
+            ``q_hkl`` by calling ``Find_Hg(dis, ndis, psize, zl_rms)``.
+
+    On success, sets ``_loaded_kernel_path`` to the resolved ``Path``.
     """
     global Resq_i, qi1_range, qi2_range, qi3_range, npoints1, npoints2, npoints3
     global qi1_start, qi2_start, qi3_start, qi1_step, qi2_step, qi3_step
     global qi_starts, qi_steps, Hg, q_hkl
+    global _loaded_kernel_path
 
     if pkl_path is None:
         pkl_path = os.path.join(pkl_fpath, pkl_fn)
@@ -257,14 +280,46 @@ def _load_default_kernel(
         )
 
     print(f"Loading kernel from {pkl_path}.")
-    with np.load(pkl_path) as arch:
-        Resq_i = np.array(arch["Resq_i"])
-        qi1_range = float(arch["qi1_range"])
-        qi2_range = float(arch["qi2_range"])
-        qi3_range = float(arch["qi3_range"])
-        npoints1 = int(arch["npoints1"])
-        npoints2 = int(arch["npoints2"])
-        npoints3 = int(arch["npoints3"])
+    data = np.load(pkl_path)
+
+    # Sub-project D: verify bundled metadata against the lookup request.
+    if expected_hkl is not None:
+        if "hkl" not in data.files:
+            raise KeyError(
+                f"kernel at {pkl_path} lacks `hkl` metadata — "
+                f"pre-sub-project-D bootstrap.\n"
+                f"Re-run: dfxm-bootstrap --config <yourconfig.toml>"
+            )
+        meta_hkl = tuple(int(x) for x in data["hkl"])
+        if meta_hkl != tuple(expected_hkl):
+            raise ValueError(
+                f"kernel at {pkl_path} has hkl={meta_hkl} but lookup requested "
+                f"hkl={tuple(expected_hkl)} — file may have been manually "
+                f"renamed or copied wrong."
+            )
+    if expected_keV is not None:
+        if "keV" not in data.files:
+            raise KeyError(
+                f"kernel at {pkl_path} lacks `keV` metadata — "
+                f"pre-sub-project-D bootstrap.\n"
+                f"Re-run: dfxm-bootstrap --config <yourconfig.toml>"
+            )
+        meta_keV = float(data["keV"])
+        if meta_keV != expected_keV:
+            raise ValueError(
+                f"kernel at {pkl_path} has keV={meta_keV} but lookup requested "
+                f"keV={expected_keV} — file may have been manually renamed or "
+                f"copied wrong."
+            )
+
+    Resq_i = np.array(data["Resq_i"])
+    qi1_range = float(data["qi1_range"])
+    qi2_range = float(data["qi2_range"])
+    qi3_range = float(data["qi3_range"])
+    npoints1 = int(data["npoints1"])
+    npoints2 = int(data["npoints2"])
+    npoints3 = int(data["npoints3"])
+    data.close()
     print("Kernel loaded.")
 
     qi1_start, qi1_step = -qi1_range / 2, qi1_range / (npoints1 - 1)
@@ -275,6 +330,50 @@ def _load_default_kernel(
 
     if compute_Hg:
         Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
+
+    _loaded_kernel_path = Path(pkl_path)
+
+
+def _lookup_kernel_path(
+    hkl: tuple[int, int, int],
+    keV: float,
+    pkl_fpath: str | Path,
+) -> Path:
+    """Find the newest kernel npz on disk matching the requested (hkl, keV).
+
+    Globs ``<pkl_fpath>/Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_*.npz``, sorts by
+    mtime descending, returns the newest. Emits a stderr WARN listing all
+    matches when more than one exists. Raises FileNotFoundError with a
+    ``dfxm-bootstrap`` instruction on zero matches.
+
+    Sub-project D: replaces the previous ``pkl_fn``-constant lookup.
+    """
+    import sys
+
+    h, k, l = hkl
+    pkl_fpath = Path(pkl_fpath)
+    pattern = f"Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_*.npz"
+    matches = sorted(
+        pkl_fpath.glob(pattern),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not matches:
+        raise FileNotFoundError(
+            f"no kernel found for hkl={hkl} at {keV} keV in {pkl_fpath}/.\n"
+            f"Run: dfxm-bootstrap --config <yourconfig.toml>\n"
+            f"(produces Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_<date>.npz, "
+            f"~50 s wall-clock at default Nrays=1e8)"
+        )
+    if len(matches) > 1:
+        lines = [
+            f"warning: found {len(matches)} kernels matching hkl={hkl} keV={keV:g} in {pkl_fpath}:"
+        ]
+        for i, m in enumerate(matches):
+            tag = "  (newest, will use)" if i == 0 else ""
+            lines.append(f"  {m.name}{tag}")
+        print("\n".join(lines), file=sys.stderr)
+    return matches[0]
 
 
 def forward(
