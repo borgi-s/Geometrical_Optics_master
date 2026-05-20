@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+import h5py
 import numpy as np
 
 import dfxm_geo.direct_space.forward_model as fm
@@ -40,7 +41,10 @@ from dfxm_geo.crystal.dislocations import (
 )
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
-from dfxm_geo.io.images import load_images, save_images_parallel
+from dfxm_geo.io.hdf5 import load_h5_scan, write_simulation_h5
+from dfxm_geo.io.images import (  # save_images_parallel: zscan runner
+    save_images_parallel,
+)
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
 
@@ -272,13 +276,9 @@ def _ensure_kernel_loaded() -> None:
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
     """Execute a DFXM forward-simulation run from a config object.
 
-    Computes Hg via `Find_Hg(dis, ndis, psize, zl_rms)`, then sweeps the
-    (phi, chi) grid and writes one .npy per (phi_step, chi_step) into
-    `output_dir/<io.dislocs_dirname>/`. If `io.include_perfect_crystal` is
-    true, also runs a parallel sweep with Hg=0 into
-    `output_dir/<io.perfect_dirname>/`.
-
-    Returns a dict with the resolved output paths and the computed Hg/q_hkl.
+    Writes one `<output_dir>/dfxm_geo.h5` containing BLISS scan `/1.1`
+    (dislocations) and, if `io.include_perfect_crystal=True`, `/2.1`
+    (Hg=0 reference). Provenance + per-scan metadata are also embedded.
     """
     _ensure_kernel_loaded()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -292,54 +292,70 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         S=S,
         remount_name=config.crystal.sample_remount,
     )
-    # Forward() reads the module-level q_hkl global. Find_Hg() returns a new
-    # one based on its h/k/l args but does not update the global itself. Sync
-    # them so the rocking sweep uses the same reflection that Hg was built for.
     fm.Hg = Hg
     fm.q_hkl = q_hkl
 
-    dislocs_path = output_dir / config.io.dislocs_dirname
-    save_images_parallel(
-        Hg,
-        config.scan.phi_range,
-        config.scan.phi_steps,
-        config.scan.chi_range,
-        config.scan.chi_steps,
-        str(dislocs_path),
-        config.io.fn_prefix,
-        config.io.ftype,
+    config_toml = _dataclass_to_toml_str(config)
+
+    h5_path = output_dir / "dfxm_geo.h5"
+    write_simulation_h5(
+        h5_path,
+        Hg=Hg,
+        q_hkl=q_hkl,
+        phi_range=config.scan.phi_range,
+        phi_steps=config.scan.phi_steps,
+        chi_range=config.scan.chi_range,
+        chi_steps=config.scan.chi_steps,
+        include_perfect_crystal=config.io.include_perfect_crystal,
+        sample_dis=config.crystal.dis,
+        sample_ndis=config.crystal.ndis,
+        sample_remount=config.crystal.sample_remount,
+        config_toml=config_toml,
+        cli=" ".join(sys.argv),
         max_workers=config.io.max_workers,
     )
-
-    perfect_path: Path | None = None
-    if config.io.include_perfect_crystal:
-        perfect_path = output_dir / config.io.perfect_dirname
-        save_images_parallel(
-            np.zeros_like(Hg),
-            config.scan.phi_range,
-            config.scan.phi_steps,
-            config.scan.chi_range,
-            config.scan.chi_steps,
-            str(perfect_path),
-            config.io.fn_prefix,
-            config.io.ftype,
-            max_workers=config.io.max_workers,
-        )
-
     return {
-        "dislocs_path": dislocs_path,
-        "perfect_path": perfect_path,
+        "h5_path": h5_path,
         "Hg": Hg,
         "q_hkl": q_hkl,
+        "include_perfect_crystal": config.io.include_perfect_crystal,
     }
 
 
-def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any]:
-    """Stages 2-4 of init_forward.py against an existing output_dir.
+def _dataclass_to_toml_str(config: SimulationConfig) -> str:
+    """Serialize a SimulationConfig back to TOML-formatted text.
 
-    Reads the perfect and dislocated stacks from disk, computes the χ-shift
-    correction, computes per-pixel COM maps, calls forward() for the qi field
-    at z=0, then writes data products and SVGs under output_dir.
+    Simple implementation: write the four sub-sections as TOML tables.
+    """
+    from dataclasses import asdict as _asdict
+
+    sections = {
+        "crystal": _asdict(config.crystal),
+        "scan": _asdict(config.scan),
+        "io": _asdict(config.io),
+        "postprocess": _asdict(config.postprocess),
+    }
+    lines: list[str] = []
+    for name, body in sections.items():
+        lines.append(f"[{name}]")
+        for k, v in body.items():
+            if v is None:
+                continue  # TOML has no null; skip
+            if isinstance(v, str):
+                lines.append(f'{k} = "{v}"')
+            elif isinstance(v, bool):
+                lines.append(f"{k} = {'true' if v else 'false'}")
+            else:
+                lines.append(f"{k} = {v}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any]:
+    """Read /1.1 and /2.1 from dfxm_geo.h5; compute χ-shift, COM maps, qi field.
+
+    Analysis outputs are written into /1.1/dfxm_geo/analysis/ inside the same
+    HDF5 file. SVG figures land on disk under <output_dir>/figures/ (F1).
 
     Warning:
         When invoked via ``--postprocess-only`` against an output dir whose
@@ -351,50 +367,46 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         calling this function.
 
     Raises:
-        FileNotFoundError: if either expected stack directory is absent.
+        FileNotFoundError: if the expected dfxm_geo.h5 file is absent.
+        FileNotFoundError: if /2.1 (perfect crystal scan) is missing from the .h5.
         FileNotFoundError: from :func:`_ensure_kernel_loaded` if the
             reciprocal-space kernel npz is missing.
     """
     _ensure_kernel_loaded()
 
-    dislocs_path = output_dir / config.io.dislocs_dirname
-    perfect_path = output_dir / config.io.perfect_dirname
-
-    if not dislocs_path.is_dir():
+    h5_path = output_dir / "dfxm_geo.h5"
+    if not h5_path.is_file():
         raise FileNotFoundError(
-            f"Expected dislocs stack at {dislocs_path}; run dfxm-forward "
-            "without --postprocess-only first."
-        )
-    if not perfect_path.is_dir():
-        raise FileNotFoundError(
-            f"Expected perfect-crystal stack at {perfect_path}; run "
-            "dfxm-forward without --postprocess-only first."
+            f"Expected {h5_path}; run dfxm-forward without --postprocess-only first."
         )
 
-    _, dis_reshape, _, _ = load_images(
-        str(dislocs_path),
-        config.scan.phi_steps,
-        config.scan.chi_steps,
-        file_ext=config.io.ftype,
+    # Sanity-check that /2.1 exists (chi-shift needs perfect crystal).
+    with h5py.File(h5_path, "r") as f:
+        if "/2.1" not in f:
+            raise FileNotFoundError(
+                f"{h5_path} has no /2.1 scan (perfect crystal). Re-run with "
+                "include_perfect_crystal=True, or skip postprocess."
+            )
+
+    _, dis_reshape, _, _ = load_h5_scan(
+        h5_path,
+        scan_id="1.1",
+        phi_steps=config.scan.phi_steps,
+        chi_steps=config.scan.chi_steps,
     )
-    _, perf_reshape, _, _ = load_images(
-        str(perfect_path),
-        config.scan.phi_steps,
-        config.scan.chi_steps,
-        file_ext=config.io.ftype,
+    _, perf_reshape, _, _ = load_h5_scan(
+        h5_path,
+        scan_id="2.1",
+        phi_steps=config.scan.phi_steps,
+        chi_steps=config.scan.chi_steps,
     )
 
-    # Stage 2: χ-shift
     chi_shift = compute_chi_shift(
         perf_reshape,
         config.scan.chi_steps,
         config.scan.chi_range,
         oversample=config.postprocess.chi_oversample_for_shift,
     )
-
-    # Stage 3: per-pixel COM maps. The original script uses the same oversample
-    # factor for both axes; we keep them independent in the API but they
-    # default to the same value.
     phi_list, chi_list = compute_com_maps(
         dis_reshape,
         config.scan.phi_range,
@@ -405,25 +417,24 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         oversample=config.postprocess.phi_oversample,
         chi_oversample=config.postprocess.chi_oversample,
     )
-
-    # Stage 4: qi field at z=0 via a single forward() call. Uses module-level
-    # Hg as left by run_simulation (or the default load).
     if fm.Hg is None:
-        raise RuntimeError(
-            "fm.Hg is not set. Call run_simulation() first or assign fm.Hg "
-            "before calling run_postprocess()."
-        )
+        raise RuntimeError("fm.Hg is not set. Call run_simulation() first.")
     _, qi_field = fm.forward(fm.Hg, phi=0, qi_return=True)
 
-    # Persist data products.
-    data_dir = output_dir / config.postprocess.data_dirname
-    data_dir.mkdir(parents=True, exist_ok=True)
-    np.save(data_dir / "phi_list.npy", phi_list)
-    np.save(data_dir / "chi_list.npy", chi_list)
-    np.save(data_dir / "qi_field.npy", qi_field)
-    (data_dir / "chi_shift_deg.txt").write_text(f"{chi_shift}\n", encoding="utf-8")
+    # Append analysis to /1.1/dfxm_geo/analysis/ inside the existing .h5
+    with h5py.File(h5_path, "a") as f:
+        analysis = f.require_group("/1.1/dfxm_geo/analysis")
+        for name, val in [
+            ("phi_list", phi_list),
+            ("chi_list", chi_list),
+            ("qi_field", qi_field),
+            ("chi_shift_deg", float(chi_shift)),
+        ]:
+            if name in analysis:
+                del analysis[name]
+            analysis.create_dataset(name, data=val)
 
-    # Render figures.
+    # F1: render SVG figures on disk alongside the .h5
     fig_dir = output_dir / config.postprocess.figures_dirname
     fig_dir.mkdir(parents=True, exist_ok=True)
     plot_mosaicity_maps(
@@ -442,13 +453,12 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         fm.zl_steps,
         fig_dir / "qi_cross_section.svg",
     )
-
     return {
         "phi_list": phi_list,
         "chi_list": chi_list,
         "qi_field": qi_field,
         "chi_shift": chi_shift,
-        "data_dir": data_dir,
+        "h5_path": h5_path,
         "figures_dir": fig_dir,
     }
 

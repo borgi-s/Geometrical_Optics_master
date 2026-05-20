@@ -108,6 +108,18 @@ Use `--no-postprocess` to stop after stage 3, or `--postprocess-only` to
 re-run stages 4–5 against an existing output directory (see "CLI entry point"
 below).
 
+## Output file format
+
+Since v1.1.0, `dfxm-forward` writes a single BLISS-style HDF5 file (`dfxm_geo.h5`) per simulation, replacing the legacy `images10/` directory of per-frame `.npy` files. See [output-format.md](output-format.md) for the full schema.
+
+Key properties:
+- One file per `run_simulation` call; 1-2 BLISS scans inside (`/1.1` dislocations, `/2.1` optional perfect crystal).
+- `/dfxm_geo/` root group embeds full provenance (git SHA, kernel hash, config TOML, machine, timestamps).
+- Compatible with darfix and darling out of the box.
+- Per-frame chunks + gzip-4 + shuffle compression: ~3-5× space savings vs raw `.npy`.
+
+Legacy `.npy` output directories can be converted via `dfxm-migrate-output`.
+
 ## Module-level state
 
 `dfxm_geo.direct_space.forward_model` is a stateful module: it builds the

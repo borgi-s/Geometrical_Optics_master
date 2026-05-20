@@ -236,24 +236,23 @@ class TestRunSimulationPreflight:
     def test_run_simulation_short_circuits_without_kernel(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """run_simulation() bails via the preflight before the thread pool starts."""
+        """run_simulation() bails via the preflight before any I/O starts."""
         monkeypatch.setattr(fm, "Resq_i", None)
         monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path) + "/")
         monkeypatch.setattr(fm, "pkl_fn", "missing.pkl")
         with pytest.raises(FileNotFoundError, match="dfxm-bootstrap"):
             run_simulation(SimulationConfig(), tmp_path)
-        assert not (tmp_path / "images10").exists()
-        assert not (tmp_path / "images10_perf_crystal").exists()
+        assert not (tmp_path / "dfxm_geo.h5").exists()
 
 
 class TestRunSimulation:
-    def test_golden_path_writes_both_stacks(
+    def test_golden_path_writes_h5(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """run_simulation calls save_images_parallel for both dislocs and
-        perfect-crystal directories, and synchronises fm.Hg / fm.q_hkl."""
+        """run_simulation writes dfxm_geo.h5, syncs fm.Hg / fm.q_hkl,
+        and returns h5_path + Hg + q_hkl in the result dict."""
         config = SimulationConfig(
             crystal=CrystalConfig(dis=2.0, ndis=4),
             scan=ScanConfig(phi_range=0.05, phi_steps=5, chi_range=0.05, chi_steps=5),
@@ -269,19 +268,22 @@ class TestRunSimulation:
             find_hg_called["count"] += 1
             return fake_Hg, fake_q
 
-        save_calls: list[dict] = []
+        write_sim_calls: list[dict] = []
 
-        def fake_save_images_parallel(Hg, *args, **kwargs):
-            save_calls.append({"is_zero": bool(np.all(Hg == 0)), "args": args})
-            return True
+        def fake_write_simulation_h5(path, *, Hg, include_perfect_crystal, **kwargs):
+            write_sim_calls.append(
+                {
+                    "include_perfect_crystal": include_perfect_crystal,
+                    "is_zero": bool(np.all(Hg == 0)),
+                }
+            )
 
         monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.Find_Hg", fake_find_hg)
         monkeypatch.setattr(
-            "dfxm_geo.pipeline.save_images_parallel",
-            fake_save_images_parallel,
+            "dfxm_geo.pipeline.write_simulation_h5",
+            fake_write_simulation_h5,
         )
-        # forward_model module-level globals expected by the implementation
         monkeypatch.setattr("dfxm_geo.pipeline.fm.psize", 0.1)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_rms", 1.0)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
@@ -291,10 +293,10 @@ class TestRunSimulation:
 
         # Find_Hg was called once with the config values
         assert find_hg_called["count"] == 1
-        # Two calls to save_images_parallel: dislocs then perfect-crystal
-        assert len(save_calls) == 2
-        assert save_calls[0]["is_zero"] is False  # dislocs uses real Hg
-        assert save_calls[1]["is_zero"] is True  # perfect-crystal uses zeros
+        # write_simulation_h5 was called once with include_perfect_crystal=True
+        assert len(write_sim_calls) == 1
+        assert write_sim_calls[0]["include_perfect_crystal"] is True
+        assert write_sim_calls[0]["is_zero"] is False  # real Hg passed
         # Module globals are synced to the new Hg
         import dfxm_geo.direct_space.forward_model as _fm
 
@@ -302,8 +304,7 @@ class TestRunSimulation:
         assert _fm.q_hkl is fake_q
         # Output dir was created and result dict carries the expected keys
         assert output_dir.is_dir()
-        assert result["dislocs_path"] == output_dir / config.io.dislocs_dirname
-        assert result["perfect_path"] == output_dir / config.io.perfect_dirname
+        assert result["h5_path"] == output_dir / "dfxm_geo.h5"
         assert result["Hg"] is fake_Hg
 
     def test_skip_perfect_crystal(
@@ -311,25 +312,24 @@ class TestRunSimulation:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When io.include_perfect_crystal=False, only one stack is written
-        and result['perfect_path'] is None."""
+        """When io.include_perfect_crystal=False, write_simulation_h5 is called
+        with include_perfect_crystal=False."""
         config = SimulationConfig(
             io=IOConfig(include_perfect_crystal=False),
         )
         output_dir = tmp_path / "out"
 
-        save_count = {"n": 0}
+        write_sim_calls: list[dict] = []
 
-        def fake_save(*a, **kw):
-            save_count["n"] += 1
-            return True
+        def fake_write_simulation_h5(path, *, include_perfect_crystal, **kwargs):
+            write_sim_calls.append({"include_perfect_crystal": include_perfect_crystal})
 
         monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
         monkeypatch.setattr(
             "dfxm_geo.pipeline.fm.Find_Hg",
             lambda *a, **kw: (np.ones((3, 3, 4, 4, 4)), np.array([0.0, 0.0, 1.0])),
         )
-        monkeypatch.setattr("dfxm_geo.pipeline.save_images_parallel", fake_save)
+        monkeypatch.setattr("dfxm_geo.pipeline.write_simulation_h5", fake_write_simulation_h5)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.psize", 0.1)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_rms", 1.0)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
@@ -337,8 +337,9 @@ class TestRunSimulation:
 
         result = run_simulation(config, output_dir)
 
-        assert save_count["n"] == 1
-        assert result["perfect_path"] is None
+        assert len(write_sim_calls) == 1
+        assert write_sim_calls[0]["include_perfect_crystal"] is False
+        assert result["include_perfect_crystal"] is False
 
     def test_run_simulation_passes_resolved_S_to_find_hg(
         self,
@@ -364,7 +365,7 @@ class TestRunSimulation:
 
         monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.Find_Hg", fake_find_hg)
-        monkeypatch.setattr("dfxm_geo.pipeline.save_images_parallel", lambda *a, **k: True)
+        monkeypatch.setattr("dfxm_geo.pipeline.write_simulation_h5", lambda *a, **k: None)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.psize", 0.1)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_rms", 1.0)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
@@ -378,11 +379,14 @@ class TestRunSimulation:
 
 
 @pytest.fixture
-def tiny_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
-    """Write tiny synthetic stacks that mimic save_images_parallel output.
+def tiny_h5_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
+    """Write a tiny synthetic dfxm_geo.h5 with /1.1 and /2.1 scans.
 
-    Names match the (j, i) convention in save_image: ``<prefix><i:04d>_<j:04d>.npy``.
+    Frames are (H, W) = (4, 4). Both scans have the same shape so
+    run_postprocess can read and process them with mocked forward().
     """
+    import h5py as _h5py
+
     chi_steps, phi_steps = 5, 5
     H, W = 4, 4
     config = SimulationConfig(
@@ -391,33 +395,39 @@ def tiny_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
         io=IOConfig(),
     )
     output_dir = tmp_path / "out"
-    dislocs_dir = output_dir / config.io.dislocs_dirname
-    perfect_dir = output_dir / config.io.perfect_dirname
-    dislocs_dir.mkdir(parents=True)
-    perfect_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True)
+    h5_path = output_dir / "dfxm_geo.h5"
 
     rng = np.random.default_rng(42)
-    for i in range(chi_steps):
-        for j in range(phi_steps):
-            suffix = f"{i:04d}_{j:04d}.npy"
-            np.save(
-                dislocs_dir / f"{config.io.fn_prefix.lstrip('/')}{suffix}",
-                rng.normal(1.0, 0.01, size=(H, W)),
-            )
-            np.save(
-                perfect_dir / f"{config.io.fn_prefix.lstrip('/')}{suffix}",
-                rng.normal(1.0, 0.01, size=(H, W)),
-            )
+    n_frames = phi_steps * chi_steps
+    dis_stack = rng.normal(1.0, 0.01, size=(n_frames, H, W))
+    perf_stack = rng.normal(1.0, 0.01, size=(n_frames, H, W))
+
+    with _h5py.File(h5_path, "w") as f:
+        for scan_id, stack in [("1.1", dis_stack), ("2.1", perf_stack)]:
+            det = f.require_group(f"/{scan_id}/instrument/dfxm_sim_detector")
+            det.create_dataset("data", data=stack)
+        # Embed a minimal config_toml so load_h5_scan can parse step counts.
+        g = f.require_group("/dfxm_geo")
+        g.create_dataset(
+            "config_toml",
+            data=(
+                f"[scan]\nphi_range = 0.05\nphi_steps = {phi_steps}\n"
+                f"chi_range = 0.05\nchi_steps = {chi_steps}\n"
+            ),
+        )
     return output_dir, config
 
 
 class TestRunPostprocess:
     def test_golden_path(
         self,
-        tiny_simulation_output: tuple[Path, SimulationConfig],
+        tiny_h5_simulation_output: tuple[Path, SimulationConfig],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        output_dir, config = tiny_simulation_output
+        import h5py as _h5py
+
+        output_dir, config = tiny_h5_simulation_output
 
         # Mock forward() to avoid needing the kernel npz.
         fake_qi = np.zeros((3, 4, 4, 4))
@@ -440,59 +450,61 @@ class TestRunPostprocess:
 
         result = run_postprocess(output_dir, config)
 
-        # Data products
-        data_dir = output_dir / "analysis"
-        assert (data_dir / "phi_list.npy").exists()
-        assert (data_dir / "chi_list.npy").exists()
-        assert (data_dir / "qi_field.npy").exists()
-        assert (data_dir / "chi_shift_deg.txt").exists()
-        # File contents must be a bare float for downstream parsing
-        chi_shift_value = float((data_dir / "chi_shift_deg.txt").read_text(encoding="utf-8"))
-        assert chi_shift_value == result["chi_shift"]
-        # Figures
+        # Analysis stored in /1.1/dfxm_geo/analysis/ inside the .h5
+        h5_path = output_dir / "dfxm_geo.h5"
+        with _h5py.File(h5_path, "r") as f:
+            assert "/1.1/dfxm_geo/analysis/phi_list" in f
+            assert "/1.1/dfxm_geo/analysis/chi_list" in f
+            assert "/1.1/dfxm_geo/analysis/qi_field" in f
+            assert "/1.1/dfxm_geo/analysis/chi_shift_deg" in f
+        # Figures still on disk (F1 decision)
         fig_dir = output_dir / "figures"
         assert (fig_dir / "mosaicity_maps.svg").exists()
         assert (fig_dir / "qi_cross_section.svg").exists()
-        # Return dict carries the arrays
+        # Return dict carries the expected keys
         assert "phi_list" in result
         assert "chi_list" in result
         assert "chi_shift" in result
         assert "qi_field" in result
-        assert "data_dir" in result
+        assert "h5_path" in result
         assert "figures_dir" in result
 
-    def test_missing_dislocs_dir_raises(
+    def test_missing_h5_raises(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
         cfg = SimulationConfig()
-        with pytest.raises(FileNotFoundError, match="dislocs"):
+        with pytest.raises(FileNotFoundError, match="dfxm_geo.h5"):
             run_postprocess(tmp_path, cfg)
 
-    def test_missing_perfect_dir_raises(
+    def test_missing_perfect_scan_raises(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """run_postprocess errors clearly if only the dislocs dir exists."""
+        """run_postprocess errors clearly if /2.1 (perfect crystal) is absent."""
+        import h5py as _h5py
+
         monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
         cfg = SimulationConfig()
-        # Create only the dislocs dir; perfect dir is absent.
-        (tmp_path / cfg.io.dislocs_dirname).mkdir(parents=True)
-        with pytest.raises(FileNotFoundError, match="perfect-crystal"):
+        # Create an .h5 with only /1.1 — no /2.1 perfect crystal scan.
+        h5_path = tmp_path / "dfxm_geo.h5"
+        with _h5py.File(h5_path, "w") as f:
+            f.require_group("/1.1")
+        with pytest.raises(FileNotFoundError, match="perfect crystal"):
             run_postprocess(tmp_path, cfg)
 
     def test_missing_hg_raises(
         self,
-        tiny_simulation_output: tuple[Path, SimulationConfig],
+        tiny_h5_simulation_output: tuple[Path, SimulationConfig],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """If fm.Hg is None (no run_simulation, no kernel auto-load),
         run_postprocess should fail fast with a clear error rather than
         crashing inside fm.forward()."""
-        output_dir, config = tiny_simulation_output
+        output_dir, config = tiny_h5_simulation_output
         monkeypatch.setattr("dfxm_geo.pipeline._ensure_kernel_loaded", lambda: None)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
         with pytest.raises(RuntimeError, match="fm.Hg is not set"):
@@ -614,6 +626,7 @@ class TestDfxmForwardSampleRemountCLI:
     def test_dfxm_forward_with_sample_remount_S2_runs(self, tmp_path: Path) -> None:
         import shutil
         import subprocess
+        import sys
         from pathlib import Path as _P
 
         # Skip if the Resq_i kernel npz is not on disk — same gating pattern
@@ -624,12 +637,24 @@ class TestDfxmForwardSampleRemountCLI:
         if not kernel_path.exists():
             pytest.skip(f"Kernel npz {kernel_path} not present; skipping CLI smoke.")
 
+        # Locate dfxm-forward in the active venv's Scripts/bin directory first,
+        # then fall back to shutil.which (works when venv is activated).
+        scripts_dir = _P(sys.executable).parent
+        venv_cli = scripts_dir / "dfxm-forward"
+        if not venv_cli.exists():
+            venv_cli = scripts_dir / "dfxm-forward.exe"
+        if not venv_cli.exists():
+            found = shutil.which("dfxm-forward")
+            if found is None:
+                pytest.skip("dfxm-forward CLI not found on PATH; skipping CLI smoke.")
+            venv_cli = _P(found)
+
         # Run dfxm-forward with the S2 variant config, output to tmp_path
         repo_root = _P(__file__).resolve().parents[1]
         variant_config = repo_root / "configs" / "variants" / "sample_remount_S2.toml"
         result = subprocess.run(
             [
-                shutil.which("dfxm-forward") or "dfxm-forward",
+                str(venv_cli),
                 "--config",
                 str(variant_config),
                 "--output",
@@ -644,7 +669,6 @@ class TestDfxmForwardSampleRemountCLI:
         assert result.returncode == 0, (
             f"dfxm-forward failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
         )
-        # Output dir was populated
-        dislocs_dir = tmp_path / "out" / "images10"
-        assert dislocs_dir.is_dir(), "dislocs images dir missing"
-        assert any(dislocs_dir.iterdir()), "dislocs images dir empty"
+        # Output dir was populated with the HDF5 file
+        h5_out = tmp_path / "out" / "dfxm_geo.h5"
+        assert h5_out.is_file(), "dfxm_geo.h5 missing from output"

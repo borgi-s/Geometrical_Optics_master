@@ -44,19 +44,21 @@ layout, see [`architecture.md`](architecture.md).
 dfxm-forward --config configs/default.toml --output ./out
 ```
 
-This produces two image-stack directories under `./out/`:
+## Output: `<output_dir>/dfxm_geo.h5`
 
-- `images10/` — full simulation with `ndis=151` dislocations at
-  `dis=4 µm` spacing.
-- `images10_perf_crystal/` — the same rocking grid with `Hg=0` (perfect
-  crystal), for differential analysis.
+`dfxm-forward` produces a single HDF5 file with the full simulation in it. Schema documented in [output-format.md](output-format.md). All metadata needed to reproduce the run — config TOML, kernel hash, git SHA, machine, timestamps — is embedded under `/dfxm_geo/`.
 
-Each directory contains `chi_steps × phi_steps` `.npy` files
-(default: 61 × 61 = 3,721 images per stack). Filename format:
-`mosa_test_0000_{chi_idx:04d}_{phi_idx:04d}.npy`.
+SVG figures (mosaicity maps, qi cross-section) land alongside the .h5 at `<output_dir>/figures/`.
+
+The file contains 1-2 BLISS scans:
+
+- `/1.1/` — full simulation with `ndis=151` dislocations at `dis=4 µm` spacing.
+- `/2.1/` — the same rocking grid with `Hg=0` (perfect crystal), for differential analysis. Only present when `include_perfect_crystal = true` in the `[io]` config section.
 
 To skip the perfect-crystal pass, set `include_perfect_crystal = false`
 in the `[io]` section of the config.
+
+> **Legacy output:** Before v1.1.0, `dfxm-forward` wrote two per-frame `.npy` directories (`images10/` and `images10_perf_crystal/`, default: 61 × 61 = 3,721 files each). These directories can be converted to the new format with `dfxm-migrate-output`.
 
 ## Config schema
 
@@ -197,5 +199,4 @@ When publishing or sharing a simulation run, record:
 - The `Resq_i_*.npz` filename (params bundled, no separate sidecar).
 - Output of `pip freeze` (or a lockfile) for the venv.
 
-The CLI does not yet emit a run-metadata sidecar automatically; this is
-tracked for a future enhancement.
+Since v1.1.0, all of the above (except the pip freeze) are embedded automatically in `dfxm_geo.h5` under `/dfxm_geo/` — the git SHA, kernel hash, config TOML, machine hostname, and run timestamps are written at the end of every `run_simulation` call. The pip freeze / lockfile must still be recorded separately.
