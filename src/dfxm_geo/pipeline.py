@@ -49,10 +49,164 @@ from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
 
 @dataclass
-class CrystalConfig:
-    dis: float = 4.0  # inter-dislocation distance (µm)
-    ndis: int = 151  # number of dislocations
-    sample_remount: str = "S1"  # one of S1/S2/S3/S4; Purdue 2024 paper
+class AxisScanConfig:
+    """Per-motor-axis scan primitive (sub-project B).
+
+    Each motor axis (phi, chi, two_dtheta, z) is independently fixed
+    at `value` or scanned over `[value-range, value+range]` with `steps`
+    samples (linspace). Both `range` and `steps` must be present
+    together for the axis to be scanned, or both absent for fixed.
+    """
+
+    value: float = 0.0
+    range: float | None = None
+    steps: int | None = None
+
+    def __post_init__(self) -> None:
+        if (self.range is None) != (self.steps is None):
+            raise ValueError(
+                "AxisScanConfig must specify both `range` and `steps`, or neither "
+                f"(fixed at `value`). Got range={self.range!r}, steps={self.steps!r}"
+            )
+        if self.range is not None:
+            if self.range <= 0:
+                raise ValueError(f"`range` must be > 0; got {self.range!r}")
+            assert self.steps is not None  # XOR guard above guarantees this
+            if self.steps < 2:
+                raise ValueError(f"`steps` must be >= 2 when range is set; got {self.steps!r}")
+
+    @property
+    def is_scanned(self) -> bool:
+        return self.range is not None and self.steps is not None
+
+
+_CANONICAL_AXES = ("phi", "chi", "two_dtheta", "z")
+
+_AXIS_TO_LABEL = {
+    "phi": "rocking",
+    "chi": "rolling",
+    "two_dtheta": "strain",
+    "z": "layer",
+}
+
+_PRE_CANONIZED_MODE_NAMES: dict[frozenset[str], str] = {
+    frozenset(): "single",
+    frozenset({"phi", "chi"}): "mosa",
+    frozenset({"phi", "chi", "two_dtheta"}): "mosa_strain",
+    frozenset({"phi", "chi", "z"}): "mosa_layer",
+    frozenset({"phi", "chi", "two_dtheta", "z"}): "mosa_strain_layer",
+}
+
+
+@dataclass
+class ScanConfig:
+    """Per-axis scan primitives (sub-project B).
+
+    Each motor axis is independently fixed or scanned. The "scan mode"
+    label is derived from which axes carry range+steps — see
+    `derived_mode_name` (Task 3).
+    """
+
+    phi: AxisScanConfig = field(default_factory=AxisScanConfig)
+    chi: AxisScanConfig = field(default_factory=AxisScanConfig)
+    two_dtheta: AxisScanConfig = field(default_factory=AxisScanConfig)
+    z: AxisScanConfig = field(default_factory=AxisScanConfig)
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> ScanConfig:
+        if not data:
+            return cls()
+        unknown = set(data.keys()) - set(_CANONICAL_AXES)
+        if unknown:
+            raise ValueError(
+                f"unknown scan axis {sorted(unknown)[0]!r}; expected one of {_CANONICAL_AXES}"
+            )
+        kwargs = {axis: AxisScanConfig(**data[axis]) for axis in _CANONICAL_AXES if axis in data}
+        return cls(**kwargs)
+
+    def scanned_axes(self) -> tuple[str, ...]:
+        """Names of motor axes that carry a range+steps (in canonical order)."""
+        return tuple(a for a in _CANONICAL_AXES if getattr(self, a).is_scanned)
+
+    def is_scanned(self, axis: str) -> bool:
+        if axis not in _CANONICAL_AXES:
+            raise ValueError(f"unknown axis {axis!r}; expected one of {_CANONICAL_AXES}")
+        return getattr(self, axis).is_scanned
+
+    def derived_mode_name(self) -> str:
+        """Derive the scan-mode label from which axes are scanned.
+
+        Pre-canonized: single, rocking, rolling, strain, layer, mosa,
+        mosa_strain, mosa_layer, mosa_strain_layer. All other combos
+        are the 1D labels concatenated in canonical axis order.
+        """
+        scanned = self.scanned_axes()
+        key = frozenset(scanned)
+        if key in _PRE_CANONIZED_MODE_NAMES:
+            return _PRE_CANONIZED_MODE_NAMES[key]
+        if len(scanned) == 1:
+            return _AXIS_TO_LABEL[scanned[0]]
+        return "_".join(_AXIS_TO_LABEL[a] for a in scanned)
+
+
+@dataclass
+class CenteredCrystalConfig:
+    """Single dislocation at the origin (sub-project C, mode='centered').
+
+    The Ud rotation matrix is built from (b, n, t):
+      - b = Burgers vector indices
+      - n = slip-plane normal indices
+      - t = dislocation line direction indices
+
+    Geometric constraints (validated):
+      - b · n = 0   (Burgers vector lies in slip plane)
+      - t parallel to (n × b)  (line direction consistent with slip system)
+    """
+
+    b: tuple[int, int, int]
+    n: tuple[int, int, int]
+    t: tuple[int, int, int]
+
+    def __post_init__(self) -> None:
+        b = self.b
+        n = self.n
+        t = self.t
+        # b · n == 0 (exact, since these are integer crystallographic indices)
+        if b[0] * n[0] + b[1] * n[1] + b[2] * n[2] != 0:
+            raise ValueError(
+                f"Burgers vector b={b} must be perpendicular to slip plane normal n={n} "
+                "(integer dot product must be 0)"
+            )
+        # t parallel to (n × b) — both vectors in integer indices; parallel ⇔ cross == 0
+        nxb = (
+            n[1] * b[2] - n[2] * b[1],
+            n[2] * b[0] - n[0] * b[2],
+            n[0] * b[1] - n[1] * b[0],
+        )
+        # Cross product of t and nxb should be zero if they are parallel.
+        cross = (
+            t[1] * nxb[2] - t[2] * nxb[1],
+            t[2] * nxb[0] - t[0] * nxb[2],
+            t[0] * nxb[1] - t[1] * nxb[0],
+        )
+        if cross != (0, 0, 0):
+            raise ValueError(
+                f"line direction t={t} must be parallel to (n x b)={nxb} for the "
+                "slip system to be self-consistent (cross product must be zero)"
+            )
+
+
+@dataclass
+class WallCrystalConfig:
+    """Dis-spaced grid of dislocations (sub-project C, mode='wall').
+
+    The current Borgi/Purdue IUCrJ 2024 layout. Preserved unchanged from
+    the legacy flat `CrystalConfig`.
+    """
+
+    dis: float = 4.0
+    ndis: int = 151
+    sample_remount: str = "S1"
 
     def __post_init__(self) -> None:
         if self.sample_remount not in SAMPLE_REMOUNT_OPTIONS:
@@ -63,11 +217,106 @@ class CrystalConfig:
 
 
 @dataclass
-class ScanConfig:
-    phi_range: float  # half-range in degrees
-    phi_steps: int
-    chi_range: float  # half-range in degrees
-    chi_steps: int
+class RandomDislocationsConfig:
+    """N random dislocations placed by 2D Gaussian (sub-project C).
+
+    `sigma=None` → resolved at draw time from the FOV
+    (sigma = FOV_lateral_half / 2).
+    `min_distance=None` → no inter-dislocation distance constraint.
+    `seed=None` → fresh entropy-pool seed drawn at run time; the realized
+    seed value is logged into the sidecar for reproducibility.
+    """
+
+    ndis: int
+    sigma: float | None = None
+    min_distance: float | None = None
+    seed: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.ndis < 1:
+            raise ValueError(f"`ndis` must be >= 1 for random_dislocations; got {self.ndis}")
+        if self.sigma is not None and self.sigma <= 0:
+            raise ValueError(f"`sigma` must be > 0 when set; got {self.sigma}")
+        if self.min_distance is not None and self.min_distance < 0:
+            raise ValueError(f"`min_distance` must be >= 0 when set; got {self.min_distance}")
+
+
+_CRYSTAL_MODE_NAMES = ("centered", "wall", "random_dislocations")
+
+
+@dataclass
+class CrystalConfig:
+    """Discriminated union over the three crystal-layout modes (sub-project C).
+
+    Exactly one of `centered`/`wall`/`random_dislocations` is non-None and
+    matches `mode`. Constructed via `CrystalConfig.from_dict` from a TOML
+    `[crystal]` table.
+    """
+
+    mode: Literal["centered", "wall", "random_dislocations"]
+    centered: CenteredCrystalConfig | None = None
+    wall: WallCrystalConfig | None = None
+    random_dislocations: RandomDislocationsConfig | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in _CRYSTAL_MODE_NAMES:
+            raise ValueError(
+                f"unknown crystal mode {self.mode!r}; expected one of {_CRYSTAL_MODE_NAMES}"
+            )
+        # Single pass: collect extras, then check required sub-block.
+        # (from_dict catches both for TOML callers; this is defense-in-depth
+        # for programmatic CrystalConfig(...) construction.)
+        extras = sorted(
+            m for m in _CRYSTAL_MODE_NAMES if m != self.mode and getattr(self, m) is not None
+        )
+        if extras:
+            raise ValueError(
+                f"crystal mode={self.mode!r}: extra sub-block {extras} "
+                f"present; only [crystal.{self.mode}] is valid"
+            )
+        if getattr(self, self.mode) is None:
+            raise ValueError(
+                f"crystal mode={self.mode!r}: [crystal.{self.mode}] sub-block is required"
+            )
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> CrystalConfig:
+        if data is None:
+            raise ValueError(
+                "missing [crystal] block — forward/identify require explicit "
+                "crystal layout; see configs/default.toml."
+            )
+        if "mode" not in data:
+            raise ValueError("missing `mode` in [crystal] — required to pick a layout.")
+        mode = data["mode"]
+        if mode not in _CRYSTAL_MODE_NAMES:
+            raise ValueError(
+                f"unknown crystal mode {mode!r}; expected one of {_CRYSTAL_MODE_NAMES}"
+            )
+
+        # Reject sibling sub-blocks early for a precise error.
+        siblings = sorted(m for m in _CRYSTAL_MODE_NAMES if m != mode and m in data)
+        if siblings:
+            raise ValueError(
+                f"crystal mode={mode!r}: extra sub-block {siblings} present; "
+                f"only [crystal.{mode}] is valid"
+            )
+        if mode not in data:
+            raise ValueError(f"crystal mode={mode!r}: [crystal.{mode}] sub-block is required")
+
+        sub_data = data[mode]
+        kwargs: dict = {"mode": mode}
+        if mode == "centered":
+            kwargs["centered"] = CenteredCrystalConfig(
+                b=tuple(sub_data["b"]),
+                n=tuple(sub_data["n"]),
+                t=tuple(sub_data["t"]),
+            )
+        elif mode == "wall":
+            kwargs["wall"] = WallCrystalConfig(**sub_data)
+        elif mode == "random_dislocations":
+            kwargs["random_dislocations"] = RandomDislocationsConfig(**sub_data)
+        return cls(**kwargs)
 
 
 @dataclass
@@ -134,15 +383,8 @@ class ReciprocalConfig:
 
 @dataclass
 class SimulationConfig:
-    crystal: CrystalConfig = field(default_factory=CrystalConfig)
-    scan: ScanConfig = field(
-        default_factory=lambda: ScanConfig(
-            phi_range=0.0006 * 180 / np.pi,
-            phi_steps=61,
-            chi_range=0.002 * 180 / np.pi,
-            chi_steps=61,
-        )
-    )
+    crystal: CrystalConfig  # NO DEFAULT — required; construct via CrystalConfig.from_dict
+    scan: ScanConfig = field(default_factory=ScanConfig)
     io: IOConfig = field(default_factory=IOConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     # Sub-project D: optional in Python construction (defaults to None for
@@ -153,10 +395,10 @@ class SimulationConfig:
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
         """Load a SimulationConfig from a TOML file."""
-        with path.open("rb") as f:
-            raw = tomllib.load(f)
-        crystal = CrystalConfig(**raw.get("crystal", {}))
-        scan = ScanConfig(**raw["scan"])
+        with open(path, "rb") as fh:
+            raw = tomllib.load(fh)
+        crystal = CrystalConfig.from_dict(raw.get("crystal"))
+        scan = ScanConfig.from_dict(raw.get("scan"))
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
         reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
@@ -180,10 +422,14 @@ class IdentificationCrystalConfig:
 
 
 @dataclass(frozen=True, kw_only=True)
-class IdentificationScanConfig:
-    """Forward-model scan parameters for `dfxm-identify`."""
+class IdentificationNoiseConfig:
+    """Noise + intensity parameters for dfxm-identify forward calls.
 
-    phi_rad: float = 150e-6
+    Sub-project B carry-out: these moved out of the old
+    IdentificationScanConfig (now deleted) into their own block since
+    they describe noise/detector, not the scan trajectory.
+    """
+
     poisson_noise: bool = True
     rng_seed: int = 0
     intensity_scale: float = 7.0
@@ -226,7 +472,8 @@ class IdentificationConfig:
 
     mode: Literal["single", "multi", "z-scan"]
     crystal: IdentificationCrystalConfig
-    scan: IdentificationScanConfig
+    scan: ScanConfig  # shared with forward (was IdentificationScanConfig)
+    noise: IdentificationNoiseConfig  # noise/intensity block (was flat in IdentificationScanConfig)
     io: IOConfig
     multi: IdentificationMonteCarloConfig | None = None
     zscan: IdentificationZScanConfig | None = None
@@ -244,6 +491,11 @@ class IdentificationConfig:
         if self.mode in ("single", "multi") and self.zscan is not None:
             raise ValueError(
                 f"mode={self.mode!r}: zscan config block is only valid in mode='z-scan'"
+            )
+        # z-scan mode owns the z dimension via z_offsets_um; [scan.z] would conflict.
+        if self.mode == "z-scan" and self.scan.is_scanned("z"):
+            raise ValueError(
+                "mode='z-scan' uses [zscan].z_offsets_um for the z dimension; [scan.z] is forbidden"
             )
         # Validate the slip plane against the {111} family (also used in 'multi'
         # mode as the starting / fallback plane).
@@ -280,7 +532,8 @@ def load_identification_config(path: Path) -> IdentificationConfig:
             "slip_plane_normal": tuple(crystal_data["slip_plane_normal"]),
         }
     crystal = IdentificationCrystalConfig(**crystal_data)
-    scan = IdentificationScanConfig(**data.get("scan", {}))
+    scan = ScanConfig.from_dict(data.get("scan"))  # shared ScanConfig
+    noise = IdentificationNoiseConfig(**data.get("noise", {}))  # noise/intensity block
     io = IOConfig(**data.get("io", {}))
     multi = (
         IdentificationMonteCarloConfig(**data["multi"]) if data.get("multi") is not None else None
@@ -292,6 +545,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         mode=data["mode"],
         crystal=crystal,
         scan=scan,
+        noise=noise,
         io=io,
         multi=multi,
         zscan=zscan,
@@ -332,48 +586,90 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
 
     Writes one `<output_dir>/dfxm_geo.h5` containing BLISS scan `/1.1`
     (dislocations) and, if `io.include_perfect_crystal=True`, `/2.1`
-    (Hg=0 reference). Provenance + per-scan metadata are also embedded.
+    (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
+    a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
-    # Catches "I edited Nsub / Npixels and it didn't take effect" in the first
-    # second of the run instead of after a wasted job. Prints the effective
-    # ray-grid params, the exact kernel path that will be loaded, and the
-    # Fg cache filename Find_Hg will look up.
-    _expected_fg = "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}.npy".format(
-        str(config.crystal.dis).replace(".", ""),
-        int(fm.psize * 1e9),
-        int(fm.zl_rms * 2.35e9),
-        fm.Npixels,
-        fm.Nsub,
-        config.crystal.sample_remount,
-    )
     if config.reciprocal is None:
         raise ValueError(
             "SimulationConfig.reciprocal is None — must specify [reciprocal] "
             "block in TOML or set it programmatically before calling run_simulation."
         )
+    # v1.2.0 scope: the forward kernel only consumes the phi + chi axes from
+    # ScanConfig. ScanGrid/build_scan_grid is implemented and tested but not
+    # yet wired into save_images_parallel. Raise eagerly so users don't get
+    # silently-wrong output from scanning two_dtheta or z. Lifting this guard
+    # is tracked as a v1.3.0 follow-up.
+    if config.scan.two_dtheta.is_scanned or config.scan.z.is_scanned:
+        unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
+        raise ValueError(
+            f"scan axes {unwired} are configured but not yet wired into the "
+            f"forward kernel (v1.2.0 scope). For now, set range+steps only on "
+            f"[scan.phi] and/or [scan.chi]."
+        )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build dislocation population (dispatches on crystal.mode).
+    fov_lateral_um = fm.Npixels * fm.psize * 1e6  # m -> um
+    population = fm.build_dislocation_population(
+        config.crystal, fov_lateral_um=fov_lateral_um, rng=None
+    )
+
+    # Write sidecar BEFORE forward kernel so a forward crash still leaves
+    # the realized draw recoverable.
+    if population.sidecar is not None:
+        from dfxm_geo.io.sidecar import write_random_dislocations_sidecar
+
+        sidecar_path = write_random_dislocations_sidecar(
+            output_dir / "dfxm_geo", population.sidecar
+        )
+        print(f"[dfxm-forward] sidecar: {sidecar_path}", flush=True)
+
+    # Effective-config print.
     print(
         f"[dfxm-forward] effective config:\n"
         f"  Nsub={fm.Nsub}  Npixels={fm.Npixels}  NN1={fm.NN1}  NN2={fm.NN2}\n"
         f"  kernel={fm._loaded_kernel_path}\n"
-        f"  Fg cache={_expected_fg}\n"
-        f"  dis={config.crystal.dis}  ndis={config.crystal.ndis}  "
-        f"remount={config.crystal.sample_remount}",
+        f"  crystal.mode={config.crystal.mode}  ndis={len(population.positions_um)}\n"
+        f"  scan.mode={config.scan.derived_mode_name()}  "
+        f"axes_scanned={config.scan.scanned_axes()}",
         flush=True,
     )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
+    # Centered + random_dislocations use Find_Hg_from_population.
+    if config.crystal.mode == "wall":
+        w = config.crystal.wall
+        assert w is not None
+        S = SAMPLE_REMOUNT_OPTIONS[w.sample_remount]
+        Hg, q_hkl = fm.Find_Hg(
+            w.dis,
+            w.ndis,
+            fm.psize,
+            fm.zl_rms,
+            h=config.reciprocal.hkl[0],
+            k=config.reciprocal.hkl[1],
+            l=config.reciprocal.hkl[2],
+            S=S,
+            remount_name=w.sample_remount,
+        )
+        sample_dis = w.dis
+        sample_ndis = w.ndis
+        sample_remount = w.sample_remount
+    else:
+        Hg, q_hkl = fm.Find_Hg_from_population(
+            population,
+            fm.psize,
+            fm.zl_rms,
+            h=config.reciprocal.hkl[0],
+            k=config.reciprocal.hkl[1],
+            l=config.reciprocal.hkl[2],
+        )
+        sample_dis = -1.0  # sentinel: not applicable for centered/random
+        sample_ndis = len(population.positions_um)
+        sample_remount = "N/A"
 
-    S = SAMPLE_REMOUNT_OPTIONS[config.crystal.sample_remount]
-    Hg, q_hkl = fm.Find_Hg(
-        config.crystal.dis,
-        config.crystal.ndis,
-        fm.psize,
-        fm.zl_rms,
-        S=S,
-        remount_name=config.crystal.sample_remount,
-    )
     fm.Hg = Hg
     fm.q_hkl = q_hkl
 
@@ -384,17 +680,20 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         h5_path,
         Hg=Hg,
         q_hkl=q_hkl,
-        phi_range=config.scan.phi_range,
-        phi_steps=config.scan.phi_steps,
-        chi_range=config.scan.chi_range,
-        chi_steps=config.scan.chi_steps,
+        phi_range=config.scan.phi.range or 0.0,
+        phi_steps=config.scan.phi.steps or 1,
+        chi_range=config.scan.chi.range or 0.0,
+        chi_steps=config.scan.chi.steps or 1,
         include_perfect_crystal=config.io.include_perfect_crystal,
-        sample_dis=config.crystal.dis,
-        sample_ndis=config.crystal.ndis,
-        sample_remount=config.crystal.sample_remount,
+        sample_dis=sample_dis,
+        sample_ndis=sample_ndis,
+        sample_remount=sample_remount,
         config_toml=config_toml,
         cli=" ".join(sys.argv),
         max_workers=config.io.max_workers,
+        crystal_mode=config.crystal.mode,
+        scan_mode=config.scan.derived_mode_name(),
+        scanned_axes=list(config.scan.scanned_axes()),
     )
     return {
         "h5_path": h5_path,
@@ -407,39 +706,95 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
 def _dataclass_to_toml_str(config: SimulationConfig) -> str:
     """Serialize a SimulationConfig back to TOML-formatted text.
 
-    Simple implementation: write the four sub-sections as TOML tables.
+    Renders:
+      [reciprocal] (hkl, keV)
+      [scan.<axis>] for each axis whose value/range/steps differ from default
+      [crystal] mode + matching [crystal.<mode>] sub-block
+      [io], [postprocess]
+
+    The output is round-trippable through SimulationConfig.from_toml.
     """
     from dataclasses import asdict as _asdict
 
-    sections = {
-        "crystal": _asdict(config.crystal),
-        "scan": _asdict(config.scan),
-        "io": _asdict(config.io),
-        "postprocess": _asdict(config.postprocess),
-    }
-    # Sub-project D: include [reciprocal] so the HDF5-embedded config_toml
-    # round-trips through SimulationConfig.from_toml without raising
-    # "missing [reciprocal] block". Skipped if None (legacy SimulationConfig()
-    # programmatic construction without reciprocal).
-    if config.reciprocal is not None:
-        sections["reciprocal"] = _asdict(config.reciprocal)
     lines: list[str] = []
-    for name, body in sections.items():
-        lines.append(f"[{name}]")
-        for k, v in body.items():
-            if v is None:
-                continue  # TOML has no null; skip
-            if isinstance(v, str):
-                lines.append(f'{k} = "{v}"')
-            elif isinstance(v, bool):
-                lines.append(f"{k} = {'true' if v else 'false'}")
-            elif isinstance(v, tuple):
-                # Tuples (e.g. reciprocal.hkl = (h, k, l)) render as TOML arrays.
-                lines.append(f"{k} = {list(v)}")
-            else:
-                lines.append(f"{k} = {v}")
+
+    # [reciprocal]
+    if config.reciprocal is not None:
+        lines.append("[reciprocal]")
+        h, k, l = config.reciprocal.hkl
+        lines.append(f"hkl = [{h}, {k}, {l}]")
+        lines.append(f"keV = {config.reciprocal.keV}")
         lines.append("")
-    return "\n".join(lines)
+
+    # [scan.<axis>] - only render axes that differ from default (skip if value==0
+    # and not scanned, to keep TOML tidy).
+    for axis_name in _CANONICAL_AXES:
+        axis = getattr(config.scan, axis_name)
+        if axis.value == 0.0 and not axis.is_scanned:
+            continue
+        lines.append(f"[scan.{axis_name}]")
+        if axis.value != 0.0:
+            lines.append(f"value = {axis.value}")
+        if axis.is_scanned:
+            lines.append(f"range = {axis.range}")
+            lines.append(f"steps = {axis.steps}")
+        lines.append("")
+
+    # [crystal] + matching sub-block
+    lines.append("[crystal]")
+    lines.append(f'mode = "{config.crystal.mode}"')
+    lines.append(f"[crystal.{config.crystal.mode}]")
+    if config.crystal.mode == "centered":
+        c = config.crystal.centered
+        assert c is not None
+        lines.append(f"b = [{c.b[0]}, {c.b[1]}, {c.b[2]}]")
+        lines.append(f"n = [{c.n[0]}, {c.n[1]}, {c.n[2]}]")
+        lines.append(f"t = [{c.t[0]}, {c.t[1]}, {c.t[2]}]")
+    elif config.crystal.mode == "wall":
+        w = config.crystal.wall
+        assert w is not None
+        lines.append(f"dis = {w.dis}")
+        lines.append(f"ndis = {w.ndis}")
+        lines.append(f'sample_remount = "{w.sample_remount}"')
+    elif config.crystal.mode == "random_dislocations":
+        rd = config.crystal.random_dislocations
+        assert rd is not None
+        lines.append(f"ndis = {rd.ndis}")
+        if rd.sigma is not None:
+            lines.append(f"sigma = {rd.sigma}")
+        if rd.min_distance is not None:
+            lines.append(f"min_distance = {rd.min_distance}")
+        if rd.seed is not None:
+            lines.append(f"seed = {rd.seed}")
+    lines.append("")
+
+    # [io] - render every field (default-skipping is brittle here since users
+    # may explicitly want to set fields to defaults). Use asdict for simplicity.
+    lines.append("[io]")
+    for k_io, v_io in _asdict(config.io).items():
+        if v_io is None:
+            continue
+        if isinstance(v_io, str):
+            lines.append(f'{k_io} = "{v_io}"')
+        elif isinstance(v_io, bool):
+            lines.append(f"{k_io} = {str(v_io).lower()}")
+        else:
+            lines.append(f"{k_io} = {v_io}")
+    lines.append("")
+
+    # [postprocess]
+    lines.append("[postprocess]")
+    for k_pp, v_pp in _asdict(config.postprocess).items():
+        if v_pp is None:
+            continue
+        if isinstance(v_pp, str):
+            lines.append(f'{k_pp} = "{v_pp}"')
+        elif isinstance(v_pp, bool):
+            lines.append(f"{k_pp} = {str(v_pp).lower()}")
+        else:
+            lines.append(f"{k_pp} = {v_pp}")
+
+    return "\n".join(lines) + "\n"
 
 
 def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any]:
@@ -475,31 +830,36 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
                 "include_perfect_crystal=True, or skip postprocess."
             )
 
+    phi_steps = config.scan.phi.steps or 1
+    chi_steps = config.scan.chi.steps or 1
+    phi_range = config.scan.phi.range or 0.0
+    chi_range = config.scan.chi.range or 0.0
+
     _, dis_reshape, _, _ = load_h5_scan(
         h5_path,
         scan_id="1.1",
-        phi_steps=config.scan.phi_steps,
-        chi_steps=config.scan.chi_steps,
+        phi_steps=phi_steps,
+        chi_steps=chi_steps,
     )
     _, perf_reshape, _, _ = load_h5_scan(
         h5_path,
         scan_id="2.1",
-        phi_steps=config.scan.phi_steps,
-        chi_steps=config.scan.chi_steps,
+        phi_steps=phi_steps,
+        chi_steps=chi_steps,
     )
 
     chi_shift = compute_chi_shift(
         perf_reshape,
-        config.scan.chi_steps,
-        config.scan.chi_range,
+        chi_steps,
+        chi_range,
         oversample=config.postprocess.chi_oversample_for_shift,
     )
     phi_list, chi_list = compute_com_maps(
         dis_reshape,
-        config.scan.phi_range,
-        config.scan.phi_steps,
-        config.scan.chi_range,
-        config.scan.chi_steps,
+        phi_range,
+        phi_steps,
+        chi_range,
+        chi_steps,
         chi_shift=chi_shift,
         oversample=config.postprocess.phi_oversample,
         chi_oversample=config.postprocess.chi_oversample,
@@ -624,7 +984,7 @@ def _run_identification_single(
     """Deterministic Cartesian sweep: slip planes × Burgers vectors × angles."""
     output_dir.mkdir(parents=True, exist_ok=True)
     crystal_cfg = config.crystal
-    scan_cfg = config.scan
+    noise_cfg = config.noise
 
     all_planes: list[tuple[int, int, int]] = [
         (1, 1, 1),
@@ -640,7 +1000,7 @@ def _run_identification_single(
         crystal_cfg.angle_step_deg,
     )
 
-    rng = np.random.default_rng(scan_cfg.rng_seed) if scan_cfg.poisson_noise else None
+    rng = np.random.default_rng(noise_cfg.rng_seed) if noise_cfg.poisson_noise else None
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
 
     manifest_rows: list[dict[str, Any]] = []
@@ -684,13 +1044,13 @@ def _run_identification_single(
                 fm.Hg = Hg
                 fm.q_hkl = q_hkl
 
-                image_arr = fm.forward(Hg, phi=scan_cfg.phi_rad)
+                image_arr = fm.forward(Hg, phi=config.scan.phi.value)
                 # forward() can return either an ndarray or a (image, qi) tuple
                 # depending on qi_return. We don't pass qi_return so it's always
                 # an ndarray here; assert for the type-checker.
                 assert isinstance(image_arr, np.ndarray)
-                image = image_arr * scan_cfg.intensity_scale
-                if scan_cfg.poisson_noise:
+                image = image_arr * noise_cfg.intensity_scale
+                if noise_cfg.poisson_noise:
                     assert rng is not None
                     image = rng.poisson(np.clip(image, a_min=0.0, a_max=None)).astype(float)
 
@@ -766,14 +1126,14 @@ def _run_identification_multi(
     """Monte Carlo over n_samples; each sample is 2 random mixed dislocations summed."""
     assert config.multi is not None  # validated in __post_init__
     mc = config.multi
-    scan_cfg = config.scan
+    noise_cfg = config.noise
 
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "im_data").mkdir(exist_ok=True)
     (output_dir / "images").mkdir(exist_ok=True)
 
     # Split master rng → child streams (param draws, Poisson noise).
-    master = np.random.default_rng(scan_cfg.rng_seed)
+    master = np.random.default_rng(noise_cfg.rng_seed)
     param_rng, noise_rng = master.spawn(2)
 
     manifest_rows: list[dict[str, Any]] = []
@@ -796,10 +1156,10 @@ def _run_identification_multi(
         Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
         fm.Hg = Hg
 
-        image_arr = fm.forward(Hg, phi=scan_cfg.phi_rad)
+        image_arr = fm.forward(Hg, phi=config.scan.phi.value)
         assert isinstance(image_arr, np.ndarray)
-        image = image_arr * scan_cfg.intensity_scale
-        if scan_cfg.poisson_noise:
+        image = image_arr * noise_cfg.intensity_scale
+        if noise_cfg.poisson_noise:
             image = noise_rng.poisson(np.clip(image, a_min=0.0, a_max=None)).astype(float)
 
         stem = f"{k:0{pad}d}"
@@ -857,7 +1217,7 @@ def _run_identification_zscan(
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
     crystal_cfg = config.crystal
-    scan_cfg = config.scan
+    noise_cfg = config.noise
     io_cfg = config.io
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -879,7 +1239,7 @@ def _run_identification_zscan(
     # Reuse Round 16's RNG-spawn pattern. The secondary stream is at
     # `secondary_rng_offset` in the spawn list so a noise stream could be
     # added later without breaking determinism.
-    master = np.random.default_rng(scan_cfg.rng_seed)
+    master = np.random.default_rng(noise_cfg.rng_seed)
     spawned = master.spawn(zscan.secondary_rng_offset + 1)
     secondary_rng = spawned[zscan.secondary_rng_offset]
 

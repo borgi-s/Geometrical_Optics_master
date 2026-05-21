@@ -13,14 +13,19 @@ Default geometry constants match ID06 at the ESRF; see `dfxm_geo.constants`.
 """
 
 import os
+from dataclasses import dataclass as _dataclass
 from pathlib import Path
 from pprint import pprint
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
+
+if TYPE_CHECKING:
+    from dfxm_geo.pipeline import CrystalConfig, ScanConfig
 
 # Module-level default for the sample-remount rotation matrix.
 # Defined here to avoid cross-module imports and satisfy ruff-B008.
@@ -31,6 +36,24 @@ _S_IDENTITY: np.ndarray = np.identity(3)
 # Previously this was inferred from sys.path[0], which silently broke when
 # the module was imported via an installed entry point or via `python -c`.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# Sub-project C: random_dislocations placement constants.
+_MAX_REJECTION_TRIES = 10_000
+
+# A subset of FCC slip systems on the {111}/<-110> family used to draw
+# random orientations for random_dislocations mode. Each entry is (b, n, t)
+# with b.n=0 and t parallel to n x b. Six variants spanning two of the
+# four {111} planes -- sufficient for v1.2.0 sampling.
+_SLIP_SYSTEM_111: tuple[
+    tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]], ...
+] = (
+    ((1, -1, 0), (1, 1, 1), (1, 1, -2)),
+    ((-1, 0, 1), (1, 1, 1), (-1, 2, -1)),
+    ((0, 1, -1), (1, 1, 1), (-2, 1, 1)),
+    ((1, 1, 0), (1, -1, 1), (1, -1, -2)),
+    ((-1, 0, 1), (1, -1, 1), (-1, -2, -1)),
+    ((0, -1, -1), (1, -1, 1), (-2, -1, 1)),
+)
 
 fast_inverse2(
     np.random.default_rng().random(size=(100, 3, 3))
@@ -520,3 +543,276 @@ def Z_shift(offset_um: float) -> np.ndarray:
 # via pipeline._lookup_and_load_kernel(hkl, keV) or an explicit
 # _load_default_kernel(pkl_path) call. This lets the module be imported on
 # any host regardless of whether the kernel npz is on disk.
+
+
+# ---------------------------------------------------------------------------
+# Sub-project B: scan-grid helpers
+# ---------------------------------------------------------------------------
+
+
+@_dataclass
+class ScanGrid:
+    """Realized trajectory for a ScanConfig.
+
+    `axes` is the canonical 4-tuple ("phi", "chi", "two_dtheta", "z").
+    `samples` is parallel: per-axis 1-D arrays of position values
+    (units: radians for angular axes, micrometers for z). Fixed axes
+    have shape (1,); scanned axes have shape (steps,).
+
+    The forward kernel iterates the Cartesian product over `samples`.
+    """
+
+    axes: tuple[str, str, str, str]
+    samples: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+
+
+def build_scan_grid(scan: "ScanConfig") -> ScanGrid:
+    """Build a ScanGrid from a ScanConfig.
+
+    For each canonical axis, returns either:
+      - linspace(value-range, value+range, steps) if scanned
+      - np.array([value]) if fixed (singleton)
+    """
+    from dfxm_geo.pipeline import _CANONICAL_AXES  # local import: avoid cycle
+
+    samples = []
+    for axis_name in _CANONICAL_AXES:
+        axis = getattr(scan, axis_name)
+        if axis.is_scanned:
+            arr = np.linspace(
+                axis.value - axis.range,
+                axis.value + axis.range,
+                axis.steps,
+                dtype=np.float64,
+            )
+        else:
+            arr = np.array([axis.value], dtype=np.float64)
+        samples.append(arr)
+    return ScanGrid(
+        axes=("phi", "chi", "two_dtheta", "z"),
+        samples=(samples[0], samples[1], samples[2], samples[3]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sub-project C: dislocation-population helpers
+# ---------------------------------------------------------------------------
+
+
+@_dataclass
+class DislocationPopulation:
+    """A realized set of dislocations.
+
+    positions_um: shape (N, 3) — (x, y, z) sample-frame coordinates.
+    Ud: shape (N, 3, 3) — column-stacked (b_hat, n_hat, t_hat) rotation matrices.
+    sidecar: dict to be written as JSON, or None if no sidecar needed.
+    """
+
+    positions_um: np.ndarray
+    Ud: np.ndarray
+    sidecar: dict | None
+
+
+def _ud_matrix_from_bnt(
+    b: tuple[int, int, int],
+    n: tuple[int, int, int],
+    t: tuple[int, int, int],
+) -> np.ndarray:
+    """Build a 3x3 column-stacked rotation matrix [b_hat | n_hat | t_hat].
+
+    Input vectors are crystallographic integer indices; output columns
+    are unit-normalized. If the user supplied `t` antiparallel to the
+    right-handed (n x b) direction, the raw column stack would have
+    det=-1 (a reflection rather than a rotation). Flip the t column
+    in that case so the result is always a proper rotation (det=+1) —
+    matches the legacy IUCrJ 2024 hardcoded Ud convention.
+    """
+    arr = np.asarray([b, n, t], dtype=np.float64)
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    Ud = (arr / norms).T  # columns = b_hat, n_hat, t_hat
+    if np.linalg.det(Ud) < 0:
+        Ud[:, 2] = -Ud[:, 2]
+    return Ud
+
+
+def build_dislocation_population(
+    crystal: "CrystalConfig",
+    fov_lateral_um: float,
+    rng: np.random.Generator | None,
+) -> DislocationPopulation:
+    """Dispatch on crystal.mode and realize the dislocation population.
+
+    Centered: 1 dislocation at origin with explicit (b, n, t).
+    Wall: existing dis-spaced grid; positions evenly spaced along y at z=0.
+    Random_dislocations: implemented in Task 8.
+    """
+    if crystal.mode == "centered":
+        c = crystal.centered
+        assert c is not None  # __post_init__ guarantees
+        positions = np.zeros((1, 3), dtype=np.float64)
+        Ud = _ud_matrix_from_bnt(c.b, c.n, c.t)[np.newaxis, :, :]  # (1, 3, 3)
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None)
+
+    if crystal.mode == "wall":
+        w = crystal.wall
+        assert w is not None
+        # Positions: ndis dislocations along a wall at z=0, x=0, y evenly
+        # spaced by `dis` micrometers centered at 0.
+        ys = (np.arange(w.ndis) - (w.ndis - 1) / 2.0) * w.dis
+        positions = np.zeros((w.ndis, 3), dtype=np.float64)
+        positions[:, 1] = ys
+        # All dislocations in a wall share the same (b, n, t) — the canonical
+        # {111}/<-110>/<11-2> slip system for the Borgi/Purdue layout.
+        Ud_single = _ud_matrix_from_bnt((1, -1, 0), (1, 1, 1), (1, 1, -2))
+        Ud = np.broadcast_to(Ud_single, (w.ndis, 3, 3)).copy()
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None)
+
+    if crystal.mode == "random_dislocations":
+        rd = crystal.random_dislocations
+        assert rd is not None
+
+        # Resolve sigma: FOV-derived default if user didn't supply.
+        if rd.sigma is None:
+            sigma_um = (fov_lateral_um / 2.0) / 2.0
+            sigma_source = "default-fov"
+        else:
+            sigma_um = rd.sigma
+            sigma_source = "user"
+
+        # Resolve seed + rng. If caller passed an rng, use it; otherwise fall
+        # back to rd.seed or fresh entropy.
+        if rng is None:
+            if rd.seed is None:
+                _entropy = np.random.SeedSequence().entropy
+                resolved_seed = (
+                    int(_entropy)
+                    if isinstance(_entropy, int)
+                    else int(np.random.SeedSequence().generate_state(1)[0])
+                )
+                seed_source = "entropy"
+            else:
+                resolved_seed = rd.seed
+                seed_source = "user"
+            rng = np.random.default_rng(resolved_seed)
+        else:
+            resolved_seed = rd.seed if rd.seed is not None else -1
+            seed_source = "user" if rd.seed is not None else "entropy"
+
+        # Draw positions with optional min_distance rejection sampling.
+        positions = np.zeros((rd.ndis, 3), dtype=np.float64)
+        for i in range(rd.ndis):
+            for _ in range(_MAX_REJECTION_TRIES):
+                cand = rng.normal(loc=0.0, scale=sigma_um, size=2)
+                if rd.min_distance is None or i == 0:
+                    positions[i, 0] = cand[0]
+                    positions[i, 1] = cand[1]
+                    break
+                diffs = positions[:i, :2] - cand
+                dists = np.linalg.norm(diffs, axis=1)
+                if np.all(dists >= rd.min_distance):
+                    positions[i, 0] = cand[0]
+                    positions[i, 1] = cand[1]
+                    break
+            else:
+                raise RuntimeError(
+                    f"random_dislocations placement exceeded retry budget "
+                    f"({_MAX_REJECTION_TRIES}) at dislocation {i}/{rd.ndis}; "
+                    f"check min_distance={rd.min_distance}, sigma={sigma_um}, "
+                    f"ndis={rd.ndis} - configuration may be impossible."
+                )
+
+        # Draw slip-system per dislocation (uniform over {111} family).
+        slip_indices = rng.integers(0, len(_SLIP_SYSTEM_111), size=rd.ndis)
+        Ud = np.zeros((rd.ndis, 3, 3), dtype=np.float64)
+        sidecar_dislocations: list[dict] = []
+        for i in range(rd.ndis):
+            b, n, t = _SLIP_SYSTEM_111[slip_indices[i]]
+            Ud[i] = _ud_matrix_from_bnt(b, n, t)
+            sidecar_dislocations.append(
+                {
+                    "index": i,
+                    "x_um": float(positions[i, 0]),
+                    "y_um": float(positions[i, 1]),
+                    "z_um": float(positions[i, 2]),
+                    "b": list(b),
+                    "n": list(n),
+                    "t": list(t),
+                }
+            )
+
+        sidecar = {
+            "ndis": rd.ndis,
+            "sigma_um": float(sigma_um),
+            "sigma_source": sigma_source,
+            "min_distance_um": rd.min_distance,
+            "seed": resolved_seed,
+            "seed_source": seed_source,
+            "dislocations": sidecar_dislocations,
+        }
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=sidecar)
+
+    raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
+
+
+def Find_Hg_from_population(
+    population: DislocationPopulation,
+    psize: float,
+    zl_rms: float,
+    h: int = -1,
+    k: int = 1,
+    l: int = -1,
+    *,
+    S: np.ndarray = _S_IDENTITY,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute Hg + q_hkl from an arbitrary DislocationPopulation.
+
+    For mode='centered' (1 dislocation) and 'random_dislocations' (N drawn
+    dislocations). Mirrors `Find_Hg` but takes explicit positions + Ud matrices
+    instead of the wall-layout (dis, ndis) parameters.
+
+    Hg convention: same as `load_or_generate_Hg` — Hg = transpose(Fg^-1) - I
+    (displacement gradient, not deformation gradient), consistent with
+    `forward()` which uses Hg to compute scattering vectors.
+
+    Args:
+        population: DislocationPopulation from `build_dislocation_population`.
+        psize: Detector pixel size (m) — unused currently, reserved for future
+            grid-dependent caching.
+        zl_rms: RMS of the beam profile in zl (m) — unused currently.
+        h, k, l: Miller indices of the active reflection.
+        S: 3x3 sample-remount rotation (default identity).
+
+    Returns:
+        (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
+    """
+    from dfxm_geo.crystal.dislocations import Fd_find_multi_dislocs_mixed, MixedDislocSpec
+
+    Q_norm = np.sqrt(h * h + k * k + l * l)
+    q_hkl = np.asarray([h, k, l]) / Q_norm
+
+    # Build MixedDislocSpec per dislocation. Fd_find_multi_dislocs_mixed
+    # supports per-crystal Ud + lab-frame offset.
+    crystals = [
+        MixedDislocSpec(
+            Ud_mix=population.Ud[i],
+            rotation_deg=0.0,  # pure edge; full character encoded in Ud columns
+            position_lab_um=(
+                float(population.positions_um[i, 0]),
+                float(population.positions_um[i, 1]),
+                float(population.positions_um[i, 2]),
+            ),
+        )
+        for i in range(len(population.positions_um))
+    ]
+
+    # Compute Fg via the multi-dislocation kernel.
+    # Returns shape (X, 3, 3) with identity already added (Fg, not Fdd).
+    Fg = Fd_find_multi_dislocs_mixed(rl, Us, crystals, Theta, S=S)
+
+    # Convert Fg → Hg using the same convention as load_or_generate_Hg:
+    #   Hg = transpose(Fg^-1) - I
+    # This is the displacement gradient form that forward() expects.
+    Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1])
+    Hg -= np.identity(3)
+
+    return Hg, q_hkl

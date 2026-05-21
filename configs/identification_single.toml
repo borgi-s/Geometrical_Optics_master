@@ -22,11 +22,13 @@ sweep_all_slip_planes = true
 exclude_invisibility = true
 invisibility_threshold_deg = 10.0
 
-[scan]
-phi_rad = 1.5e-4                   # 8 × 10⁻⁴° ≈ 1.4e-4 rad in Borgi 2025
+[scan.phi]
+value = 1.5e-4   # 8e-4 deg ~= 1.4e-4 rad in Borgi 2025; this run uses 1.5e-4 rad
+
+[noise]
 poisson_noise = true
 rng_seed = 0
-intensity_scale = 7.0              # branch source's `* 7` multiplier
+intensity_scale = 7.0
 
 [io]
 fn_prefix = "/mosa_test_0000_"     # unused for dfxm-identify but IOConfig requires

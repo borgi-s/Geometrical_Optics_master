@@ -7,12 +7,14 @@ import pytest
 
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
+    AxisScanConfig,
     IdentificationConfig,
     IdentificationCrystalConfig,
     IdentificationMonteCarloConfig,
-    IdentificationScanConfig,
+    IdentificationNoiseConfig,
     IOConfig,
     ReciprocalConfig,
+    ScanConfig,
     _run_identification_multi,
     _run_identification_single,
     cli_main_identify,
@@ -34,11 +36,11 @@ def test_identification_crystal_config_defaults():
 
 
 def test_identification_scan_config_defaults():
-    cfg = IdentificationScanConfig()
-    assert cfg.phi_rad == pytest.approx(150e-6)
-    assert cfg.poisson_noise is True
-    assert cfg.rng_seed == 0
-    assert cfg.intensity_scale == 7.0
+    """IdentificationNoiseConfig holds the old IdentificationScanConfig noise fields."""
+    noise = IdentificationNoiseConfig()
+    assert noise.poisson_noise is True
+    assert noise.rng_seed == 0
+    assert noise.intensity_scale == 7.0
 
 
 def test_identification_montecarlo_config_defaults():
@@ -66,11 +68,20 @@ def _make_io_config():
     )
 
 
+def _make_scan_noise(rng_seed: int = 0, intensity_scale: float = 7.0):
+    """Return a (ScanConfig, IdentificationNoiseConfig) pair replacing old IdentificationScanConfig."""
+    scan = ScanConfig(phi=AxisScanConfig(value=150e-6))
+    noise = IdentificationNoiseConfig(rng_seed=rng_seed, intensity_scale=intensity_scale)
+    return scan, noise
+
+
 def test_identification_config_mode_single_ok():
+    scan, noise = _make_scan_noise()
     cfg = IdentificationConfig(
         mode="single",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
-        scan=IdentificationScanConfig(),
+        scan=scan,
+        noise=noise,
         io=_make_io_config(),
     )
     assert cfg.mode == "single"
@@ -78,10 +89,12 @@ def test_identification_config_mode_single_ok():
 
 
 def test_identification_config_mode_multi_ok():
+    scan, noise = _make_scan_noise()
     cfg = IdentificationConfig(
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
-        scan=IdentificationScanConfig(),
+        scan=scan,
+        noise=noise,
         multi=IdentificationMonteCarloConfig(),
         io=_make_io_config(),
     )
@@ -90,32 +103,38 @@ def test_identification_config_mode_multi_ok():
 
 
 def test_identification_config_mode_multi_requires_multi_block():
+    scan, noise = _make_scan_noise()
     with pytest.raises(ValueError, match="mode='multi'"):
         IdentificationConfig(
             mode="multi",
             crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
-            scan=IdentificationScanConfig(),
+            scan=scan,
+            noise=noise,
             multi=None,
             io=_make_io_config(),
         )
 
 
 def test_identification_config_invalid_slip_plane_raises():
+    scan, noise = _make_scan_noise()
     with pytest.raises(ValueError, match="not one of the four"):
         IdentificationConfig(
             mode="single",
             crystal=IdentificationCrystalConfig(slip_plane_normal=(2, 0, 0)),
-            scan=IdentificationScanConfig(),
+            scan=scan,
+            noise=noise,
             io=_make_io_config(),
         )
 
 
 def test_identification_config_invalid_mode_raises():
+    scan, noise = _make_scan_noise()
     with pytest.raises(ValueError, match="mode must be"):
         IdentificationConfig(
             mode="bogus",  # type: ignore[arg-type]
             crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
-            scan=IdentificationScanConfig(),
+            scan=scan,
+            noise=noise,
             io=_make_io_config(),
         )
 
@@ -134,8 +153,10 @@ sweep_all_slip_planes = true
 exclude_invisibility = true
 invisibility_threshold_deg = 10.0
 
-[scan]
-phi_rad = 1.5e-4
+[scan.phi]
+value = 1.5e-4
+
+[noise]
 poisson_noise = true
 rng_seed = 0
 intensity_scale = 7.0
@@ -157,7 +178,7 @@ keV = 17.0
     cfg = load_identification_config(cfg_path)
     assert cfg.mode == "single"
     assert cfg.crystal.slip_plane_normal == (1, 1, 1)
-    assert cfg.scan.phi_rad == pytest.approx(1.5e-4)
+    assert cfg.scan.phi.value == pytest.approx(1.5e-4)
     assert cfg.multi is None
 
 
@@ -169,8 +190,10 @@ mode = "multi"
 [crystal]
 slip_plane_normal = [1, 1, 1]
 
-[scan]
-phi_rad = 1.5e-4
+[scan.phi]
+value = 1.5e-4
+
+[noise]
 rng_seed = 42
 
 [multi]
@@ -196,7 +219,7 @@ keV = 17.0
     assert cfg.mode == "multi"
     assert cfg.multi is not None
     assert cfg.multi.n_samples == 100
-    assert cfg.scan.rng_seed == 42
+    assert cfg.noise.rng_seed == 42
 
 
 def test_load_identification_config_missing_mode_raises(tmp_path):
@@ -208,6 +231,8 @@ def test_load_identification_config_missing_mode_raises(tmp_path):
 
 
 def _tiny_single_config(tmp_path):
+    scan = ScanConfig(phi=AxisScanConfig(value=150e-6))
+    noise = IdentificationNoiseConfig(rng_seed=0, intensity_scale=1.0)
     return IdentificationConfig(
         mode="single",
         crystal=IdentificationCrystalConfig(
@@ -219,7 +244,8 @@ def _tiny_single_config(tmp_path):
             sweep_all_slip_planes=False,  # just one plane
             exclude_invisibility=False,  # don't filter
         ),
-        scan=IdentificationScanConfig(rng_seed=0, intensity_scale=1.0),
+        scan=scan,
+        noise=noise,
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         io=_make_io_config(),
     )
@@ -251,10 +277,13 @@ def test_run_identification_single_writes_expected_count(tmp_path, monkeypatch):
 
 
 def _tiny_multi_config():
+    scan = ScanConfig(phi=AxisScanConfig(value=150e-6))
+    noise = IdentificationNoiseConfig(rng_seed=0, intensity_scale=1.0)
     return IdentificationConfig(
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
-        scan=IdentificationScanConfig(rng_seed=0, intensity_scale=1.0),
+        scan=scan,
+        noise=noise,
         multi=IdentificationMonteCarloConfig(n_samples=3, pos_std_um=2.0, n_png_previews=2),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         io=_make_io_config(),
@@ -373,8 +402,10 @@ b_vector_indices = [0]
 sweep_all_slip_planes = false
 exclude_invisibility = false
 
-[scan]
-phi_rad = 1.5e-4
+[scan.phi]
+value = 1.5e-4
+
+[noise]
 poisson_noise = false
 rng_seed = 0
 intensity_scale = 1.0
@@ -446,8 +477,10 @@ b_vector_indices = [0]
 sweep_all_slip_planes = false
 exclude_invisibility = false
 
-[scan]
-phi_rad = 1.5e-4
+[scan.phi]
+value = 1.5e-4
+
+[noise]
 poisson_noise = false
 rng_seed = 0
 intensity_scale = 1.0
@@ -519,6 +552,8 @@ def test_identification_zscan_config_is_frozen():
 def _tiny_zscan_config(slip_plane=(1, 1, 1)):
     from dfxm_geo.pipeline import IdentificationZScanConfig
 
+    scan = ScanConfig(phi=AxisScanConfig(value=150e-6))
+    noise = IdentificationNoiseConfig(rng_seed=0, intensity_scale=1.0)
     return IdentificationConfig(
         mode="z-scan",
         crystal=IdentificationCrystalConfig(
@@ -530,7 +565,8 @@ def _tiny_zscan_config(slip_plane=(1, 1, 1)):
             sweep_all_slip_planes=False,
             exclude_invisibility=False,
         ),
-        scan=IdentificationScanConfig(rng_seed=0, intensity_scale=1.0),
+        scan=scan,
+        noise=noise,
         zscan=IdentificationZScanConfig(
             z_offsets_um=[0.0],
             phi_range_deg=0.03,
@@ -554,11 +590,13 @@ def test_identification_config_mode_zscan_ok():
 def test_identification_config_mode_zscan_requires_zscan_block():
     from dfxm_geo.pipeline import IdentificationZScanConfig  # noqa: F401
 
+    scan, noise = _make_scan_noise()
     with pytest.raises(ValueError, match="mode='z-scan'"):
         IdentificationConfig(
             mode="z-scan",
             crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
-            scan=IdentificationScanConfig(),
+            scan=scan,
+            noise=noise,
             zscan=None,
             io=_make_io_config(),
         )
@@ -568,11 +606,13 @@ def test_identification_config_mode_single_rejects_zscan_block():
     """Passing a zscan block in single mode is a config error (clarity)."""
     from dfxm_geo.pipeline import IdentificationZScanConfig
 
+    scan, noise = _make_scan_noise()
     with pytest.raises(ValueError, match="single|multi.*zscan"):
         IdentificationConfig(
             mode="single",
             crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
-            scan=IdentificationScanConfig(),
+            scan=scan,
+            noise=noise,
             zscan=IdentificationZScanConfig(
                 z_offsets_um=[0.0],
                 phi_range_deg=0.03,
@@ -592,8 +632,10 @@ mode = "z-scan"
 [crystal]
 slip_plane_normal = [1, 1, 1]
 
-[scan]
-phi_rad = 1.5e-4
+[scan.phi]
+value = 1.5e-4
+
+[noise]
 rng_seed = 7
 
 [zscan]
@@ -626,7 +668,7 @@ keV = 17.0
     assert cfg.zscan.phi_steps == 21
     assert cfg.zscan.include_secondary is True
     assert cfg.zscan.secondary_rng_offset == 2
-    assert cfg.scan.rng_seed == 7
+    assert cfg.noise.rng_seed == 7
 
 
 def test_run_identification_zscan_writes_per_config_rocking_grid(tmp_path, monkeypatch):
@@ -669,6 +711,8 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
 
+    scan = ScanConfig(phi=AxisScanConfig(value=150e-6))
+    noise = IdentificationNoiseConfig(rng_seed=0, intensity_scale=1.0)
     cfg = IdentificationConfig(
         mode="z-scan",
         crystal=IdentificationCrystalConfig(
@@ -680,7 +724,8 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
             sweep_all_slip_planes=False,
             exclude_invisibility=False,
         ),
-        scan=IdentificationScanConfig(rng_seed=0, intensity_scale=1.0),
+        scan=scan,
+        noise=noise,
         zscan=IdentificationZScanConfig(
             z_offsets_um=[0.0],
             phi_range_deg=0.03,
@@ -744,8 +789,10 @@ b_vector_indices = [0]
 sweep_all_slip_planes = false
 exclude_invisibility = false
 
-[scan]
-phi_rad = 1.5e-4
+[scan.phi]
+value = 1.5e-4
+
+[noise]
 poisson_noise = false
 rng_seed = 0
 intensity_scale = 1.0
@@ -785,3 +832,78 @@ def test_example_zscan_config_loads():
     assert cfg.mode == "z-scan"
     assert cfg.zscan is not None
     assert len(cfg.zscan.z_offsets_um) >= 1
+
+
+class TestIdentificationConfigScanReusesSharedShape:
+    def test_phi_value_from_scan_phi_value(self, tmp_path: Path) -> None:
+        toml_text = (
+            'mode = "single"\n'
+            "\n"
+            "[reciprocal]\n"
+            "hkl = [-1, 1, -1]\n"
+            "keV = 17.0\n"
+            "\n"
+            "[crystal]\n"
+            "slip_plane_normal = [1, 1, 1]\n"
+            "sweep_all_slip_planes = true\n"
+            "exclude_invisibility = true\n"
+            "\n"
+            "[scan.phi]\n"
+            "value = 0.00015\n"
+            "\n"
+            "[noise]\n"
+            "poisson_noise = true\n"
+            "rng_seed = 0\n"
+            "intensity_scale = 7.0\n"
+            "\n"
+            "[io]\n"
+            'fn_prefix = "/mosa_test_0000_"\n'
+            'ftype = ".npy"\n'
+            'dislocs_dirname = "identify"\n'
+            'perfect_dirname = "ignored"\n'
+            "include_perfect_crystal = false\n"
+        )
+        cfg_path = tmp_path / "id.toml"
+        cfg_path.write_text(toml_text)
+        cfg = load_identification_config(cfg_path)
+        # New shape: scan is the shared ScanConfig
+        assert isinstance(cfg.scan, ScanConfig)
+        assert cfg.scan.phi.value == 1.5e-4
+        # Noise lives in its own block
+        assert cfg.noise.poisson_noise is True
+        assert cfg.noise.intensity_scale == 7.0
+
+
+class TestIdentificationConfigZScanForbidsScanZ:
+    def test_zscan_mode_with_scan_z_rejected(self, tmp_path: Path) -> None:
+        # When mode='z-scan', the [zscan].z_offsets_um drives z; [scan.z] is forbidden.
+        toml_text = (
+            'mode = "z-scan"\n'
+            "\n"
+            "[reciprocal]\n"
+            "hkl = [-1, 1, -1]\n"
+            "keV = 17.0\n"
+            "\n"
+            "[crystal]\n"
+            "slip_plane_normal = [1, 1, 1]\n"
+            "\n"
+            "[scan.phi]\n"
+            "value = 0.00015\n"
+            "[scan.z]\n"
+            "range = 1e-6\n"
+            "steps = 3\n"
+            "\n"
+            "[zscan]\n"
+            "z_offsets_um = [-1.0, 0.0, 1.0]\n"
+            "phi_range_deg = 0.03\n"
+            "phi_steps = 5\n"
+            "chi_range_deg = 0.1\n"
+            "chi_steps = 5\n"
+            "\n"
+            "[io]\n"
+            "include_perfect_crystal = false\n"
+        )
+        cfg_path = tmp_path / "id.toml"
+        cfg_path.write_text(toml_text)
+        with pytest.raises(ValueError, match=r"mode='z-scan'.*\[scan.z\] is forbidden"):
+            load_identification_config(cfg_path)

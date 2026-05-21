@@ -95,20 +95,28 @@ def test_run_postprocess_reads_h5(tmp_path: Path, _kernel_loaded: None) -> None:
     quick Find_Hg, single-threaded (max_workers=1) to avoid OOM in CI.
     """
     from dfxm_geo.pipeline import (
+        AxisScanConfig,
         CrystalConfig,
         IOConfig,
+        ReciprocalConfig,
         ScanConfig,
         SimulationConfig,
+        WallCrystalConfig,
         run_postprocess,
         run_simulation,
     )
 
     cfg = SimulationConfig(
-        crystal=CrystalConfig(dis=4.0, ndis=10, sample_remount="S1"),
+        crystal=CrystalConfig(
+            mode="wall",
+            wall=WallCrystalConfig(dis=4.0, ndis=10, sample_remount="S1"),
+        ),
         scan=ScanConfig(
-            phi_range=0.0006 * 180 / np.pi, phi_steps=3, chi_range=0.002 * 180 / np.pi, chi_steps=3
+            phi=AxisScanConfig(range=0.0006 * 180 / np.pi, steps=3),
+            chi=AxisScanConfig(range=0.002 * 180 / np.pi, steps=3),
         ),
         io=IOConfig(include_perfect_crystal=True, max_workers=1),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
     )
     out = tmp_path / "run"
     run_simulation(cfg, out)

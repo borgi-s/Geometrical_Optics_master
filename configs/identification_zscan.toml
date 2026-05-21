@@ -24,16 +24,20 @@ sweep_all_slip_planes = true
 exclude_invisibility = true
 invisibility_threshold_deg = 10.0
 
-[scan]
-phi_rad = 1.5e-4                 # unused in z-scan but IdentificationScanConfig requires
+[scan.phi]
+value = 1.5e-4   # unused in z-scan but ScanConfig requires a phi block
+
+[noise]
 poisson_noise = false            # noise lives in the rocking-curve forward calls
 rng_seed = 0
 intensity_scale = 7.0
 
+# NOTE: [zscan].phi_range_deg / chi_range_deg are in DEGREES (z-scan internal path).
+# [scan.phi].value above is in RADIANS (shared ScanConfig convention).
 [zscan]
 z_offsets_um = [-2.0, -1.0, 0.0, 1.0, 2.0]   # 5 depth slices
-phi_range_deg = 0.034377467707849395         # matches dfxm-forward default (0.0006 rad)
-phi_steps = 21                               # downscaled example; bump to 61 for a real run
+phi_range_deg = 0.034377467707849395           # matches dfxm-forward default (0.0006 rad)
+phi_steps = 21                                 # downscaled example; bump to 61 for a real run
 chi_range_deg = 0.11459155902616465
 chi_steps = 21
 include_secondary = true

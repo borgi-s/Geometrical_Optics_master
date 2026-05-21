@@ -155,10 +155,18 @@ def test_save_scan_parallel_to_h5_uses_w2_pattern(tmp_path: Path) -> None:
     """Smoke test: writer pre-allocates dataset and streams frames in.
 
     Uses a tiny 2x2 grid against a real kernel so this exercises the
-    actual forward() pipeline. Skipped if no kernel is auto-loaded.
+    actual forward() pipeline. Skipped if no bootstrapped kernel is on disk.
     """
+    from pathlib import Path as _P
+
     import dfxm_geo.direct_space.forward_model as fm
 
+    # Guard against toy zero kernels loaded by other tests (multi-reflection
+    # tests stage zero kernels for lookup testing and leave fm.Hg set).
+    kernel_dir = _P(fm.pkl_fpath)
+    matches = sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz"))
+    if not matches:
+        pytest.skip("forward_model kernel not auto-loaded; run dfxm-bootstrap.")
     if fm.Hg is None:
         pytest.skip("forward_model kernel not auto-loaded; run dfxm-bootstrap.")
 

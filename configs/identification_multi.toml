@@ -15,8 +15,10 @@ keV = 17.0
 slip_plane_normal = [1, 1, 1]      # ignored in mode='multi'; required by validation
 # angle_*_deg and b_vector_indices are also unused in 'multi' mode
 
-[scan]
-phi_rad = 1.5e-4
+[scan.phi]
+value = 1.5e-4
+
+[noise]
 poisson_noise = true
 rng_seed = 0
 intensity_scale = 7.0

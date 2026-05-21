@@ -401,6 +401,9 @@ def write_simulation_h5(
     cli: str,
     kernel_npz: Path | None = None,
     max_workers: int | None = None,
+    crystal_mode: str | None = None,
+    scan_mode: str | None = None,
+    scanned_axes: list[str] | None = None,
 ) -> None:
     """One-call entry point: writes /dfxm_geo/ provenance + /1.1 + optional /2.1.
 
@@ -468,9 +471,17 @@ def write_simulation_h5(
         zl_rms=float(_fm.zl_rms),
     )
 
-    # Phase 2: global provenance
+    # Phase 2: global provenance + B+C Task 13 scan/crystal-mode attrs on /N.1.
     with h5py.File(path, "a") as f:
         _write_provenance(f, cli=cli, kernel_npz=kernel_npz, config_toml=config_toml)
+        # Write scan/crystal mode attrs on /1.1 for darfix/darling/silx inspection.
+        grp_1_1 = f["1.1"]
+        if scan_mode is not None:
+            grp_1_1.attrs["scan_mode"] = scan_mode
+        if scanned_axes is not None:
+            grp_1_1.attrs["scanned_axes"] = list(scanned_axes)
+        if crystal_mode is not None:
+            grp_1_1.attrs["crystal_mode"] = crystal_mode
 
     # Phase 3: optional perfect-crystal scan /2.1
     if include_perfect_crystal:

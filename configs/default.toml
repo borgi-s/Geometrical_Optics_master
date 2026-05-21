@@ -1,25 +1,72 @@
-# Default DFXM forward-simulation config.
-# Mirrors the parameters used in the original init_forward.py demo.
-#
-# Notes:
-#   - phi_range / chi_range are half-ranges in *degrees* (consistent with
-#     save_images_parallel's API, which converts to radians internally).
-#   - dis is the inter-dislocation distance in micrometers.
-#   - psize, zl_rms, and the (h, k, l) reflection are currently bound to the
-#     module-level defaults in dfxm_geo.direct_space.forward_model (ID06
-#     settings). See pipeline.py docstring for the deferred work.
+# Default DFXM forward-simulation config (post-B+C).
+# Active mode is the simple-case `centered` single dislocation. Switch to
+# `wall` or `random_dislocations` by uncommenting the matching block below
+# and changing `mode` accordingly.
+
+[reciprocal]
+# Used by `dfxm-bootstrap --config configs/default.toml` to (re)generate the
+# reciprocal-space resolution kernel pickle. Defaults reproduce the CDD_inc
+# canonical recipe (Al 111 reflection at 17 keV, square-aperture beamstop
+# 25 mm at the BFP). Takes ~50 s wall-clock on a laptop at Nrays=1e8.
+hkl        = [-1, 1, -1]   # Al 111 reflection (default)
+keV        = 17.0          # beam energy in keV
+Nrays      = 100_000_000   # 1e8
+npoints1   = 400
+npoints2   = 200
+npoints3   = 200
+qi1_range  = 5e-4
+qi2_range  = 7.5e-3
+qi3_range  = 7.5e-3
+# Beam / objective parameters.
+zeta_v_fwhm = 5.3e-4
+zeta_h_fwhm = 0.0
+NA_rms      = 3.1106382978723403e-4  # = 7.31e-4 / 2.35
+eps_rms     = 6.0e-5                 # = 1.41e-4 / 2.35
+# theta is auto-derived from Al 111 + 17 keV when absent (see kernel.cli_main).
+D  = 0.000565685424949238   # = 2 * sqrt(50e-6 * 1.6e-3)
+d1 = 0.274
+# Beamstop config.
+beamstop   = true
+bs_height  = 25e-3
+aperture   = true
+knife_edge = false
+dphi_range = 0.0
+
+# Scan: per-axis primitives. Each axis is independently fixed (value, default 0)
+# or scanned (value + range + steps). Mode name is derived.
+
+[scan.phi]
+range = 6e-4               # rad; half-range (0.034 deg in old degrees)
+steps = 61
+
+[scan.chi]
+range = 2e-3               # rad; half-range (0.115 deg in old degrees)
+steps = 61
+
+# [scan.two_dtheta]        # omitted -> fixed at 0 (no strain scan)
+# [scan.z]                 # omitted -> fixed at 0 (no z translation)
+# Derived scan-mode label: "mosa" (phi + chi).
+
+# Crystal: active mode = centered. Commented-out blocks show the other two modes.
 
 [crystal]
-dis = 4        # inter-dislocation distance (µm)
-ndis = 151     # number of dislocations
-sample_remount = "S1"  # one of "S1", "S2", "S3", "S4" — Purdue 2024 paper. Default: identity (no remount).
+mode = "centered"
 
-[scan]
-# 0.0006 rad ≈ 0.03438 deg ; 0.002 rad ≈ 0.11459 deg
-phi_range = 0.034377467707849395
-phi_steps = 61
-chi_range = 0.11459155902616465
-chi_steps = 61
+[crystal.centered]
+b = [1, -1, 0]   # Burgers vector indices
+n = [1, 1, 1]    # slip plane normal indices
+t = [1, 1, -2]   # dislocation line direction
+
+# [crystal.wall]
+# dis = 4.0
+# ndis = 151
+# sample_remount = "S1"
+
+# [crystal.random_dislocations]
+# ndis = 4
+# sigma = 5.0
+# min_distance = 4.0
+# seed = 42
 
 [io]
 fn_prefix = "/mosa_test_0000_"
@@ -36,32 +83,3 @@ phi_oversample = 20
 chi_oversample_for_shift = 100
 figures_dirname = "figures"
 data_dirname = "analysis"
-
-[reciprocal]
-# Used by `dfxm-bootstrap --config configs/default.toml` to (re)generate the
-# reciprocal-space resolution kernel pickle. Defaults reproduce the CDD_inc
-# canonical recipe (Al 111 reflection at 17 keV, square-aperture beamstop
-# 25 mm at the BFP). Takes ~50 s wall-clock on a laptop at Nrays=1e8.
-hkl        = [-1, 1, -1]   # Al 111 reflection (default)
-keV        = 17.0           # beam energy in keV
-Nrays      = 100_000_000   # 1e8
-npoints1   = 400
-npoints2   = 200
-npoints3   = 200
-qi1_range  = 5e-4
-qi2_range  = 7.5e-3
-qi3_range  = 7.5e-3
-# Beam / objective parameters.
-zeta_v_fwhm = 5.3e-4
-zeta_h_fwhm = 0.0
-NA_rms      = 3.1106382978723403e-4  # = 7.31e-4 / 2.35
-eps_rms     = 6.0e-5                # = 1.41e-4 / 2.35
-# theta is auto-derived from Al 111 + 17 keV when absent (see kernel.cli_main).
-D  = 0.000565685424949238   # = 2 * sqrt(50e-6 * 1.6e-3)
-d1 = 0.274
-# Beamstop config.
-beamstop   = true
-bs_height  = 25e-3
-aperture   = true
-knife_edge = false
-dphi_range = 0.0

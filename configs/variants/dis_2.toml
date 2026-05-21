@@ -1,15 +1,25 @@
 # dis = 2 µm dislocation spacing. ndis=251 is the minimum recommended
 # by init_forward.py to avoid edge effects at this density.
 
-[crystal]
-dis = 2
-ndis = 251
+[reciprocal]
+hkl = [-1, 1, -1]   # Al 111 reflection — preserves pre-D implicit default
+keV = 17.0
 
-[scan]
-phi_range = 0.034377467707849395
-phi_steps = 61
-chi_range = 0.11459155902616465
-chi_steps = 61
+[scan.phi]
+range = 6e-4
+steps = 61
+
+[scan.chi]
+range = 2e-3
+steps = 61
+
+[crystal]
+mode = "wall"
+
+[crystal.wall]
+dis = 2.0
+ndis = 251
+sample_remount = "S1"
 
 [io]
 fn_prefix = "/mosa_test_0000_"
@@ -17,7 +27,3 @@ ftype = ".npy"
 dislocs_dirname = "images_dis2"
 perfect_dirname = "images_dis2_perf_crystal"
 include_perfect_crystal = true
-
-[reciprocal]
-hkl = [-1, 1, -1]   # Al 111 reflection — preserves pre-D implicit default
-keV = 17.0
