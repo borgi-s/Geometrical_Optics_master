@@ -263,22 +263,21 @@ class CrystalConfig:
             raise ValueError(
                 f"unknown crystal mode {self.mode!r}; expected one of {_CRYSTAL_MODE_NAMES}"
             )
-        for mode in _CRYSTAL_MODE_NAMES:
-            sub = getattr(self, mode)
-            if mode == self.mode and sub is None:
-                raise ValueError(
-                    f"crystal mode={self.mode!r}: [crystal.{mode}] sub-block is required"
-                )
-            if mode != self.mode and sub is not None:
-                extras = sorted(
-                    m
-                    for m in _CRYSTAL_MODE_NAMES
-                    if m != self.mode and getattr(self, m) is not None
-                )
-                raise ValueError(
-                    f"crystal mode={self.mode!r}: extra sub-block {extras} "
-                    f"present; only [crystal.{self.mode}] is valid"
-                )
+        # Single pass: collect extras, then check required sub-block.
+        # (from_dict catches both for TOML callers; this is defense-in-depth
+        # for programmatic CrystalConfig(...) construction.)
+        extras = sorted(
+            m for m in _CRYSTAL_MODE_NAMES if m != self.mode and getattr(self, m) is not None
+        )
+        if extras:
+            raise ValueError(
+                f"crystal mode={self.mode!r}: extra sub-block {extras} "
+                f"present; only [crystal.{self.mode}] is valid"
+            )
+        if getattr(self, self.mode) is None:
+            raise ValueError(
+                f"crystal mode={self.mode!r}: [crystal.{self.mode}] sub-block is required"
+            )
 
     @classmethod
     def from_dict(cls, data: dict | None) -> CrystalConfig:
