@@ -25,7 +25,7 @@ from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
 if TYPE_CHECKING:
-    from dfxm_geo.pipeline import ScanConfig
+    from dfxm_geo.pipeline import CrystalConfig, ScanConfig
 
 # Module-level default for the sample-remount rotation matrix.
 # Defined here to avoid cross-module imports and satisfy ruff-B008.
@@ -574,3 +574,75 @@ def build_scan_grid(scan: "ScanConfig") -> ScanGrid:
         axes=("phi", "chi", "two_dtheta", "z"),
         samples=(samples[0], samples[1], samples[2], samples[3]),
     )
+
+
+# ---------------------------------------------------------------------------
+# Sub-project C: dislocation-population helpers
+# ---------------------------------------------------------------------------
+
+
+@_dataclass
+class DislocationPopulation:
+    """A realized set of dislocations.
+
+    positions_um: shape (N, 3) — (x, y, z) sample-frame coordinates.
+    Ud: shape (N, 3, 3) — column-stacked (b_hat, n_hat, t_hat) rotation matrices.
+    sidecar: dict to be written as JSON, or None if no sidecar needed.
+    """
+
+    positions_um: np.ndarray
+    Ud: np.ndarray
+    sidecar: dict | None
+
+
+def _ud_matrix_from_bnt(
+    b: tuple[int, int, int],
+    n: tuple[int, int, int],
+    t: tuple[int, int, int],
+) -> np.ndarray:
+    """Build a 3x3 column-stacked rotation matrix [b_hat | n_hat | t_hat].
+
+    Input vectors are crystallographic integer indices; output columns
+    are unit-normalized.
+    """
+    arr = np.asarray([b, n, t], dtype=np.float64)
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    return (arr / norms).T  # columns = b_hat, n_hat, t_hat
+
+
+def build_dislocation_population(
+    crystal: "CrystalConfig",
+    fov_lateral_um: float,
+    rng: np.random.Generator | None,
+) -> DislocationPopulation:
+    """Dispatch on crystal.mode and realize the dislocation population.
+
+    Centered: 1 dislocation at origin with explicit (b, n, t).
+    Wall: existing dis-spaced grid; positions evenly spaced along y at z=0.
+    Random_dislocations: implemented in Task 8.
+    """
+    if crystal.mode == "centered":
+        c = crystal.centered
+        assert c is not None  # __post_init__ guarantees
+        positions = np.zeros((1, 3), dtype=np.float64)
+        Ud = _ud_matrix_from_bnt(c.b, c.n, c.t)[np.newaxis, :, :]  # (1, 3, 3)
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None)
+
+    if crystal.mode == "wall":
+        w = crystal.wall
+        assert w is not None
+        # Positions: ndis dislocations along a wall at z=0, x=0, y evenly
+        # spaced by `dis` micrometers centered at 0.
+        ys = (np.arange(w.ndis) - (w.ndis - 1) / 2.0) * w.dis
+        positions = np.zeros((w.ndis, 3), dtype=np.float64)
+        positions[:, 1] = ys
+        # All dislocations in a wall share the same (b, n, t) — the canonical
+        # {111}/<-110>/<11-2> slip system for the Borgi/Purdue layout.
+        Ud_single = _ud_matrix_from_bnt((1, -1, 0), (1, 1, 1), (1, 1, -2))
+        Ud = np.broadcast_to(Ud_single, (w.ndis, 3, 3)).copy()
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None)
+
+    if crystal.mode == "random_dislocations":
+        raise NotImplementedError("random_dislocations branch implemented in Task 8")
+
+    raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
