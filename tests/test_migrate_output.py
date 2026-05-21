@@ -44,7 +44,9 @@ def test_migrate_round_trips_images(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             np.save(images_dir / f"mosa_test_0000_{chi_i:04d}_{phi_j:04d}.npy", arr)
             np.save(perf_dir / f"mosa_test_0000_{chi_i:04d}_{phi_j:04d}.npy", arr * -1)
 
-    h5_path = tmp_path / "dfxm_geo.h5"
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    h5_path = out_dir / "dfxm_geo.h5"
     migrate_npy_dir_to_h5(
         npy_dir=tmp_path,
         h5_path=h5_path,
@@ -57,7 +59,15 @@ def test_migrate_round_trips_images(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         sample_remount="S1",
     )
 
-    with h5py.File(h5_path, "r") as f:
+    # v1.2.0 layout: master + per-scan detector files.
+    out_master = out_dir / "dfxm_geo.h5"
+    assert out_master.is_file()
+    assert (out_dir / "scan0001" / "dfxm_sim_detector_0000.h5").is_file()
+    assert (out_dir / "scan0002" / "dfxm_sim_detector_0000.h5").is_file()
+
+    with h5py.File(out_master, "r") as f:
+        # ExternalLink follow-through: reads under /1.1/.../data resolve to
+        # the per-scan detector file's image stack.
         d1 = f["/1.1/instrument/dfxm_sim_detector/data"][...]
         d2 = f["/2.1/instrument/dfxm_sim_detector/data"][...]
         # Frame order: chi-outer, phi-inner.
