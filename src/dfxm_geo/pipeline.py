@@ -574,20 +574,9 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
 
     Writes one `<output_dir>/dfxm_geo.h5` containing BLISS scan `/1.1`
     (dislocations) and, if `io.include_perfect_crystal=True`, `/2.1`
-    (Hg=0 reference). Provenance + per-scan metadata are also embedded.
+    (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
+    a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
-    # Catches "I edited Nsub / Npixels and it didn't take effect" in the first
-    # second of the run instead of after a wasted job. Prints the effective
-    # ray-grid params, the exact kernel path that will be loaded, and the
-    # Fg cache filename Find_Hg will look up.
-    _expected_fg = "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}.npy".format(
-        str(config.crystal.dis).replace(".", ""),
-        int(fm.psize * 1e9),
-        int(fm.zl_rms * 2.35e9),
-        fm.Npixels,
-        fm.Nsub,
-        config.crystal.sample_remount,
-    )
     if config.reciprocal is None:
         raise ValueError(
             "SimulationConfig.reciprocal is None — must specify [reciprocal] "
@@ -595,27 +584,68 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build dislocation population (dispatches on crystal.mode).
+    fov_lateral_um = fm.Npixels * fm.psize * 1e6  # m -> um
+    population = fm.build_dislocation_population(
+        config.crystal, fov_lateral_um=fov_lateral_um, rng=None
+    )
+
+    # Write sidecar BEFORE forward kernel so a forward crash still leaves
+    # the realized draw recoverable.
+    if population.sidecar is not None:
+        from dfxm_geo.io.sidecar import write_random_dislocations_sidecar
+
+        sidecar_path = write_random_dislocations_sidecar(
+            output_dir / "dfxm_geo", population.sidecar
+        )
+        print(f"[dfxm-forward] sidecar: {sidecar_path}", flush=True)
+
+    # Effective-config print.
     print(
         f"[dfxm-forward] effective config:\n"
         f"  Nsub={fm.Nsub}  Npixels={fm.Npixels}  NN1={fm.NN1}  NN2={fm.NN2}\n"
         f"  kernel={fm._loaded_kernel_path}\n"
-        f"  Fg cache={_expected_fg}\n"
-        f"  dis={config.crystal.dis}  ndis={config.crystal.ndis}  "
-        f"remount={config.crystal.sample_remount}",
+        f"  crystal.mode={config.crystal.mode}  ndis={len(population.positions_um)}\n"
+        f"  scan.mode={config.scan.derived_mode_name()}  "
+        f"axes_scanned={config.scan.scanned_axes()}",
         flush=True,
     )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
+    # Centered + random_dislocations use Find_Hg_from_population.
+    if config.crystal.mode == "wall":
+        w = config.crystal.wall
+        assert w is not None
+        S = SAMPLE_REMOUNT_OPTIONS[w.sample_remount]
+        Hg, q_hkl = fm.Find_Hg(
+            w.dis,
+            w.ndis,
+            fm.psize,
+            fm.zl_rms,
+            h=config.reciprocal.hkl[0],
+            k=config.reciprocal.hkl[1],
+            l=config.reciprocal.hkl[2],
+            S=S,
+            remount_name=w.sample_remount,
+        )
+        sample_dis = w.dis
+        sample_ndis = w.ndis
+        sample_remount = w.sample_remount
+    else:
+        Hg, q_hkl = fm.Find_Hg_from_population(
+            population,
+            fm.psize,
+            fm.zl_rms,
+            h=config.reciprocal.hkl[0],
+            k=config.reciprocal.hkl[1],
+            l=config.reciprocal.hkl[2],
+        )
+        sample_dis = -1.0  # sentinel: not applicable for centered/random
+        sample_ndis = len(population.positions_um)
+        sample_remount = "N/A"
 
-    S = SAMPLE_REMOUNT_OPTIONS[config.crystal.sample_remount]
-    Hg, q_hkl = fm.Find_Hg(
-        config.crystal.dis,
-        config.crystal.ndis,
-        fm.psize,
-        fm.zl_rms,
-        S=S,
-        remount_name=config.crystal.sample_remount,
-    )
     fm.Hg = Hg
     fm.q_hkl = q_hkl
 
@@ -626,17 +656,21 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         h5_path,
         Hg=Hg,
         q_hkl=q_hkl,
-        phi_range=config.scan.phi_range,
-        phi_steps=config.scan.phi_steps,
-        chi_range=config.scan.chi_range,
-        chi_steps=config.scan.chi_steps,
+        phi_range=config.scan.phi.range or 0.0,
+        phi_steps=config.scan.phi.steps or 1,
+        chi_range=config.scan.chi.range or 0.0,
+        chi_steps=config.scan.chi.steps or 1,
         include_perfect_crystal=config.io.include_perfect_crystal,
-        sample_dis=config.crystal.dis,
-        sample_ndis=config.crystal.ndis,
-        sample_remount=config.crystal.sample_remount,
+        sample_dis=sample_dis,
+        sample_ndis=sample_ndis,
+        sample_remount=sample_remount,
         config_toml=config_toml,
         cli=" ".join(sys.argv),
         max_workers=config.io.max_workers,
+        scan=config.scan,
+        crystal_mode=config.crystal.mode,
+        scan_mode=config.scan.derived_mode_name(),
+        scanned_axes=list(config.scan.scanned_axes()),
     )
     return {
         "h5_path": h5_path,

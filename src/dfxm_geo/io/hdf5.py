@@ -401,6 +401,11 @@ def write_simulation_h5(
     cli: str,
     kernel_npz: Path | None = None,
     max_workers: int | None = None,
+    # NEW (T10): accepted but unused for now; T13 wires these to HDF5 attrs.
+    scan: object | None = None,
+    crystal_mode: str | None = None,
+    scan_mode: str | None = None,
+    scanned_axes: list[str] | None = None,
 ) -> None:
     """One-call entry point: writes /dfxm_geo/ provenance + /1.1 + optional /2.1.
 

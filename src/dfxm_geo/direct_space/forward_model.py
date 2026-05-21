@@ -745,3 +745,67 @@ def build_dislocation_population(
         return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=sidecar)
 
     raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
+
+
+def Find_Hg_from_population(
+    population: DislocationPopulation,
+    psize: float,
+    zl_rms: float,
+    h: int = -1,
+    k: int = 1,
+    l: int = -1,
+    *,
+    S: np.ndarray = _S_IDENTITY,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute Hg + q_hkl from an arbitrary DislocationPopulation.
+
+    For mode='centered' (1 dislocation) and 'random_dislocations' (N drawn
+    dislocations). Mirrors `Find_Hg` but takes explicit positions + Ud matrices
+    instead of the wall-layout (dis, ndis) parameters.
+
+    Hg convention: same as `load_or_generate_Hg` — Hg = transpose(Fg^-1) - I
+    (displacement gradient, not deformation gradient), consistent with
+    `forward()` which uses Hg to compute scattering vectors.
+
+    Args:
+        population: DislocationPopulation from `build_dislocation_population`.
+        psize: Detector pixel size (m) — unused currently, reserved for future
+            grid-dependent caching.
+        zl_rms: RMS of the beam profile in zl (m) — unused currently.
+        h, k, l: Miller indices of the active reflection.
+        S: 3x3 sample-remount rotation (default identity).
+
+    Returns:
+        (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
+    """
+    from dfxm_geo.crystal.dislocations import Fd_find_multi_dislocs_mixed, MixedDislocSpec
+
+    Q_norm = np.sqrt(h * h + k * k + l * l)
+    q_hkl = np.asarray([h, k, l]) / Q_norm
+
+    # Build MixedDislocSpec per dislocation. Fd_find_multi_dislocs_mixed
+    # supports per-crystal Ud + lab-frame offset.
+    crystals = [
+        MixedDislocSpec(
+            Ud_mix=population.Ud[i],
+            rotation_deg=0.0,  # pure edge; full character encoded in Ud columns
+            position_lab_um=(
+                float(population.positions_um[i, 0]),
+                float(population.positions_um[i, 1]),
+                float(population.positions_um[i, 2]),
+            ),
+        )
+        for i in range(len(population.positions_um))
+    ]
+
+    # Compute Fg via the multi-dislocation kernel.
+    # Returns shape (X, 3, 3) with identity already added (Fg, not Fdd).
+    Fg = Fd_find_multi_dislocs_mixed(rl, Us, crystals, Theta, S=S)
+
+    # Convert Fg → Hg using the same convention as load_or_generate_Hg:
+    #   Hg = transpose(Fg^-1) - I
+    # This is the displacement gradient form that forward() expects.
+    Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1])
+    Hg -= np.identity(3)
+
+    return Hg, q_hkl

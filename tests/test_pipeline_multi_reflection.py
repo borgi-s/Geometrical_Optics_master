@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from dfxm_geo.pipeline import SimulationConfig, run_simulation
+
 
 def _make_kernel_npz(
     path: Path,
@@ -161,3 +163,118 @@ class TestForwardMultiReflection:
             ValueError, match=r"has hkl=\(-1, 1, -1\) but lookup requested hkl=\(2, 0, 0\)"
         ):
             p.run_simulation(config, tmp_path / "out")
+
+
+class TestRunSimulationCrystalModes:
+    """Smoke tests covering all 3 crystal modes via run_simulation."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_kernel_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reset fm module-level state between tests."""
+        import dfxm_geo.direct_space.forward_model as fm
+
+        monkeypatch.setattr(fm, "_loaded_kernel_path", None)
+
+    def _make_kernel(self, tmp_path: Path) -> Path:
+        return _make_kernel_npz(
+            tmp_path / "pkl_files" / "Resq_i_h-1_k1_l-1_17keV_20260520_0000.npz",
+            hkl=(-1, 1, -1),
+            keV=17.0,
+        )
+
+    def _base_toml(self, mode_block: str) -> str:
+        return (
+            "[reciprocal]\n"
+            "hkl = [-1, 1, -1]\n"
+            "keV = 17.0\n"
+            "\n"
+            "[scan.phi]\n"
+            "range = 6e-4\n"
+            "steps = 3\n"
+            "[scan.chi]\n"
+            "range = 2e-3\n"
+            "steps = 3\n"
+            "\n"
+            f"{mode_block}\n"
+            "\n"
+            "[io]\n"
+            "include_perfect_crystal = false\n"
+            "\n"
+            "[postprocess]\n"
+            "enabled = false\n"
+        )
+
+    def test_centered_mode_writes_h5(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import dfxm_geo.direct_space.forward_model as fm
+
+        self._make_kernel(tmp_path)
+        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path / "pkl_files") + os.sep)
+
+        toml_text = self._base_toml(
+            "[crystal]\n"
+            'mode = "centered"\n'
+            "[crystal.centered]\n"
+            "b = [1, -1, 0]\n"
+            "n = [1, 1, 1]\n"
+            "t = [1, 1, -2]\n"
+        )
+        cfg_path = tmp_path / "centered.toml"
+        cfg_path.write_text(toml_text)
+        cfg = SimulationConfig.from_toml(cfg_path)
+        out_dir = tmp_path / "out"
+        result = run_simulation(cfg, out_dir)
+        assert result["h5_path"].exists()
+        assert not (out_dir / "dfxm_geo_random_dislocations.json").exists()
+
+    def test_wall_mode_preserves_legacy_behavior(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dfxm_geo.direct_space.forward_model as fm
+
+        self._make_kernel(tmp_path)
+        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path / "pkl_files") + os.sep)
+
+        toml_text = self._base_toml(
+            "[crystal]\n"
+            'mode = "wall"\n'
+            "[crystal.wall]\n"
+            "dis = 4.0\n"
+            "ndis = 151\n"
+            'sample_remount = "S1"\n'
+        )
+        cfg_path = tmp_path / "wall.toml"
+        cfg_path.write_text(toml_text)
+        cfg = SimulationConfig.from_toml(cfg_path)
+        out_dir = tmp_path / "out"
+        result = run_simulation(cfg, out_dir)
+        assert result["h5_path"].exists()
+        assert not (out_dir / "dfxm_geo_random_dislocations.json").exists()
+
+    def test_random_dislocations_mode_writes_sidecar(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dfxm_geo.direct_space.forward_model as fm
+
+        self._make_kernel(tmp_path)
+        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path / "pkl_files") + os.sep)
+
+        toml_text = self._base_toml(
+            "[crystal]\n"
+            'mode = "random_dislocations"\n'
+            "[crystal.random_dislocations]\n"
+            "ndis = 2\n"
+            "sigma = 3.0\n"
+            "seed = 42\n"
+        )
+        cfg_path = tmp_path / "rd.toml"
+        cfg_path.write_text(toml_text)
+        cfg = SimulationConfig.from_toml(cfg_path)
+        out_dir = tmp_path / "out"
+        run_simulation(cfg, out_dir)
+        sidecar = out_dir / "dfxm_geo_random_dislocations.json"
+        assert sidecar.exists()
+        import json
+
+        sidecar_data = json.loads(sidecar.read_text())
+        assert sidecar_data["ndis"] == 2
+        assert sidecar_data["seed"] == 42
