@@ -419,6 +419,24 @@ from dfxm_geo.io.hdf5 import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_kernel_state():
+    """Restore module-level forward_model state after each test.
+
+    `_kernel_for_tests()` loads a kernel via `_lookup_and_load_kernel`,
+    which sets `fm.Hg` and `fm._loaded_kernel_path` as side effects.
+    Downstream tests (e.g. the `TestHdf5NewAttrs` baseline-skip pattern in
+    `tests/test_detector_file.py`) rely on `_loaded_kernel_path is None`,
+    so we reset both after every test in this file to avoid cross-test
+    bleed.
+    """
+    yield
+    import dfxm_geo.direct_space.forward_model as fm
+
+    fm.Hg = None
+    fm._loaded_kernel_path = None
+
+
 def _kernel_for_tests() -> Path:
     """Pick the bundled kernel for provenance + lookup tests."""
     from dfxm_geo.pipeline import _lookup_and_load_kernel
@@ -666,10 +684,10 @@ Expected: the two new tests fail with AttributeError on `add_scan`.
         title: str,
         start_time: str,
         end_time: str,
-        sample: dict,
+        sample: dict[str, object],
         positioners: dict[str, np.ndarray | float],
         detector_links: dict[str, tuple[Path, str]],
-        dfxm_geo: dict,
+        dfxm_geo: dict[str, object],
         attrs: dict[str, str | list[str]],
     ) -> None:
         """Append one BLISS scan entry `/<scan_id>` to the master.
@@ -753,23 +771,27 @@ Expected: the two new tests fail with AttributeError on `add_scan`.
         # /N.1/dfxm_geo/
         if dfxm_geo:
             d = scan.require_group("dfxm_geo")
-            for key, val in dfxm_geo.items():
-                if val is None:
+            # Use a distinct loop var (g_val) so mypy does not unify with
+            # the earlier `val: np.ndarray | float` in the positioners loop.
+            for key, g_val in dfxm_geo.items():
+                if g_val is None:
                     continue
                 if key in d:
                     del d[key]
-                if isinstance(val, (int, float)):
-                    d.create_dataset(key, data=float(val))
+                if isinstance(g_val, (int, float)):
+                    d.create_dataset(key, data=float(g_val))
                 else:
-                    d.create_dataset(key, data=val)
+                    d.create_dataset(key, data=g_val)
 
 
-def _write_sample_dict(group: h5py.Group, sample: dict) -> None:
+def _write_sample_dict(group: h5py.Group, sample: dict[str, object]) -> None:
     """Write a sample dict into an NXsample group.
 
-    Scalars and arrays become datasets; nested dicts become sub-NXcollection
-    or NXsample groups. Dict keys "dislocations", "primary", "secondary" get
-    NXcollection / NXsample NX_class respectively; everything else is a scalar.
+    Scalars and arrays become datasets; nested dicts become sub-groups.
+    Only the key ``"dislocations"`` is special-cased: it becomes an
+    NXcollection whose children are NXsample sub-groups (one per
+    dislocation index). Every other nested dict becomes a plain NXsample
+    sub-group, with its contents recursed into.
     """
     for key, val in sample.items():
         if key in group:
@@ -785,9 +807,8 @@ def _write_sample_dict(group: h5py.Group, sample: dict) -> None:
             else:
                 _set_nx_class(sub, "NXsample")
                 _write_sample_dict(sub, val)
-        elif isinstance(val, (int, float)):
-            group.create_dataset(key, data=float(val) if isinstance(val, float) else int(val))
-        elif isinstance(val, str):
+        elif isinstance(val, (int, float, str)):
+            # h5py handles int/float/str natively; no explicit cast needed.
             group.create_dataset(key, data=val)
         else:
             group.create_dataset(key, data=np.asarray(val))
