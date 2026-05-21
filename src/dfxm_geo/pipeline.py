@@ -594,6 +594,18 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
             "SimulationConfig.reciprocal is None — must specify [reciprocal] "
             "block in TOML or set it programmatically before calling run_simulation."
         )
+    # v1.2.0 scope: the forward kernel only consumes the phi + chi axes from
+    # ScanConfig. ScanGrid/build_scan_grid is implemented and tested but not
+    # yet wired into save_images_parallel. Raise eagerly so users don't get
+    # silently-wrong output from scanning two_dtheta or z. Lifting this guard
+    # is tracked as a v1.3.0 follow-up.
+    if config.scan.two_dtheta.is_scanned or config.scan.z.is_scanned:
+        unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
+        raise ValueError(
+            f"scan axes {unwired} are configured but not yet wired into the "
+            f"forward kernel (v1.2.0 scope). For now, set range+steps only on "
+            f"[scan.phi] and/or [scan.chi]."
+        )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
     output_dir.mkdir(parents=True, exist_ok=True)
