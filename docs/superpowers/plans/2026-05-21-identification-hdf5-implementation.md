@@ -602,12 +602,13 @@ def test_add_scan_writes_external_link_and_metadata(tmp_path: Path) -> None:
         # ExternalLink to detector file resolves transparently
         det_ds = scan["instrument"]["dfxm_sim_detector"]["data"]
         np.testing.assert_array_equal(det_ds[...], stack)
-        # And the link target itself is recorded as a relative path
+        # And the link target itself is recorded as a relative POSIX path
+        # (forward-slash regardless of host OS — required for HDF5 portability).
         link = scan["instrument"]["dfxm_sim_detector"].get(
             "data", getlink=True
         )
         assert isinstance(link, h5py.ExternalLink)
-        assert link.filename == str(Path("scan0001") / "dfxm_sim_detector_0000.h5")
+        assert link.filename == "scan0001/dfxm_sim_detector_0000.h5"
 
 
 def test_add_scan_multi_detector_links(tmp_path: Path) -> None:
