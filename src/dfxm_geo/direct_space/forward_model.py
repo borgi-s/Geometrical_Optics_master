@@ -13,14 +13,19 @@ Default geometry constants match ID06 at the ESRF; see `dfxm_geo.constants`.
 """
 
 import os
+from dataclasses import dataclass as _dataclass
 from pathlib import Path
 from pprint import pprint
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
+
+if TYPE_CHECKING:
+    from dfxm_geo.pipeline import ScanConfig
 
 # Module-level default for the sample-remount rotation matrix.
 # Defined here to avoid cross-module imports and satisfy ruff-B008.
@@ -520,3 +525,52 @@ def Z_shift(offset_um: float) -> np.ndarray:
 # via pipeline._lookup_and_load_kernel(hkl, keV) or an explicit
 # _load_default_kernel(pkl_path) call. This lets the module be imported on
 # any host regardless of whether the kernel npz is on disk.
+
+
+# ---------------------------------------------------------------------------
+# Sub-project B: scan-grid helpers
+# ---------------------------------------------------------------------------
+
+
+@_dataclass
+class ScanGrid:
+    """Realized trajectory for a ScanConfig.
+
+    `axes` is the canonical 4-tuple ("phi", "chi", "two_dtheta", "z").
+    `samples` is parallel: per-axis 1-D arrays of position values
+    (units: radians for angular axes, micrometers for z). Fixed axes
+    have shape (1,); scanned axes have shape (steps,).
+
+    The forward kernel iterates the Cartesian product over `samples`.
+    """
+
+    axes: tuple[str, str, str, str]
+    samples: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+
+
+def build_scan_grid(scan: "ScanConfig") -> ScanGrid:
+    """Build a ScanGrid from a ScanConfig.
+
+    For each canonical axis, returns either:
+      - linspace(value-range, value+range, steps) if scanned
+      - np.array([value]) if fixed (singleton)
+    """
+    from dfxm_geo.pipeline import _CANONICAL_AXES  # local import: avoid cycle
+
+    samples = []
+    for axis_name in _CANONICAL_AXES:
+        axis = getattr(scan, axis_name)
+        if axis.is_scanned:
+            arr = np.linspace(
+                axis.value - axis.range,
+                axis.value + axis.range,
+                axis.steps,
+                dtype=np.float64,
+            )
+        else:
+            arr = np.array([axis.value], dtype=np.float64)
+        samples.append(arr)
+    return ScanGrid(
+        axes=("phi", "chi", "two_dtheta", "z"),
+        samples=(samples[0], samples[1], samples[2], samples[3]),
+    )
