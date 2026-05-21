@@ -437,11 +437,16 @@ class IdentificationNoiseConfig:
 
 @dataclass(frozen=True, kw_only=True)
 class IdentificationMonteCarloConfig:
-    """Multi-disloc Monte Carlo parameters (mode='multi' only)."""
+    """Multi-disloc Monte Carlo parameters (mode='multi' only).
+
+    v1.2.0: `n_png_previews` removed (PNG sidecars dropped). New opt-in
+    `render_per_dislocation`: when True, each scan dir also writes
+    per-dislocation detector files for unambiguous instance labels.
+    """
 
     n_samples: int = 1000
     pos_std_um: float = 5.0
-    n_png_previews: int = 50
+    render_per_dislocation: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -449,16 +454,17 @@ class IdentificationZScanConfig:
     """z-scan mode parameters (mode='z-scan' only).
 
     Each (z_layer, b, α) configuration produces a (phi_steps × chi_steps)
-    rocking-curve stack on disk, with a randomly-drawn secondary
+    rocking-curve stack on disk (driven by `config.scan.phi` / `config.scan.chi`
+    from the shared B+C ScanConfig), with a randomly-drawn secondary
     dislocation if `include_secondary` is True. The secondary is drawn
     once per (z, b, α) and shared across the rocking grid.
+
+    v1.2.0: the duplicate `phi_range_deg / phi_steps / chi_range_deg /
+    chi_steps` fields have been removed; the scan grid is now read from
+    `[scan.phi]` / `[scan.chi]` via the shared ScanConfig.
     """
 
     z_offsets_um: list[float]
-    phi_range_deg: float
-    phi_steps: int
-    chi_range_deg: float
-    chi_steps: int
     include_secondary: bool = True
     secondary_rng_offset: int = 1
 
