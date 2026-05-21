@@ -99,7 +99,11 @@ def _auto_max_workers() -> int:
     return min(cpu, mem_cap)
 
 
-def _compute_frame(args: tuple) -> tuple[int, np.ndarray]:
+# (frame_idx, Hg, phi, chi) — one frame's worth of args for `_compute_frame`.
+_FrameArgs = tuple[int, np.ndarray, float, float]
+
+
+def _compute_frame(args: _FrameArgs) -> tuple[int, np.ndarray]:
     """Worker function: run forward() and return (frame_idx, image).
 
     args = (frame_idx, Hg, phi, chi)
@@ -107,6 +111,58 @@ def _compute_frame(args: tuple) -> tuple[int, np.ndarray]:
     frame_idx, Hg, phi, chi = args
     im = cast(np.ndarray, _fm.forward(Hg, phi=phi, chi=chi))
     return frame_idx, im
+
+
+def _create_detector_skeleton(
+    f: h5py.File,
+    *,
+    n_frames: int,
+    height: int,
+    width: int,
+    data: np.ndarray | None = None,
+) -> h5py.Dataset:
+    """Create the LIMA-style NX skeleton in ``f`` and return the image dataset.
+
+    Builds /entry_0000 (NXentry) → dfxm_sim_detector (NXdetector) → image,
+    plus the /entry_0000/plot (NXdata) and /entry_0000/measurement SoftLinks
+    that point at `DETECTOR_INTERNAL_PATH`. When ``data`` is given, the
+    dataset is created with the array inline (full-stack write). When
+    ``data is None`` the dataset is pre-allocated at (n_frames, height,
+    width) for streaming writes from worker threads.
+    """
+    f.attrs["NX_class"] = "NXroot"
+    f.attrs["creator"] = "dfxm-geo"
+    f.attrs["default"] = "entry_0000"
+    entry = f.create_group("entry_0000")
+    _set_nx_class(entry, "NXentry")
+    det = entry.create_group("dfxm_sim_detector")
+    _set_nx_class(det, "NXdetector")
+    if data is not None:
+        img = det.create_dataset(
+            "image",
+            data=data,
+            chunks=(1, height, width),
+            compression="gzip",
+            compression_opts=4,
+            shuffle=True,
+        )
+    else:
+        img = det.create_dataset(
+            "image",
+            shape=(n_frames, height, width),
+            dtype=np.float64,
+            chunks=(1, height, width),
+            compression="gzip",
+            compression_opts=4,
+            shuffle=True,
+        )
+    img.attrs["interpretation"] = "image"
+    plot = entry.create_group("plot")
+    _set_nx_class(plot, "NXdata")
+    plot.attrs["signal"] = "image"
+    plot["image"] = h5py.SoftLink(DETECTOR_INTERNAL_PATH)
+    entry["measurement"] = h5py.SoftLink(DETECTOR_INTERNAL_PATH)
+    return img
 
 
 def _write_detector_file(path: Path, image_stack: np.ndarray) -> None:
@@ -117,35 +173,17 @@ def _write_detector_file(path: Path, image_stack: np.ndarray) -> None:
     soft-links to that dataset. Used by identification single/multi paths
     when frames are computed serially in RAM.
     """
-    n, h, w = image_stack.shape
+    _, h, w = image_stack.shape
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as f:
-        f.attrs["NX_class"] = "NXroot"
-        f.attrs["creator"] = "dfxm-geo"
-        f.attrs["default"] = "entry_0000"
-        entry = f.create_group("entry_0000")
-        _set_nx_class(entry, "NXentry")
-        det = entry.create_group("dfxm_sim_detector")
-        _set_nx_class(det, "NXdetector")
-        img = det.create_dataset(
-            "image",
-            data=image_stack,
-            chunks=(1, h, w),
-            compression="gzip",
-            compression_opts=4,
-            shuffle=True,
+        _create_detector_skeleton(
+            f, n_frames=image_stack.shape[0], height=h, width=w, data=image_stack
         )
-        img.attrs["interpretation"] = "image"
-        plot = entry.create_group("plot")
-        _set_nx_class(plot, "NXdata")
-        plot.attrs["signal"] = "image"
-        plot["image"] = h5py.SoftLink("/entry_0000/dfxm_sim_detector/image")
-        entry["measurement"] = h5py.SoftLink("/entry_0000/dfxm_sim_detector/image")
 
 
 def _compute_and_write_detector_file_parallel(
     path: Path,
-    args_list: list[tuple],
+    args_list: list[_FrameArgs],
     *,
     max_workers: int | None = None,
     detector_shape: tuple[int, int] | None = None,
@@ -168,6 +206,7 @@ def _compute_and_write_detector_file_parallel(
     n_frames = len(args_list)
 
     if detector_shape is None:
+        # probe doubles as frame-0 result when shape unknown
         probe_idx, probe_im = _compute_frame(args_list[0])
         h, w = probe_im.shape
     else:
@@ -178,28 +217,7 @@ def _compute_and_write_detector_file_parallel(
     workers = max_workers if max_workers is not None else _auto_max_workers()
 
     with h5py.File(path, "w") as f:
-        f.attrs["NX_class"] = "NXroot"
-        f.attrs["creator"] = "dfxm-geo"
-        f.attrs["default"] = "entry_0000"
-        entry = f.create_group("entry_0000")
-        _set_nx_class(entry, "NXentry")
-        det = entry.create_group("dfxm_sim_detector")
-        _set_nx_class(det, "NXdetector")
-        img = det.create_dataset(
-            "image",
-            shape=(n_frames, h, w),
-            dtype=np.float64,
-            chunks=(1, h, w),
-            compression="gzip",
-            compression_opts=4,
-            shuffle=True,
-        )
-        img.attrs["interpretation"] = "image"
-        plot = entry.create_group("plot")
-        _set_nx_class(plot, "NXdata")
-        plot.attrs["signal"] = "image"
-        plot["image"] = h5py.SoftLink("/entry_0000/dfxm_sim_detector/image")
-        entry["measurement"] = h5py.SoftLink("/entry_0000/dfxm_sim_detector/image")
+        img = _create_detector_skeleton(f, n_frames=n_frames, height=h, width=w)
 
         if probe_im is not None:
             img[probe_idx] = probe_im

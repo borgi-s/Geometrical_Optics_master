@@ -8,10 +8,14 @@ import h5py
 import numpy as np
 import pytest
 
+import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.io.hdf5 import (
     DETECTOR_INTERNAL_PATH,
+    _compute_and_write_detector_file_parallel,
+    _compute_frame,
     _write_detector_file,
 )
+from dfxm_geo.pipeline import _lookup_and_load_kernel
 
 
 def test_write_detector_file_structure(tmp_path: Path) -> None:
@@ -58,19 +62,13 @@ def test_write_detector_file_internal_path_matches_constant(tmp_path: Path) -> N
 def test_compute_and_write_detector_file_parallel_roundtrip(tmp_path: Path) -> None:
     """Workers run forward() and stream into one detector file; pixels match a
     serial reference (probed-frame-0 plus the workers' results)."""
-    import dfxm_geo.direct_space.forward_model as fm
-    from dfxm_geo.io.hdf5 import _compute_and_write_detector_file_parallel, _compute_frame
-
     # Ensure a kernel is loaded (test fixtures use the bundled kernel).
     # `_lookup_and_load_kernel` also calls `Find_Hg`, which populates
     # `fm.Hg` to the correct (NN1*NN2*NN3, 3, 3) shape that forward()
     # requires. A synthetic (1, 3, 3) Hg would IndexError inside forward().
-    from dfxm_geo.pipeline import _lookup_and_load_kernel
-
     _lookup_and_load_kernel((-1, 1, -1), 17.0)
     if fm.Hg is None:
         pytest.skip("forward_model.Hg not populated; run dfxm-bootstrap.")
-    saved_Hg = fm.Hg
     try:
         Hg = fm.Hg
         args = [
@@ -102,4 +100,3 @@ def test_compute_and_write_detector_file_parallel_roundtrip(tmp_path: Path) -> N
         # breaking the next pipeline test that relies on a fresh reload).
         fm.Hg = None
         fm._loaded_kernel_path = None
-        _ = saved_Hg  # keep a reference alive in case anything still inspects it
