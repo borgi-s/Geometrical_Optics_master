@@ -63,6 +63,37 @@ class CrystalConfig:
 
 
 @dataclass
+class AxisScanConfig:
+    """Per-motor-axis scan primitive (sub-project B).
+
+    Each motor axis (phi, chi, two_dtheta, z) is independently fixed
+    at `value` or scanned over `[value-range, value+range]` with `steps`
+    samples (linspace). Both `range` and `steps` must be present
+    together for the axis to be scanned, or both absent for fixed.
+    """
+
+    value: float = 0.0
+    range: float | None = None
+    steps: int | None = None
+
+    def __post_init__(self) -> None:
+        if (self.range is None) != (self.steps is None):
+            raise ValueError(
+                "AxisScanConfig must specify both `range` and `steps`, or neither "
+                f"(fixed at `value`). Got range={self.range!r}, steps={self.steps!r}"
+            )
+        if self.range is not None:
+            if self.range <= 0:
+                raise ValueError(f"`range` must be > 0; got {self.range!r}")
+            if self.steps is None or self.steps < 2:
+                raise ValueError(f"`steps` must be >= 2 when range is set; got {self.steps!r}")
+
+    @property
+    def is_scanned(self) -> bool:
+        return self.range is not None and self.steps is not None
+
+
+@dataclass
 class ScanConfig:
     phi_range: float  # half-range in degrees
     phi_steps: int
