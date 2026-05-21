@@ -27,6 +27,13 @@ from tqdm import tqdm
 
 from dfxm_geo.direct_space import forward_model as _fm
 
+# Output layout constants (v1.2.0).
+MASTER_FORWARD = "dfxm_geo.h5"
+MASTER_IDENTIFY = "dfxm_identify.h5"
+SCAN_DIR_FMT = "scan{:04d}"
+DETECTOR_FILE_FMT = "{name}_0000.h5"
+DETECTOR_INTERNAL_PATH = "/entry_0000/dfxm_sim_detector/image"
+
 
 def _set_nx_class(grp: h5py.Group, cls: str) -> None:
     grp.attrs["NX_class"] = cls
