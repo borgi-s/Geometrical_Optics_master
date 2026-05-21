@@ -473,9 +473,18 @@ def write_simulation_h5(
         zl_rms=float(_fm.zl_rms),
     )
 
-    # Phase 2: global provenance
+    # Phase 2: global provenance + B+C Task 13 scan/crystal-mode attrs on /N.1.
     with h5py.File(path, "a") as f:
         _write_provenance(f, cli=cli, kernel_npz=kernel_npz, config_toml=config_toml)
+        # Write scan/crystal mode attrs on /1.1 for darfix/darling/silx inspection.
+        grp_1_1 = f["1.1"]
+        if scan_mode is not None:
+            grp_1_1.attrs["scan_mode"] = scan_mode
+        if scanned_axes is not None:
+            # Encode as bytes for h5py variable-length string list compatibility.
+            grp_1_1.attrs["scanned_axes"] = [a.encode("utf-8") for a in scanned_axes]
+        if crystal_mode is not None:
+            grp_1_1.attrs["crystal_mode"] = crystal_mode
 
     # Phase 3: optional perfect-crystal scan /2.1
     if include_perfect_crystal:

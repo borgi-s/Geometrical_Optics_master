@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 
 from dfxm_geo.io.hdf5 import _write_provenance
 
@@ -68,3 +70,98 @@ def test_write_provenance_config_toml(tmp_path: Path) -> None:
 
         parsed = tomllib.loads(got)
         assert parsed["crystal"]["dis"] == 4.0
+
+
+def _make_kernel_npz_for_provenance(
+    path: Path,
+    hkl: tuple[int, int, int] = (-1, 1, -1),
+    keV: float = 17.0,
+) -> Path:
+    """Minimal toy kernel for provenance tests that need run_simulation."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict[str, object] = {
+        "Resq_i": np.zeros((4, 4, 4), dtype=np.float64),
+        "Nrays": np.int64(1000),
+        "npoints1": np.int64(4),
+        "npoints2": np.int64(4),
+        "npoints3": np.int64(4),
+        "qi1_range": np.float64(1e-3),
+        "qi2_range": np.float64(1e-3),
+        "qi3_range": np.float64(1e-3),
+        "zeta_v_fwhm": np.float64(5.3e-4),
+        "zeta_h_fwhm": np.float64(0.0),
+        "NA_rms": np.float64(3.1e-4),
+        "eps_rms": np.float64(6e-5),
+        "theta": np.float64(0.165),
+        "D": np.float64(5.6e-4),
+        "d1": np.float64(0.274),
+        "phys_aper": np.float64(2e-3),
+        "beamstop": np.bool_(True),
+        "bs_height": np.float64(25e-3),
+        "aperture": np.bool_(True),
+        "knife_edge": np.bool_(False),
+        "dphi_range": np.float64(0.0),
+        "hkl": np.array(hkl, dtype=np.int64),
+        "keV": np.float64(keV),
+    }
+    np.savez(path, **data)
+    return path
+
+
+class TestHdf5NewAttrs:
+    @pytest.fixture(autouse=True)
+    def _reset_kernel_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reset fm module-level state between tests."""
+        import dfxm_geo.direct_space.forward_model as fm
+
+        monkeypatch.setattr(fm, "_loaded_kernel_path", None)
+
+    def test_scan_mode_attrs_written(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import dfxm_geo.direct_space.forward_model as fm
+        from dfxm_geo.pipeline import (
+            AxisScanConfig,
+            CenteredCrystalConfig,
+            CrystalConfig,
+            IOConfig,
+            PostprocessConfig,
+            ReciprocalConfig,
+            ScanConfig,
+            SimulationConfig,
+            run_simulation,
+        )
+
+        # Stage a toy kernel so the lookup succeeds.
+        _make_kernel_npz_for_provenance(
+            tmp_path / "pkl_files" / "Resq_i_h-1_k1_l-1_17keV_20260520_0000.npz",
+            hkl=(-1, 1, -1),
+            keV=17.0,
+        )
+        monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path / "pkl_files") + os.sep)
+
+        cfg = SimulationConfig(
+            crystal=CrystalConfig(
+                mode="centered",
+                centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+            ),
+            scan=ScanConfig(
+                phi=AxisScanConfig(range=6e-4, steps=3),
+                chi=AxisScanConfig(range=2e-3, steps=3),
+            ),
+            io=IOConfig(include_perfect_crystal=False),
+            postprocess=PostprocessConfig(enabled=False),
+            reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+        )
+        out_dir = tmp_path / "out"
+        run_simulation(cfg, out_dir)
+        h5_path = out_dir / "dfxm_geo.h5"
+        with h5py.File(h5_path, "r") as f:
+            grp = f["/1.1"]
+            # scan_mode = "mosa" (phi + chi both scanned)
+            assert grp.attrs["scan_mode"] == "mosa"
+            # scanned_axes: ["phi", "chi"] in canonical order
+            scanned = list(grp.attrs["scanned_axes"])
+            # h5py may return numpy.bytes_ — decode if needed
+            scanned_str = [s.decode("utf-8") if isinstance(s, bytes) else s for s in scanned]
+            assert scanned_str == ["phi", "chi"]
+            # crystal_mode = "centered"
+            assert grp.attrs["crystal_mode"] == "centered"
