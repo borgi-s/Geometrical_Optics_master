@@ -109,6 +109,113 @@ def _compute_frame(args: tuple) -> tuple[int, np.ndarray]:
     return frame_idx, im
 
 
+def _write_detector_file(path: Path, image_stack: np.ndarray) -> None:
+    """Write a pre-computed (N, H, W) image stack as a LIMA-style detector file.
+
+    Produces /entry_0000/dfxm_sim_detector/image with chunks=(1, H, W),
+    gzip-4 + shuffle, @interpretation="image", plus NXdata/measurement
+    soft-links to that dataset. Used by identification single/multi paths
+    when frames are computed serially in RAM.
+    """
+    n, h, w = image_stack.shape
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as f:
+        f.attrs["NX_class"] = "NXroot"
+        f.attrs["creator"] = "dfxm-geo"
+        f.attrs["default"] = "entry_0000"
+        entry = f.create_group("entry_0000")
+        _set_nx_class(entry, "NXentry")
+        det = entry.create_group("dfxm_sim_detector")
+        _set_nx_class(det, "NXdetector")
+        img = det.create_dataset(
+            "image",
+            data=image_stack,
+            chunks=(1, h, w),
+            compression="gzip",
+            compression_opts=4,
+            shuffle=True,
+        )
+        img.attrs["interpretation"] = "image"
+        plot = entry.create_group("plot")
+        _set_nx_class(plot, "NXdata")
+        plot.attrs["signal"] = "image"
+        plot["image"] = h5py.SoftLink("/entry_0000/dfxm_sim_detector/image")
+        entry["measurement"] = h5py.SoftLink("/entry_0000/dfxm_sim_detector/image")
+
+
+def _compute_and_write_detector_file_parallel(
+    path: Path,
+    args_list: list[tuple],
+    *,
+    max_workers: int | None = None,
+    detector_shape: tuple[int, int] | None = None,
+) -> None:
+    """Producer-consumer parallel writer for a LIMA-style detector file.
+
+    Workers run `forward()` via `_compute_frame` and stream results into a
+    pre-allocated (N_frames, H, W) dataset. The dataset is at the canonical
+    `DETECTOR_INTERNAL_PATH` so masters can ExternalLink to it.
+
+    Args:
+        path: Output detector file. Parent dirs are created if missing.
+        args_list: Sequence of (frame_idx, Hg, phi, chi) tuples, one per frame.
+            Frame indices must be a contiguous 0..N-1 set.
+        max_workers: Override for `_auto_max_workers()`.
+        detector_shape: (H, W). If None, probes args_list[0] to discover shape.
+    """
+    if not args_list:
+        raise ValueError("args_list must contain at least one frame")
+    n_frames = len(args_list)
+
+    if detector_shape is None:
+        probe_idx, probe_im = _compute_frame(args_list[0])
+        h, w = probe_im.shape
+    else:
+        h, w = detector_shape
+        probe_idx, probe_im = None, None
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workers = max_workers if max_workers is not None else _auto_max_workers()
+
+    with h5py.File(path, "w") as f:
+        f.attrs["NX_class"] = "NXroot"
+        f.attrs["creator"] = "dfxm-geo"
+        f.attrs["default"] = "entry_0000"
+        entry = f.create_group("entry_0000")
+        _set_nx_class(entry, "NXentry")
+        det = entry.create_group("dfxm_sim_detector")
+        _set_nx_class(det, "NXdetector")
+        img = det.create_dataset(
+            "image",
+            shape=(n_frames, h, w),
+            dtype=np.float64,
+            chunks=(1, h, w),
+            compression="gzip",
+            compression_opts=4,
+            shuffle=True,
+        )
+        img.attrs["interpretation"] = "image"
+        plot = entry.create_group("plot")
+        _set_nx_class(plot, "NXdata")
+        plot.attrs["signal"] = "image"
+        plot["image"] = h5py.SoftLink("/entry_0000/dfxm_sim_detector/image")
+        entry["measurement"] = h5py.SoftLink("/entry_0000/dfxm_sim_detector/image")
+
+        if probe_im is not None:
+            img[probe_idx] = probe_im
+            workers_args = args_list[1:]
+        else:
+            workers_args = args_list
+
+        if workers_args:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                for k, im in tqdm(
+                    ex.map(_compute_frame, workers_args),
+                    total=len(workers_args),
+                ):
+                    img[k] = im
+
+
 def _save_scan_parallel_to_h5(
     path: Path,
     scan_id: str,
