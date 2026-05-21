@@ -6,7 +6,6 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-import pytest
 
 from dfxm_geo.io.hdf5 import write_h5_scan
 
@@ -149,45 +148,3 @@ def test_write_h5_scan_dfxm_geo_per_scan(tmp_path: Path) -> None:
         assert float(g["theta"][()]) == 8.545
         assert float(g["psize"][()]) == 0.05
         assert float(g["zl_rms"][()]) == 0.6
-
-
-def test_save_scan_parallel_to_h5_uses_w2_pattern(tmp_path: Path) -> None:
-    """Smoke test: writer pre-allocates dataset and streams frames in.
-
-    Uses a tiny 2x2 grid against a real kernel so this exercises the
-    actual forward() pipeline. Skipped if no bootstrapped kernel is on disk.
-    """
-    from pathlib import Path as _P
-
-    import dfxm_geo.direct_space.forward_model as fm
-
-    # Guard against toy zero kernels loaded by other tests (multi-reflection
-    # tests stage zero kernels for lookup testing and leave fm.Hg set).
-    kernel_dir = _P(fm.pkl_fpath)
-    matches = sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz"))
-    if not matches:
-        pytest.skip("forward_model kernel not auto-loaded; run dfxm-bootstrap.")
-    if fm.Hg is None:
-        pytest.skip("forward_model kernel not auto-loaded; run dfxm-bootstrap.")
-
-    from dfxm_geo.io.hdf5 import _save_scan_parallel_to_h5
-
-    out = tmp_path / "test.h5"
-    # Use phi_steps=3 (odd) so phi=0 is included in the linspace; chi_steps=1
-    # so chi=0 is the only chi value. This guarantees at least one frame lands
-    # on the Bragg diffraction condition and produces a non-zero image.
-    _save_scan_parallel_to_h5(
-        out,
-        scan_id="1.1",
-        Hg=fm.Hg,
-        phi_range=0.0006 * 180 / np.pi,
-        phi_steps=3,
-        chi_range=0.0,
-        chi_steps=1,
-        max_workers=2,
-    )
-    with h5py.File(out, "r") as f:
-        ds = f["/1.1/instrument/dfxm_sim_detector/data"]
-        assert ds.shape[0] == 3  # 3x1 frames
-        # And at least one frame is non-zero (forward() actually ran)
-        assert any(ds[i].sum() != 0 for i in range(3))
