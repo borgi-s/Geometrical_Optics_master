@@ -201,33 +201,43 @@ Expected: 2 passed.
 def test_compute_and_write_detector_file_parallel_roundtrip(tmp_path: Path) -> None:
     """Workers run forward() and stream into one detector file; pixels match a
     serial reference (probed-frame-0 plus the workers' results)."""
-    from dfxm_geo.io.hdf5 import _compute_and_write_detector_file_parallel
+    from dfxm_geo.io.hdf5 import _compute_and_write_detector_file_parallel, _compute_frame
     import dfxm_geo.direct_space.forward_model as fm
-    from dfxm_geo.io.hdf5 import _compute_frame
-
-    # Ensure a kernel is loaded (test fixtures use the bundled kernel).
     from dfxm_geo.pipeline import _lookup_and_load_kernel
 
+    # `forward()` requires Hg of shape (NN1*NN2*NN3, 3, 3) — ~1.5M rows at the
+    # default kernel. We can't construct that from scratch; reuse the kernel-
+    # loaded `fm.Hg` (the canonical pattern; see also test_hdf5_writer.py:
+    # test_save_scan_parallel_to_h5_uses_w2_pattern).
     _lookup_and_load_kernel((-1, 1, -1), 17.0)
-    # Tiny 2x2 grid using Hg=identity strain (perfect crystal).
-    Hg = np.zeros((1, 3, 3))  # forward() accepts (N, 3, 3) shape
-    Hg[0] = np.eye(3)
-    args = [
-        (0, Hg, 0.0, 0.0),
-        (1, Hg, 1e-5, 0.0),
-        (2, Hg, 0.0, 1e-5),
-        (3, Hg, 1e-5, 1e-5),
-    ]
-    out = tmp_path / "scan0001" / "dfxm_sim_detector_0000.h5"
-    _compute_and_write_detector_file_parallel(out, args, max_workers=2)
+    try:
+        Hg = fm.Hg
+        assert Hg is not None
+        args = [
+            (0, Hg, 0.0, 0.0),
+            (1, Hg, 1e-5, 0.0),
+            (2, Hg, 0.0, 1e-5),
+            (3, Hg, 1e-5, 1e-5),
+        ]
+        out = tmp_path / "scan0001" / "dfxm_sim_detector_0000.h5"
+        _compute_and_write_detector_file_parallel(out, args, max_workers=2)
 
-    # Reference: run forward() serially using _compute_frame
-    ref = np.empty((4,) + _compute_frame(args[0])[1].shape, dtype=np.float64)
-    for a in args:
-        idx, im = _compute_frame(a)
-        ref[idx] = im
-    with h5py.File(out, "r") as f:
-        np.testing.assert_array_equal(f[DETECTOR_INTERNAL_PATH][...], ref)
+        # Reference: run forward() serially using _compute_frame
+        ref = np.empty((4,) + _compute_frame(args[0])[1].shape, dtype=np.float64)
+        for a in args:
+            idx, im = _compute_frame(a)
+            ref[idx] = im
+        with h5py.File(out, "r") as f:
+            np.testing.assert_array_equal(f[DETECTOR_INTERNAL_PATH][...], ref)
+    finally:
+        # Restore the kernel-state sentinels so downstream tests that branch on
+        # `fm.Hg is None` / `fm._loaded_kernel_path is None` retain their baseline
+        # skip behavior. (There's a latent ordering bug in
+        # test_hdf5_provenance.TestHdf5NewAttrs._reset_kernel_state — it resets
+        # _loaded_kernel_path but not Resq_i/Hg/qi*_start — that this teardown
+        # masks. Out of Phase-1 scope; flag for later.)
+        fm.Hg = None
+        fm._loaded_kernel_path = None
 ```
 
 - [ ] **Step 2: Run test to confirm fail**
