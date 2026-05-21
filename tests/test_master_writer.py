@@ -6,12 +6,31 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 
 from dfxm_geo.io.hdf5 import (
     DETECTOR_INTERNAL_PATH,
     MasterWriter,
     _write_detector_file,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_kernel_state():
+    """Restore module-level forward_model state after each test.
+
+    `_kernel_for_tests()` loads a kernel via `_lookup_and_load_kernel`,
+    which sets `fm.Hg` and `fm._loaded_kernel_path` as side effects.
+    Downstream tests (e.g. the `TestHdf5NewAttrs` baseline-skip pattern in
+    `tests/test_detector_file.py`) rely on `_loaded_kernel_path is None`,
+    so we reset both after every test in this file to avoid cross-test
+    bleed.
+    """
+    yield
+    import dfxm_geo.direct_space.forward_model as fm
+
+    fm.Hg = None
+    fm._loaded_kernel_path = None
 
 
 def _kernel_for_tests() -> Path:

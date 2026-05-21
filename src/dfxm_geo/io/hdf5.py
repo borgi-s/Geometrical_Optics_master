@@ -412,10 +412,10 @@ class MasterWriter:
         title: str,
         start_time: str,
         end_time: str,
-        sample: dict,
+        sample: dict[str, object],
         positioners: dict[str, np.ndarray | float],
         detector_links: dict[str, tuple[Path, str]],
-        dfxm_geo: dict,
+        dfxm_geo: dict[str, object],
         attrs: dict[str, str | list[str]],
     ) -> None:
         """Append one BLISS scan entry `/<scan_id>` to the master.
@@ -499,23 +499,25 @@ class MasterWriter:
         # /N.1/dfxm_geo/
         if dfxm_geo:
             d = scan.require_group("dfxm_geo")
-            for key, val in dfxm_geo.items():
-                if val is None:
+            for key, g_val in dfxm_geo.items():
+                if g_val is None:
                     continue
                 if key in d:
                     del d[key]
-                if isinstance(val, (int, float)):
-                    d.create_dataset(key, data=float(val))
+                if isinstance(g_val, (int, float)):
+                    d.create_dataset(key, data=float(g_val))
                 else:
-                    d.create_dataset(key, data=val)
+                    d.create_dataset(key, data=g_val)
 
 
-def _write_sample_dict(group: h5py.Group, sample: dict) -> None:
+def _write_sample_dict(group: h5py.Group, sample: dict[str, object]) -> None:
     """Write a sample dict into an NXsample group.
 
-    Scalars and arrays become datasets; nested dicts become sub-NXcollection
-    or NXsample groups. Dict keys "dislocations", "primary", "secondary" get
-    NXcollection / NXsample NX_class respectively; everything else is a scalar.
+    Scalars and arrays become datasets; nested dicts become sub-groups.
+    Only the key ``"dislocations"`` is special-cased: it becomes an
+    NXcollection whose children are NXsample sub-groups (one per
+    dislocation index). Every other nested dict becomes a plain NXsample
+    sub-group, with its contents recursed into.
     """
     for key, val in sample.items():
         if key in group:
@@ -531,9 +533,7 @@ def _write_sample_dict(group: h5py.Group, sample: dict) -> None:
             else:
                 _set_nx_class(sub, "NXsample")
                 _write_sample_dict(sub, val)
-        elif isinstance(val, (int, float)):
-            group.create_dataset(key, data=float(val) if isinstance(val, float) else int(val))
-        elif isinstance(val, str):
+        elif isinstance(val, (int, float, str)):
             group.create_dataset(key, data=val)
         else:
             group.create_dataset(key, data=np.asarray(val))
