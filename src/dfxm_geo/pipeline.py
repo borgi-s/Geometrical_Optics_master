@@ -683,39 +683,93 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
 def _dataclass_to_toml_str(config: SimulationConfig) -> str:
     """Serialize a SimulationConfig back to TOML-formatted text.
 
-    Simple implementation: write the four sub-sections as TOML tables.
+    Renders:
+      [reciprocal] (hkl, keV)
+      [scan.<axis>] for each axis whose value/range/steps differ from default
+      [crystal] mode + matching [crystal.<mode>] sub-block
+      [io], [postprocess]
+
+    The output is round-trippable through SimulationConfig.from_toml.
     """
     from dataclasses import asdict as _asdict
 
-    sections = {
-        "crystal": _asdict(config.crystal),
-        "scan": _asdict(config.scan),
-        "io": _asdict(config.io),
-        "postprocess": _asdict(config.postprocess),
-    }
-    # Sub-project D: include [reciprocal] so the HDF5-embedded config_toml
-    # round-trips through SimulationConfig.from_toml without raising
-    # "missing [reciprocal] block". Skipped if None (legacy SimulationConfig()
-    # programmatic construction without reciprocal).
-    if config.reciprocal is not None:
-        sections["reciprocal"] = _asdict(config.reciprocal)
     lines: list[str] = []
-    for name, body in sections.items():
-        lines.append(f"[{name}]")
-        for k, v in body.items():
-            if v is None:
-                continue  # TOML has no null; skip
-            if isinstance(v, str):
-                lines.append(f'{k} = "{v}"')
-            elif isinstance(v, bool):
-                lines.append(f"{k} = {'true' if v else 'false'}")
-            elif isinstance(v, tuple):
-                # Tuples (e.g. reciprocal.hkl = (h, k, l)) render as TOML arrays.
-                lines.append(f"{k} = {list(v)}")
-            else:
-                lines.append(f"{k} = {v}")
+
+    # [reciprocal]
+    if config.reciprocal is not None:
+        lines.append("[reciprocal]")
+        h, k, l = config.reciprocal.hkl
+        lines.append(f"hkl = [{h}, {k}, {l}]")
+        lines.append(f"keV = {config.reciprocal.keV}")
         lines.append("")
-    return "\n".join(lines)
+
+    # [scan.<axis>] - only render axes that differ from default (skip if value==0
+    # and not scanned, to keep TOML tidy).
+    for axis_name in _CANONICAL_AXES:
+        axis = getattr(config.scan, axis_name)
+        if axis.value == 0.0 and not axis.is_scanned:
+            continue
+        lines.append(f"[scan.{axis_name}]")
+        if axis.value != 0.0:
+            lines.append(f"value = {axis.value}")
+        if axis.is_scanned:
+            lines.append(f"range = {axis.range}")
+            lines.append(f"steps = {axis.steps}")
+        lines.append("")
+
+    # [crystal] + matching sub-block
+    lines.append("[crystal]")
+    lines.append(f'mode = "{config.crystal.mode}"')
+    lines.append(f"[crystal.{config.crystal.mode}]")
+    if config.crystal.mode == "centered":
+        c = config.crystal.centered
+        assert c is not None
+        lines.append(f"b = [{c.b[0]}, {c.b[1]}, {c.b[2]}]")
+        lines.append(f"n = [{c.n[0]}, {c.n[1]}, {c.n[2]}]")
+        lines.append(f"t = [{c.t[0]}, {c.t[1]}, {c.t[2]}]")
+    elif config.crystal.mode == "wall":
+        w = config.crystal.wall
+        assert w is not None
+        lines.append(f"dis = {w.dis}")
+        lines.append(f"ndis = {w.ndis}")
+        lines.append(f'sample_remount = "{w.sample_remount}"')
+    elif config.crystal.mode == "random_dislocations":
+        rd = config.crystal.random_dislocations
+        assert rd is not None
+        lines.append(f"ndis = {rd.ndis}")
+        if rd.sigma is not None:
+            lines.append(f"sigma = {rd.sigma}")
+        if rd.min_distance is not None:
+            lines.append(f"min_distance = {rd.min_distance}")
+        if rd.seed is not None:
+            lines.append(f"seed = {rd.seed}")
+    lines.append("")
+
+    # [io] - render every field (default-skipping is brittle here since users
+    # may explicitly want to set fields to defaults). Use asdict for simplicity.
+    lines.append("[io]")
+    for k_io, v_io in _asdict(config.io).items():
+        if v_io is None:
+            continue
+        if isinstance(v_io, str):
+            lines.append(f'{k_io} = "{v_io}"')
+        elif isinstance(v_io, bool):
+            lines.append(f"{k_io} = {str(v_io).lower()}")
+        else:
+            lines.append(f"{k_io} = {v_io}")
+    lines.append("")
+
+    # [postprocess]
+    lines.append("[postprocess]")
+    for k_pp, v_pp in _asdict(config.postprocess).items():
+        if isinstance(v_pp, str):
+            lines.append(f'{k_pp} = "{v_pp}"')
+        elif isinstance(v_pp, bool):
+            lines.append(f"{k_pp} = {str(v_pp).lower()}")
+        else:
+            lines.append(f"{k_pp} = {v_pp}")
+
+    return "\n".join(lines) + "\n"
 
 
 def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any]:

@@ -20,6 +20,7 @@ from dfxm_geo.pipeline import (
     PostprocessConfig,
     ScanConfig,
     SimulationConfig,
+    _dataclass_to_toml_str,
     cli_main,
     run_postprocess,
 )
@@ -599,3 +600,90 @@ class TestReciprocalConfigParsing:
         )
         with pytest.raises(ValueError, match=r"missing \[reciprocal\] block"):
             load_identification_config(cfg)
+
+
+class TestDataclassToTomlRoundTrip:
+    """Round-trip: SimulationConfig -> TOML string -> SimulationConfig (Task 11)."""
+
+    def _write_temp(self, tmp_path: Path, text: str) -> Path:
+        p = tmp_path / "rt.toml"
+        p.write_text(text)
+        return p
+
+    def test_centered_mode_round_trip(self, tmp_path: Path) -> None:
+        toml_text = (
+            "[reciprocal]\n"
+            "hkl = [-1, 1, -1]\n"
+            "keV = 17.0\n"
+            "\n"
+            "[scan.phi]\n"
+            "value = 0.0\n"
+            "range = 6e-4\n"
+            "steps = 21\n"
+            "\n"
+            "[crystal]\n"
+            'mode = "centered"\n'
+            "[crystal.centered]\n"
+            "b = [1, -1, 0]\n"
+            "n = [1, 1, 1]\n"
+            "t = [1, 1, -2]\n"
+        )
+        cfg_path = tmp_path / "cfg.toml"
+        cfg_path.write_text(toml_text)
+        cfg = SimulationConfig.from_toml(cfg_path)
+
+        round_tripped_toml = _dataclass_to_toml_str(cfg)
+        cfg_2 = SimulationConfig.from_toml(self._write_temp(tmp_path, round_tripped_toml))
+        assert cfg_2 == cfg
+
+    def test_wall_mode_round_trip(self, tmp_path: Path) -> None:
+        toml_text = (
+            "[reciprocal]\n"
+            "hkl = [-1, 1, -1]\n"
+            "keV = 17.0\n"
+            "\n"
+            "[scan.phi]\n"
+            "range = 6e-4\n"
+            "steps = 21\n"
+            "[scan.chi]\n"
+            "range = 2e-3\n"
+            "steps = 21\n"
+            "\n"
+            "[crystal]\n"
+            'mode = "wall"\n'
+            "[crystal.wall]\n"
+            "dis = 4.0\n"
+            "ndis = 151\n"
+            'sample_remount = "S1"\n'
+        )
+        cfg_path = tmp_path / "cfg.toml"
+        cfg_path.write_text(toml_text)
+        cfg = SimulationConfig.from_toml(cfg_path)
+        round_tripped = _dataclass_to_toml_str(cfg)
+        cfg_2 = SimulationConfig.from_toml(self._write_temp(tmp_path, round_tripped))
+        assert cfg_2 == cfg
+
+    def test_random_dislocations_mode_round_trip(self, tmp_path: Path) -> None:
+        toml_text = (
+            "[reciprocal]\n"
+            "hkl = [-1, 1, -1]\n"
+            "keV = 17.0\n"
+            "\n"
+            "[scan.phi]\n"
+            "range = 6e-4\n"
+            "steps = 21\n"
+            "\n"
+            "[crystal]\n"
+            'mode = "random_dislocations"\n'
+            "[crystal.random_dislocations]\n"
+            "ndis = 4\n"
+            "sigma = 5.0\n"
+            "min_distance = 2.0\n"
+            "seed = 42\n"
+        )
+        cfg_path = tmp_path / "cfg.toml"
+        cfg_path.write_text(toml_text)
+        cfg = SimulationConfig.from_toml(cfg_path)
+        round_tripped = _dataclass_to_toml_str(cfg)
+        cfg_2 = SimulationConfig.from_toml(self._write_temp(tmp_path, round_tripped))
+        assert cfg_2 == cfg
