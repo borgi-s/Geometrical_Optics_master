@@ -6,6 +6,7 @@ import pytest
 
 from dfxm_geo.pipeline import (
     CenteredCrystalConfig,
+    CrystalConfig,
     RandomDislocationsConfig,
     WallCrystalConfig,
 )
@@ -74,3 +75,94 @@ class TestRandomDislocationsConfig:
         assert cfg.sigma == 5.0
         assert cfg.min_distance == 4.0
         assert cfg.seed == 42
+
+
+class TestCrystalConfigFromDict:
+    def test_centered_mode_parses(self) -> None:
+        cfg = CrystalConfig.from_dict(
+            {
+                "mode": "centered",
+                "centered": {"b": [1, -1, 0], "n": [1, 1, 1], "t": [1, 1, -2]},
+            }
+        )
+        assert cfg.mode == "centered"
+        assert cfg.centered is not None
+        assert cfg.centered.b == (1, -1, 0)
+        assert cfg.wall is None
+        assert cfg.random_dislocations is None
+
+    def test_wall_mode_parses(self) -> None:
+        cfg = CrystalConfig.from_dict(
+            {
+                "mode": "wall",
+                "wall": {"dis": 4.0, "ndis": 151, "sample_remount": "S1"},
+            }
+        )
+        assert cfg.mode == "wall"
+        assert cfg.wall is not None
+        assert cfg.wall.ndis == 151
+        assert cfg.centered is None
+        assert cfg.random_dislocations is None
+
+    def test_random_dislocations_mode_parses(self) -> None:
+        cfg = CrystalConfig.from_dict(
+            {
+                "mode": "random_dislocations",
+                "random_dislocations": {"ndis": 4, "sigma": 5.0, "seed": 42},
+            }
+        )
+        assert cfg.mode == "random_dislocations"
+        assert cfg.random_dislocations is not None
+        assert cfg.random_dislocations.ndis == 4
+        assert cfg.centered is None
+        assert cfg.wall is None
+
+    def test_none_dict_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"missing \[crystal\] block"):
+            CrystalConfig.from_dict(None)
+
+    def test_missing_mode_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"missing `mode` in \[crystal\]"):
+            CrystalConfig.from_dict(
+                {"centered": {"b": [1, -1, 0], "n": [1, 1, 1], "t": [1, 1, -2]}}
+            )
+
+    def test_unknown_mode_rejected(self) -> None:
+        with pytest.raises(ValueError, match="unknown crystal mode 'bicrystal'"):
+            CrystalConfig.from_dict({"mode": "bicrystal"})
+
+    def test_missing_required_subblock_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"\[crystal.centered\] sub-block is required"):
+            CrystalConfig.from_dict({"mode": "centered"})
+
+    def test_sibling_subblock_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"extra sub-block.*'wall'"):
+            CrystalConfig.from_dict(
+                {
+                    "mode": "centered",
+                    "centered": {"b": [1, -1, 0], "n": [1, 1, 1], "t": [1, 1, -2]},
+                    "wall": {"dis": 4.0, "ndis": 151, "sample_remount": "S1"},
+                }
+            )
+
+    def test_multiple_sibling_subblocks_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"extra sub-block.*'random_dislocations'.*'wall'"):
+            CrystalConfig.from_dict(
+                {
+                    "mode": "centered",
+                    "centered": {"b": [1, -1, 0], "n": [1, 1, 1], "t": [1, 1, -2]},
+                    "wall": {"dis": 4.0, "ndis": 151, "sample_remount": "S1"},
+                    "random_dislocations": {"ndis": 4},
+                }
+            )
+
+    def test_tuple_conversion_for_b_n_t(self) -> None:
+        cfg = CrystalConfig.from_dict(
+            {
+                "mode": "centered",
+                "centered": {"b": [1, -1, 0], "n": [1, 1, 1], "t": [1, 1, -2]},
+            }
+        )
+        assert isinstance(cfg.centered.b, tuple)
+        assert isinstance(cfg.centered.n, tuple)
+        assert isinstance(cfg.centered.t, tuple)

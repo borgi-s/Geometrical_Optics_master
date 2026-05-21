@@ -49,20 +49,6 @@ from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
 
 @dataclass
-class CrystalConfig:
-    dis: float = 4.0  # inter-dislocation distance (µm)
-    ndis: int = 151  # number of dislocations
-    sample_remount: str = "S1"  # one of S1/S2/S3/S4; Purdue 2024 paper
-
-    def __post_init__(self) -> None:
-        if self.sample_remount not in SAMPLE_REMOUNT_OPTIONS:
-            valid = ", ".join(SAMPLE_REMOUNT_OPTIONS.keys())
-            raise ValueError(
-                f"sample_remount must be one of: {valid} (got {self.sample_remount!r})"
-            )
-
-
-@dataclass
 class AxisScanConfig:
     """Per-motor-axis scan primitive (sub-project B).
 
@@ -255,6 +241,85 @@ class RandomDislocationsConfig:
             raise ValueError(f"`min_distance` must be >= 0 when set; got {self.min_distance}")
 
 
+_CRYSTAL_MODE_NAMES = ("centered", "wall", "random_dislocations")
+
+
+@dataclass
+class CrystalConfig:
+    """Discriminated union over the three crystal-layout modes (sub-project C).
+
+    Exactly one of `centered`/`wall`/`random_dislocations` is non-None and
+    matches `mode`. Constructed via `CrystalConfig.from_dict` from a TOML
+    `[crystal]` table.
+    """
+
+    mode: Literal["centered", "wall", "random_dislocations"]
+    centered: CenteredCrystalConfig | None = None
+    wall: WallCrystalConfig | None = None
+    random_dislocations: RandomDislocationsConfig | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in _CRYSTAL_MODE_NAMES:
+            raise ValueError(
+                f"unknown crystal mode {self.mode!r}; expected one of {_CRYSTAL_MODE_NAMES}"
+            )
+        for mode in _CRYSTAL_MODE_NAMES:
+            sub = getattr(self, mode)
+            if mode == self.mode and sub is None:
+                raise ValueError(
+                    f"crystal mode={self.mode!r}: [crystal.{mode}] sub-block is required"
+                )
+            if mode != self.mode and sub is not None:
+                extras = sorted(
+                    m
+                    for m in _CRYSTAL_MODE_NAMES
+                    if m != self.mode and getattr(self, m) is not None
+                )
+                raise ValueError(
+                    f"crystal mode={self.mode!r}: extra sub-block {extras} "
+                    f"present; only [crystal.{self.mode}] is valid"
+                )
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> CrystalConfig:
+        if data is None:
+            raise ValueError(
+                "missing [crystal] block — forward/identify require explicit "
+                "crystal layout; see configs/default.toml."
+            )
+        if "mode" not in data:
+            raise ValueError("missing `mode` in [crystal] — required to pick a layout.")
+        mode = data["mode"]
+        if mode not in _CRYSTAL_MODE_NAMES:
+            raise ValueError(
+                f"unknown crystal mode {mode!r}; expected one of {_CRYSTAL_MODE_NAMES}"
+            )
+
+        # Reject sibling sub-blocks early for a precise error.
+        siblings = sorted(m for m in _CRYSTAL_MODE_NAMES if m != mode and m in data)
+        if siblings:
+            raise ValueError(
+                f"crystal mode={mode!r}: extra sub-block {siblings} present; "
+                f"only [crystal.{mode}] is valid"
+            )
+        if mode not in data:
+            raise ValueError(f"crystal mode={mode!r}: [crystal.{mode}] sub-block is required")
+
+        sub_data = data[mode]
+        kwargs: dict = {"mode": mode}
+        if mode == "centered":
+            kwargs["centered"] = CenteredCrystalConfig(
+                b=tuple(sub_data["b"]),
+                n=tuple(sub_data["n"]),
+                t=tuple(sub_data["t"]),
+            )
+        elif mode == "wall":
+            kwargs["wall"] = WallCrystalConfig(**sub_data)
+        elif mode == "random_dislocations":
+            kwargs["random_dislocations"] = RandomDislocationsConfig(**sub_data)
+        return cls(**kwargs)
+
+
 @dataclass
 class IOConfig:
     fn_prefix: str = "/mosa_test_0000_"
@@ -319,7 +384,7 @@ class ReciprocalConfig:
 
 @dataclass
 class SimulationConfig:
-    crystal: CrystalConfig = field(default_factory=CrystalConfig)
+    crystal: CrystalConfig  # NO DEFAULT — required; construct via CrystalConfig.from_dict
     scan: ScanConfig = field(default_factory=ScanConfig)
     io: IOConfig = field(default_factory=IOConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
@@ -331,10 +396,10 @@ class SimulationConfig:
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
         """Load a SimulationConfig from a TOML file."""
-        with path.open("rb") as f:
-            raw = tomllib.load(f)
-        crystal = CrystalConfig(**raw.get("crystal", {}))
-        scan = ScanConfig(**raw["scan"])
+        with open(path, "rb") as fh:
+            raw = tomllib.load(fh)
+        crystal = CrystalConfig.from_dict(raw.get("crystal"))
+        scan = ScanConfig.from_dict(raw.get("scan"))
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
         reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
