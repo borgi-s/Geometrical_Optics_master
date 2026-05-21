@@ -32,6 +32,8 @@ poisson_noise = false            # noise lives in the rocking-curve forward call
 rng_seed = 0
 intensity_scale = 7.0
 
+# NOTE: [zscan].phi_range_deg / chi_range_deg are in DEGREES (z-scan internal path).
+# [scan.phi].value above is in RADIANS (shared ScanConfig convention).
 [zscan]
 z_offsets_um = [-2.0, -1.0, 0.0, 1.0, 2.0]   # 5 depth slices
 phi_range_deg = 0.034377467707849395           # matches dfxm-forward default (0.0006 rad)

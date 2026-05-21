@@ -159,9 +159,6 @@ class TestHdf5NewAttrs:
             # scan_mode = "mosa" (phi + chi both scanned)
             assert grp.attrs["scan_mode"] == "mosa"
             # scanned_axes: ["phi", "chi"] in canonical order
-            scanned = list(grp.attrs["scanned_axes"])
-            # h5py may return numpy.bytes_ — decode if needed
-            scanned_str = [s.decode("utf-8") if isinstance(s, bytes) else s for s in scanned]
-            assert scanned_str == ["phi", "chi"]
+            assert list(grp.attrs["scanned_axes"]) == ["phi", "chi"]
             # crystal_mode = "centered"
             assert grp.attrs["crystal_mode"] == "centered"

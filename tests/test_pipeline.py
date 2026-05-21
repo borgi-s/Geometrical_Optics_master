@@ -77,7 +77,7 @@ class TestSimulationConfigFromToml:
         assert cfg.scan.chi.steps == 20
         assert cfg.io == IOConfig()
 
-    def test_missing_scan_section_raises(self, tmp_path: Path) -> None:
+    def test_missing_crystal_section_raises(self, tmp_path: Path) -> None:
         """The [crystal] section is mandatory (new schema)."""
         p = tmp_path / "no_crystal.toml"
         p.write_text(

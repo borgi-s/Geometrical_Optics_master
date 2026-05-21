@@ -679,7 +679,6 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         config_toml=config_toml,
         cli=" ".join(sys.argv),
         max_workers=config.io.max_workers,
-        scan=config.scan,
         crystal_mode=config.crystal.mode,
         scan_mode=config.scan.derived_mode_name(),
         scanned_axes=list(config.scan.scanned_axes()),
@@ -774,6 +773,8 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
     # [postprocess]
     lines.append("[postprocess]")
     for k_pp, v_pp in _asdict(config.postprocess).items():
+        if v_pp is None:
+            continue
         if isinstance(v_pp, str):
             lines.append(f'{k_pp} = "{v_pp}"')
         elif isinstance(v_pp, bool):
