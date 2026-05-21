@@ -164,6 +164,98 @@ class ScanConfig:
 
 
 @dataclass
+class CenteredCrystalConfig:
+    """Single dislocation at the origin (sub-project C, mode='centered').
+
+    The Ud rotation matrix is built from (b, n, t):
+      - b = Burgers vector indices
+      - n = slip-plane normal indices
+      - t = dislocation line direction indices
+
+    Geometric constraints (validated):
+      - b · n = 0   (Burgers vector lies in slip plane)
+      - t parallel to (n × b)  (line direction consistent with slip system)
+    """
+
+    b: tuple[int, int, int]
+    n: tuple[int, int, int]
+    t: tuple[int, int, int]
+
+    def __post_init__(self) -> None:
+        b = self.b
+        n = self.n
+        t = self.t
+        # b · n == 0 (exact, since these are integer crystallographic indices)
+        if b[0] * n[0] + b[1] * n[1] + b[2] * n[2] != 0:
+            raise ValueError(
+                f"Burgers vector b={b} must be perpendicular to slip plane normal n={n} "
+                "(integer dot product must be 0)"
+            )
+        # t parallel to (n × b) — both vectors in integer indices; parallel ⇔ cross == 0
+        nxb = (
+            n[1] * b[2] - n[2] * b[1],
+            n[2] * b[0] - n[0] * b[2],
+            n[0] * b[1] - n[1] * b[0],
+        )
+        # Cross product of t and nxb should be zero if they are parallel.
+        cross = (
+            t[1] * nxb[2] - t[2] * nxb[1],
+            t[2] * nxb[0] - t[0] * nxb[2],
+            t[0] * nxb[1] - t[1] * nxb[0],
+        )
+        if cross != (0, 0, 0):
+            raise ValueError(
+                f"line direction t={t} must be parallel to (n x b)={nxb} for the "
+                "slip system to be self-consistent (cross product must be zero)"
+            )
+
+
+@dataclass
+class WallCrystalConfig:
+    """Dis-spaced grid of dislocations (sub-project C, mode='wall').
+
+    The current Borgi/Purdue IUCrJ 2024 layout. Preserved unchanged from
+    the legacy flat `CrystalConfig`.
+    """
+
+    dis: float = 4.0
+    ndis: int = 151
+    sample_remount: str = "S1"
+
+    def __post_init__(self) -> None:
+        if self.sample_remount not in SAMPLE_REMOUNT_OPTIONS:
+            valid = ", ".join(SAMPLE_REMOUNT_OPTIONS.keys())
+            raise ValueError(
+                f"sample_remount must be one of: {valid} (got {self.sample_remount!r})"
+            )
+
+
+@dataclass
+class RandomDislocationsConfig:
+    """N random dislocations placed by 2D Gaussian (sub-project C).
+
+    `sigma=None` → resolved at draw time from the FOV
+    (sigma = FOV_lateral_half / 2).
+    `min_distance=None` → no inter-dislocation distance constraint.
+    `seed=None` → fresh entropy-pool seed drawn at run time; the realized
+    seed value is logged into the sidecar for reproducibility.
+    """
+
+    ndis: int
+    sigma: float | None = None
+    min_distance: float | None = None
+    seed: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.ndis < 1:
+            raise ValueError(f"`ndis` must be >= 1 for random_dislocations; got {self.ndis}")
+        if self.sigma is not None and self.sigma <= 0:
+            raise ValueError(f"`sigma` must be > 0 when set; got {self.sigma}")
+        if self.min_distance is not None and self.min_distance < 0:
+            raise ValueError(f"`min_distance` must be >= 0 when set; got {self.min_distance}")
+
+
+@dataclass
 class IOConfig:
     fn_prefix: str = "/mosa_test_0000_"
     ftype: str = ".npy"
