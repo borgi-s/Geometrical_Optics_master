@@ -15,11 +15,13 @@ import numpy as np
 import pytest
 
 from dfxm_geo.pipeline import (
+    AxisScanConfig,
     CrystalConfig,
     IOConfig,
     PostprocessConfig,
     ScanConfig,
     SimulationConfig,
+    WallCrystalConfig,
     _dataclass_to_toml_str,
     cli_main,
     run_postprocess,
@@ -28,16 +30,18 @@ from dfxm_geo.pipeline import (
 
 class TestSimulationConfigDefaults:
     def test_default_factory_constructs(self) -> None:
-        """SimulationConfig() with no args uses the documented defaults."""
-        cfg = SimulationConfig()
-        assert cfg.crystal.dis == 4.0
-        assert cfg.crystal.ndis == 151
-        assert cfg.scan.phi_steps == 61
-        assert cfg.scan.chi_steps == 61
-        # phi_range and chi_range are the same numeric values used in
-        # init_forward.py (0.0006 rad and 0.002 rad converted to degrees).
-        assert cfg.scan.phi_range == pytest.approx(0.0343774677, rel=1e-6)
-        assert cfg.scan.chi_range == pytest.approx(0.1145915590, rel=1e-6)
+        """SimulationConfig with wall mode uses the documented defaults."""
+        cfg = SimulationConfig(
+            crystal=CrystalConfig(
+                mode="wall",
+                wall=WallCrystalConfig(dis=4.0, ndis=151),
+            )
+        )
+        assert cfg.crystal.wall is not None
+        assert cfg.crystal.wall.dis == 4.0
+        assert cfg.crystal.wall.ndis == 151
+        assert cfg.scan.phi.steps is None  # default: fixed (no scan)
+        assert cfg.scan.chi.steps is None
         assert cfg.io.include_perfect_crystal is True
         assert cfg.io.ftype == ".npy"
 
@@ -47,31 +51,40 @@ class TestSimulationConfigFromToml:
         """Parse the shipped configs/default.toml and check key fields."""
         repo_root = Path(__file__).resolve().parents[1]
         cfg = SimulationConfig.from_toml(repo_root / "configs" / "default.toml")
-        assert cfg.crystal.dis == 4
-        assert cfg.crystal.ndis == 151
-        assert cfg.scan.phi_steps == 61
-        assert cfg.scan.chi_steps == 61
+        # default.toml uses centered mode (post-B+C)
+        assert cfg.crystal.mode == "centered"
+        assert cfg.crystal.centered is not None
+        assert cfg.scan.phi.steps == 61
+        assert cfg.scan.chi.steps == 61
         assert cfg.postprocess.enabled is True
         assert cfg.postprocess.chi_oversample == 20
 
     def test_omitted_optional_sections_use_defaults(self, tmp_path: Path) -> None:
-        """[crystal] and [io] are optional; only [scan] is required."""
+        """[crystal] is required (new schema); [io] and [postprocess] are optional."""
         p = tmp_path / "minimal.toml"
         p.write_text(
-            "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n"
-            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            "\n[scan.phi]\nrange = 0.1\nsteps = 10\n[scan.chi]\nrange = 0.2\nsteps = 20\n",
             encoding="utf-8",
         )
         cfg = SimulationConfig.from_toml(p)
-        assert cfg.crystal == CrystalConfig()
-        assert cfg.scan == ScanConfig(0.1, 10, 0.2, 20)
+        assert cfg.crystal.wall is not None
+        assert cfg.crystal.wall.dis == 4.0
+        assert cfg.scan.phi.range == pytest.approx(0.1)
+        assert cfg.scan.phi.steps == 10
+        assert cfg.scan.chi.range == pytest.approx(0.2)
+        assert cfg.scan.chi.steps == 20
         assert cfg.io == IOConfig()
 
     def test_missing_scan_section_raises(self, tmp_path: Path) -> None:
-        """The [scan] section is mandatory."""
-        p = tmp_path / "no_scan.toml"
-        p.write_text("[crystal]\ndis = 1\nndis = 1\n", encoding="utf-8")
-        with pytest.raises(KeyError):
+        """The [crystal] section is mandatory (new schema)."""
+        p = tmp_path / "no_crystal.toml"
+        p.write_text(
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            encoding="utf-8",
+        )
+        with pytest.raises((KeyError, ValueError)):
             SimulationConfig.from_toml(p)
 
     def test_all_shipped_variants_parse(self) -> None:
@@ -90,56 +103,70 @@ class TestSimulationConfigFromToml:
         assert len(configs) >= 5, "expected default.toml + at least 4 variants"
         for path in configs:
             cfg = SimulationConfig.from_toml(path)
-            assert cfg.crystal.ndis > 0, f"{path.name} has bad ndis"
-            assert cfg.scan.phi_steps > 0, f"{path.name} has bad phi_steps"
+            # Mode dispatch: check ndis on the active sub-block
+            if cfg.crystal.mode == "wall":
+                assert cfg.crystal.wall is not None
+                assert cfg.crystal.wall.ndis > 0, f"{path.name} has bad ndis"
+            elif cfg.crystal.mode == "random_dislocations":
+                assert cfg.crystal.random_dislocations is not None
+                assert cfg.crystal.random_dislocations.ndis > 0, f"{path.name} has bad ndis"
+            elif cfg.crystal.mode == "centered":
+                pass  # centered has no ndis
+            assert cfg.scan.phi.steps is None or cfg.scan.phi.steps > 0, (
+                f"{path.name} has bad phi_steps"
+            )
 
 
 class TestCrystalConfigSampleRemount:
-    """Tests for the sample_remount field on CrystalConfig."""
+    """Tests for the sample_remount field on WallCrystalConfig."""
 
     def test_default_is_S1(self) -> None:
-        from dfxm_geo.pipeline import CrystalConfig
+        from dfxm_geo.pipeline import WallCrystalConfig
 
-        cfg = CrystalConfig()
+        cfg = WallCrystalConfig(dis=4.0, ndis=151)
         assert cfg.sample_remount == "S1"
 
     def test_accepts_S2_S3_S4(self) -> None:
-        from dfxm_geo.pipeline import CrystalConfig
+        from dfxm_geo.pipeline import WallCrystalConfig
 
         for name in ("S2", "S3", "S4"):
-            cfg = CrystalConfig(sample_remount=name)
+            cfg = WallCrystalConfig(dis=4.0, ndis=151, sample_remount=name)
             assert cfg.sample_remount == name
 
     def test_rejects_unknown_remount(self) -> None:
-        from dfxm_geo.pipeline import CrystalConfig
+        from dfxm_geo.pipeline import WallCrystalConfig
 
         with pytest.raises(ValueError, match="sample_remount must be one of"):
-            CrystalConfig(sample_remount="S99")
+            WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S99")
 
     def test_toml_round_trip_with_sample_remount(self, tmp_path: Path) -> None:
         """TOML containing sample_remount round-trips through SimulationConfig."""
         from dfxm_geo.pipeline import SimulationConfig
 
         toml_text = """
-[crystal]
-dis = 4.0
-ndis = 151
-sample_remount = "S3"
-
-[scan]
-phi_range = 0.05
-phi_steps = 5
-chi_range = 0.05
-chi_steps = 5
-
 [reciprocal]
 hkl = [-1, 1, -1]
 keV = 17.0
+
+[scan.phi]
+range = 0.05
+steps = 5
+[scan.chi]
+range = 0.05
+steps = 5
+
+[crystal]
+mode = "wall"
+[crystal.wall]
+dis = 4.0
+ndis = 151
+sample_remount = "S3"
 """
         path = tmp_path / "cfg.toml"
         path.write_text(toml_text, encoding="utf-8")
         cfg = SimulationConfig.from_toml(path)
-        assert cfg.crystal.sample_remount == "S3"
+        assert cfg.crystal.wall is not None
+        assert cfg.crystal.wall.sample_remount == "S3"
 
 
 class TestPostprocessConfigDefaults:
@@ -153,7 +180,9 @@ class TestPostprocessConfigDefaults:
         assert pc.data_dirname == "analysis"
 
     def test_simulation_config_includes_postprocess_field(self) -> None:
-        cfg = SimulationConfig()
+        cfg = SimulationConfig(
+            crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151))
+        )
         assert cfg.postprocess == PostprocessConfig()
 
 
@@ -161,9 +190,10 @@ class TestPostprocessConfigFromToml:
     def test_section_present(self, tmp_path: Path) -> None:
         p = tmp_path / "with_pp.toml"
         p.write_text(
-            "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n"
-            "\n[postprocess]\nenabled = false\nchi_oversample = 5\n"
-            "\n[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            "\n[scan.phi]\nrange = 0.1\nsteps = 10\n[scan.chi]\nrange = 0.2\nsteps = 20\n"
+            "\n[postprocess]\nenabled = false\nchi_oversample = 5\n",
             encoding="utf-8",
         )
         cfg = SimulationConfig.from_toml(p)
@@ -175,8 +205,9 @@ class TestPostprocessConfigFromToml:
     def test_section_absent_uses_defaults(self, tmp_path: Path) -> None:
         p = tmp_path / "no_pp.toml"
         p.write_text(
-            "[scan]\nphi_range = 0.1\nphi_steps = 10\nchi_range = 0.2\nchi_steps = 20\n"
-            "\n[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            "\n[scan.phi]\nrange = 0.1\nsteps = 10\n[scan.chi]\nrange = 0.2\nsteps = 20\n",
             encoding="utf-8",
         )
         cfg = SimulationConfig.from_toml(p)
@@ -195,8 +226,11 @@ def tiny_h5_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
     chi_steps, phi_steps = 5, 5
     H, W = 4, 4
     config = SimulationConfig(
-        crystal=CrystalConfig(dis=1.0, ndis=2),
-        scan=ScanConfig(phi_range=0.05, phi_steps=phi_steps, chi_range=0.05, chi_steps=chi_steps),
+        crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=1.0, ndis=2)),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=0.05, steps=phi_steps),
+            chi=AxisScanConfig(range=0.05, steps=chi_steps),
+        ),
         io=IOConfig(),
     )
     output_dir = tmp_path / "out"
@@ -217,8 +251,8 @@ def tiny_h5_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
         g.create_dataset(
             "config_toml",
             data=(
-                f"[scan]\nphi_range = 0.05\nphi_steps = {phi_steps}\n"
-                f"chi_range = 0.05\nchi_steps = {chi_steps}\n"
+                f"[scan.phi]\nrange = 0.05\nsteps = {phi_steps}\n"
+                f"[scan.chi]\nrange = 0.05\nsteps = {chi_steps}\n"
             ),
         )
     return output_dir, config
@@ -276,7 +310,9 @@ class TestRunPostprocess:
         self,
         tmp_path: Path,
     ) -> None:
-        cfg = SimulationConfig()
+        cfg = SimulationConfig(
+            crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151))
+        )
         with pytest.raises(FileNotFoundError, match="dfxm_geo.h5"):
             run_postprocess(tmp_path, cfg)
 
@@ -287,7 +323,9 @@ class TestRunPostprocess:
         """run_postprocess errors clearly if /2.1 (perfect crystal) is absent."""
         import h5py as _h5py
 
-        cfg = SimulationConfig()
+        cfg = SimulationConfig(
+            crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151))
+        )
         # Create an .h5 with only /1.1 — no /2.1 perfect crystal scan.
         h5_path = tmp_path / "dfxm_geo.h5"
         with _h5py.File(h5_path, "w") as f:
@@ -317,8 +355,9 @@ class TestCliMainFlags:
     ) -> None:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
-            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n"
-            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n",
             encoding="utf-8",
         )
         calls: list[str] = []
@@ -341,8 +380,9 @@ class TestCliMainFlags:
     ) -> None:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
-            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n"
-            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n",
             encoding="utf-8",
         )
         calls: list[str] = []
@@ -373,8 +413,9 @@ class TestCliMainFlags:
     ) -> None:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
-            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n"
-            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n",
             encoding="utf-8",
         )
         calls: list[str] = []
@@ -406,9 +447,10 @@ class TestCliMainFlags:
         """[postprocess].enabled = false skips the stage even without --no-postprocess."""
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
-            "[scan]\nphi_range=0.05\nphi_steps=5\nchi_range=0.05\nchi_steps=5\n"
-            "\n[postprocess]\nenabled = false\n"
-            "\n[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n"
+            "\n[postprocess]\nenabled = false\n",
             encoding="utf-8",
         )
         calls: list[str] = []
@@ -489,19 +531,37 @@ class TestReciprocalConfigParsing:
         cfg.write_text(body)
         return cfg
 
+    def _minimal_wall_header(self) -> str:
+        return (
+            '[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
+        )
+
+    def _minimal_scan(self) -> str:
+        return "[scan.phi]\nrange = 0.034\nsteps = 2\n[scan.chi]\nrange = 0.115\nsteps = 2\n"
+
+    def _minimal_io(self) -> str:
+        return (
+            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
+            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
+        )
+
+    def _minimal_postprocess(self) -> str:
+        return (
+            "[postprocess]\nenabled = false\n"
+            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
+            'figures_dirname = "f"\ndata_dirname = "a"\n'
+        )
+
     def test_simulation_config_parses_reciprocal_block(self, tmp_path: Path) -> None:
         from dfxm_geo.pipeline import SimulationConfig
 
         cfg = self._write_minimal_sim_toml(
             tmp_path,
-            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
-            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
-            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
-            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
-            "[postprocess]\nenabled = false\n"
-            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
-            'figures_dirname = "f"\ndata_dirname = "a"\n'
-            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
+            self._minimal_wall_header()
+            + self._minimal_scan()
+            + self._minimal_io()
+            + self._minimal_postprocess()
+            + "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
         )
         config = SimulationConfig.from_toml(cfg)
         assert config.reciprocal is not None
@@ -513,13 +573,10 @@ class TestReciprocalConfigParsing:
 
         cfg = self._write_minimal_sim_toml(
             tmp_path,
-            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
-            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
-            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
-            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
-            "[postprocess]\nenabled = false\n"
-            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
-            'figures_dirname = "f"\ndata_dirname = "a"\n',
+            self._minimal_wall_header()
+            + self._minimal_scan()
+            + self._minimal_io()
+            + self._minimal_postprocess(),
         )
         with pytest.raises(ValueError, match=r"missing \[reciprocal\] block"):
             SimulationConfig.from_toml(cfg)
@@ -529,14 +586,11 @@ class TestReciprocalConfigParsing:
 
         cfg = self._write_minimal_sim_toml(
             tmp_path,
-            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
-            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
-            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
-            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
-            "[postprocess]\nenabled = false\n"
-            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
-            'figures_dirname = "f"\ndata_dirname = "a"\n'
-            "[reciprocal]\nkeV = 17.0\n",
+            self._minimal_wall_header()
+            + self._minimal_scan()
+            + self._minimal_io()
+            + self._minimal_postprocess()
+            + "[reciprocal]\nkeV = 17.0\n",
         )
         with pytest.raises(ValueError, match=r"missing `hkl` in \[reciprocal\]"):
             SimulationConfig.from_toml(cfg)
@@ -546,14 +600,11 @@ class TestReciprocalConfigParsing:
 
         cfg = self._write_minimal_sim_toml(
             tmp_path,
-            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
-            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
-            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
-            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
-            "[postprocess]\nenabled = false\n"
-            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
-            'figures_dirname = "f"\ndata_dirname = "a"\n'
-            "[reciprocal]\nhkl = [-1, 1, -1]\n",
+            self._minimal_wall_header()
+            + self._minimal_scan()
+            + self._minimal_io()
+            + self._minimal_postprocess()
+            + "[reciprocal]\nhkl = [-1, 1, -1]\n",
         )
         with pytest.raises(ValueError, match=r"missing `keV` in \[reciprocal\]"):
             SimulationConfig.from_toml(cfg)
@@ -563,14 +614,11 @@ class TestReciprocalConfigParsing:
 
         cfg = self._write_minimal_sim_toml(
             tmp_path,
-            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
-            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
-            '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
-            'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = true\n'
-            "[postprocess]\nenabled = false\n"
-            "chi_oversample = 1\nphi_oversample = 1\nchi_oversample_for_shift = 1\n"
-            'figures_dirname = "f"\ndata_dirname = "a"\n'
-            "[reciprocal]\nhkl = [0, 0, 0]\nkeV = 17.0\n",
+            self._minimal_wall_header()
+            + self._minimal_scan()
+            + self._minimal_io()
+            + self._minimal_postprocess()
+            + "[reciprocal]\nhkl = [0, 0, 0]\nkeV = 17.0\n",
         )
         with pytest.raises(ValueError, match=r"hkl=\(0,0,0\) is not a valid reflection"):
             SimulationConfig.from_toml(cfg)
@@ -593,8 +641,8 @@ class TestReciprocalConfigParsing:
             "angle_start_deg = 0.0\nangle_stop_deg = 10.0\nangle_step_deg = 1.0\n"
             "sweep_all_slip_planes = false\nexclude_invisibility = false\n"
             "invisibility_threshold_deg = 10.0\n"
-            "[scan]\nphi_rad = 1.5e-4\npoisson_noise = false\n"
-            "rng_seed = 0\nintensity_scale = 7.0\n"
+            "[scan.phi]\nvalue = 1.5e-4\n"
+            "[noise]\npoisson_noise = false\nrng_seed = 0\nintensity_scale = 7.0\n"
             '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
             'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = false\n'
         )

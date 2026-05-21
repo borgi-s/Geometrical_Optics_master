@@ -91,8 +91,9 @@ class TestForwardMultiReflection:
 
         cfg = tmp_path / "config.toml"
         cfg.write_text(
-            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
-            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
+            '[crystal]\nmode = "wall"\n[crystal.wall]\n'
+            'dis = 4\nndis = 151\nsample_remount = "S1"\n'
+            "[scan.phi]\nrange = 0.034\nsteps = 2\n[scan.chi]\nrange = 0.115\nsteps = 2\n"
             '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
             'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = false\n'
             "[postprocess]\nenabled = false\n"
@@ -118,8 +119,9 @@ class TestForwardMultiReflection:
 
         cfg = tmp_path / "config.toml"
         cfg.write_text(
-            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
-            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
+            '[crystal]\nmode = "wall"\n[crystal.wall]\n'
+            'dis = 4\nndis = 151\nsample_remount = "S1"\n'
+            "[scan.phi]\nrange = 0.034\nsteps = 2\n[scan.chi]\nrange = 0.115\nsteps = 2\n"
             '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
             'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = false\n'
             "[postprocess]\nenabled = false\n"
@@ -149,8 +151,9 @@ class TestForwardMultiReflection:
 
         cfg = tmp_path / "config.toml"
         cfg.write_text(
-            '[crystal]\ndis = 4\nndis = 151\nsample_remount = "S1"\n'
-            "[scan]\nphi_range = 0.034\nphi_steps = 2\nchi_range = 0.115\nchi_steps = 2\n"
+            '[crystal]\nmode = "wall"\n[crystal.wall]\n'
+            'dis = 4\nndis = 151\nsample_remount = "S1"\n'
+            "[scan.phi]\nrange = 0.034\nsteps = 2\n[scan.chi]\nrange = 0.115\nsteps = 2\n"
             '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
             'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = false\n'
             "[postprocess]\nenabled = false\n"

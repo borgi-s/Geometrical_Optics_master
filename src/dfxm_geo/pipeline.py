@@ -817,31 +817,36 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
                 "include_perfect_crystal=True, or skip postprocess."
             )
 
+    phi_steps = config.scan.phi.steps or 1
+    chi_steps = config.scan.chi.steps or 1
+    phi_range = config.scan.phi.range or 0.0
+    chi_range = config.scan.chi.range or 0.0
+
     _, dis_reshape, _, _ = load_h5_scan(
         h5_path,
         scan_id="1.1",
-        phi_steps=config.scan.phi_steps,
-        chi_steps=config.scan.chi_steps,
+        phi_steps=phi_steps,
+        chi_steps=chi_steps,
     )
     _, perf_reshape, _, _ = load_h5_scan(
         h5_path,
         scan_id="2.1",
-        phi_steps=config.scan.phi_steps,
-        chi_steps=config.scan.chi_steps,
+        phi_steps=phi_steps,
+        chi_steps=chi_steps,
     )
 
     chi_shift = compute_chi_shift(
         perf_reshape,
-        config.scan.chi_steps,
-        config.scan.chi_range,
+        chi_steps,
+        chi_range,
         oversample=config.postprocess.chi_oversample_for_shift,
     )
     phi_list, chi_list = compute_com_maps(
         dis_reshape,
-        config.scan.phi_range,
-        config.scan.phi_steps,
-        config.scan.chi_range,
-        config.scan.chi_steps,
+        phi_range,
+        phi_steps,
+        chi_range,
+        chi_steps,
         chi_shift=chi_shift,
         oversample=config.postprocess.phi_oversample,
         chi_oversample=config.postprocess.chi_oversample,
