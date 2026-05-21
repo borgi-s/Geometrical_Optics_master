@@ -1170,7 +1170,7 @@ def _run_identification_multi(
 
         stem = f"{k:0{pad}d}"
         np.save(output_dir / "im_data" / f"{stem}.npy", image)
-        if k < mc.n_png_previews:
+        if k < mc.n_png_previews:  # type: ignore[attr-defined]  # removed in v1.2.0; runner rewritten in Phase 8
             _save_preview_png(image, output_dir / "images" / f"{stem}.png")
 
         manifest_rows.append(
@@ -1259,10 +1259,10 @@ def _run_identification_zscan(
         * (len(crystal_cfg.b_vector_indices) if crystal_cfg.b_vector_indices else 6)
         * len(angles_deg)
     )
-    projected_images = projected_configs * zscan.phi_steps * zscan.chi_steps
+    projected_images = projected_configs * zscan.phi_steps * zscan.chi_steps  # type: ignore[attr-defined]  # moved to scan.phi/scan.chi in v1.2.0; runner rewritten in Phase 9
     print(
         f"z-scan projection (pre-invisibility filter): "
-        f"{projected_configs} configs x {zscan.phi_steps * zscan.chi_steps} rocking images "
+        f"{projected_configs} configs x {zscan.phi_steps * zscan.chi_steps} rocking images "  # type: ignore[attr-defined]  # moved to scan.phi/scan.chi in v1.2.0; runner rewritten in Phase 9
         f"= {projected_images} .npy files to {output_dir}"
     )
 
@@ -1348,10 +1348,10 @@ def _run_identification_zscan(
                     config_dir.mkdir(parents=True, exist_ok=True)
                     save_images_parallel(
                         Hg,
-                        zscan.phi_range_deg,
-                        zscan.phi_steps,
-                        zscan.chi_range_deg,
-                        zscan.chi_steps,
+                        zscan.phi_range_deg,  # type: ignore[attr-defined]  # moved to scan.phi in v1.2.0; runner rewritten in Phase 9
+                        zscan.phi_steps,  # type: ignore[attr-defined]  # moved to scan.phi in v1.2.0; runner rewritten in Phase 9
+                        zscan.chi_range_deg,  # type: ignore[attr-defined]  # moved to scan.chi in v1.2.0; runner rewritten in Phase 9
+                        zscan.chi_steps,  # type: ignore[attr-defined]  # moved to scan.chi in v1.2.0; runner rewritten in Phase 9
                         str(config_dir),
                         io_cfg.fn_prefix,
                         io_cfg.ftype,
