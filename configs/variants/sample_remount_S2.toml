@@ -1,19 +1,27 @@
 # Variant: sample remounted in orientation S2.
-# Equivalent to default.toml except for the [crystal].sample_remount field.
+# Equivalent to default.toml except for the [crystal.wall].sample_remount field.
 # Used by the Purdue 2024 paper to compare the same defect across symmetry-
 # equivalent mountings.
 
-[crystal]
-dis = 4        # inter-dislocation distance (µm)
-ndis = 151     # number of dislocations
-sample_remount = "S2"  # one of "S1", "S2", "S3", "S4" — Purdue 2024 paper. Default: identity (no remount).
+[reciprocal]
+hkl = [-1, 1, -1]   # Al 111 reflection — preserves pre-D implicit default
+keV = 17.0
 
-[scan]
-# 0.0006 rad ≈ 0.03438 deg ; 0.002 rad ≈ 0.11459 deg
-phi_range = 0.034377467707849395
-phi_steps = 61
-chi_range = 0.11459155902616465
-chi_steps = 61
+[scan.phi]
+range = 6e-4
+steps = 61
+
+[scan.chi]
+range = 2e-3
+steps = 61
+
+[crystal]
+mode = "wall"
+
+[crystal.wall]
+dis = 4.0          # inter-dislocation distance (µm)
+ndis = 151         # number of dislocations
+sample_remount = "S2"  # one of "S1", "S2", "S3", "S4" — Purdue 2024 paper.
 
 [io]
 fn_prefix = "/mosa_test_0000_"
@@ -30,7 +38,3 @@ phi_oversample = 20
 chi_oversample_for_shift = 100
 figures_dirname = "figures"
 data_dirname = "analysis"
-
-[reciprocal]
-hkl = [-1, 1, -1]   # Al 111 reflection — preserves pre-D implicit default
-keV = 17.0
