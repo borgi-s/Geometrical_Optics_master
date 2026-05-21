@@ -359,6 +359,186 @@ def _write_provenance(
         g.create_dataset("config_toml", data=config_toml)
 
 
+class MasterWriter:
+    """Context manager that owns the master HDF5 handle for one pipeline run.
+
+    Use:
+        with MasterWriter(path, cli=..., config_toml=..., kernel_npz=...) as m:
+            m.add_scan(scan_id="1.1", ...)
+            m.add_scan(scan_id="2.1", ...)
+        # provenance written on close
+
+    The master is opened in mode 'w' (fresh file every run) so the writer
+    is idempotent across re-runs to the same path.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        cli: str,
+        config_toml: str,
+        kernel_npz: Path | None = None,
+    ) -> None:
+        self.path = Path(path)
+        self.cli = cli
+        self.config_toml = config_toml
+        self.kernel_npz = kernel_npz
+        self._fh: h5py.File | None = None
+
+    def __enter__(self) -> MasterWriter:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = h5py.File(self.path, "w")
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            if self._fh is not None and exc_type is None:
+                _write_provenance(
+                    self._fh,
+                    cli=self.cli,
+                    kernel_npz=self.kernel_npz,
+                    config_toml=self.config_toml,
+                )
+        finally:
+            if self._fh is not None:
+                self._fh.close()
+                self._fh = None
+
+    def add_scan(
+        self,
+        *,
+        scan_id: str,
+        title: str,
+        start_time: str,
+        end_time: str,
+        sample: dict,
+        positioners: dict[str, np.ndarray | float],
+        detector_links: dict[str, tuple[Path, str]],
+        dfxm_geo: dict,
+        attrs: dict[str, str | list[str]],
+    ) -> None:
+        """Append one BLISS scan entry `/<scan_id>` to the master.
+
+        Args:
+            scan_id: BLISS scan identifier, e.g. "1.1", "2.1", "3.1".
+            title: Scan title string (e.g. fscan2d command).
+            start_time, end_time: ISO-8601 timestamps recorded on `/N.1`.
+            sample: Dict of NXsample contents. Numpy arrays become datasets;
+                scalars become 0-D datasets. Special key "name" expected.
+                Nested dicts (e.g. "dislocations") become NXcollection groups.
+            positioners: Dict of motor axis name -> 1-D array (scanned) or
+                scalar (fixed). Arrays are stored in degrees with units attr.
+                ASSUMES input is in radians (matches existing convention).
+            detector_links: Dict of detector name -> (rel_file_path, internal_h5_path).
+                Each becomes an NXdetector group with a `data` ExternalLink.
+                A `/N.1/measurement/<name>` SoftLink is also created.
+            dfxm_geo: Sim-specific per-scan metadata: Hg, q_hkl, theta, psize, zl_rms.
+                Any subset may be supplied; missing keys are skipped.
+            attrs: Per-`/N.1` attributes (scan_mode, scanned_axes,
+                crystal_mode | identify_mode).
+        """
+        if self._fh is None:
+            raise RuntimeError("MasterWriter is not open; use as a context manager")
+        f = self._fh
+
+        scan = f.require_group(scan_id)
+        _set_nx_class(scan, "NXentry")
+        if "title" in scan:
+            del scan["title"]
+        scan.create_dataset("title", data=title)
+        if "start_time" in scan:
+            del scan["start_time"]
+        scan.create_dataset("start_time", data=start_time)
+        if "end_time" in scan:
+            del scan["end_time"]
+        scan.create_dataset("end_time", data=end_time)
+
+        # Attrs (scan_mode / scanned_axes / crystal_mode | identify_mode)
+        for k, v in attrs.items():
+            if isinstance(v, list):
+                scan.attrs[k] = list(v)
+            else:
+                scan.attrs[k] = v
+
+        # /N.1/sample/
+        samp = scan.require_group("sample")
+        _set_nx_class(samp, "NXsample")
+        _write_sample_dict(samp, sample)
+
+        # /N.1/instrument/<detector_name>/data -> ExternalLink
+        instr = scan.require_group("instrument")
+        _set_nx_class(instr, "NXinstrument")
+        meas = scan.require_group("measurement")
+        _set_nx_class(meas, "NXcollection")
+        for det_name, (rel_path, internal_path) in detector_links.items():
+            det = instr.require_group(det_name)
+            _set_nx_class(det, "NXdetector")
+            if "data" in det:
+                del det["data"]
+            det["data"] = h5py.ExternalLink(str(rel_path).replace("\\", "/"), internal_path)
+            if det_name in meas:
+                del meas[det_name]
+            meas[det_name] = h5py.SoftLink(f"/{scan_id}/instrument/{det_name}/data")
+
+        # /N.1/instrument/positioners/
+        pos = instr.require_group("positioners")
+        _set_nx_class(pos, "NXcollection")
+        for axis_name, val in positioners.items():
+            if axis_name in pos:
+                del pos[axis_name]
+            if isinstance(val, np.ndarray):
+                ds = pos.create_dataset(axis_name, data=np.degrees(val))
+            else:
+                ds = pos.create_dataset(axis_name, data=float(np.degrees(val)))
+            ds.attrs["units"] = "degree"
+            if axis_name in meas:
+                del meas[axis_name]
+            meas[axis_name] = h5py.SoftLink(f"/{scan_id}/instrument/positioners/{axis_name}")
+
+        # /N.1/dfxm_geo/
+        if dfxm_geo:
+            d = scan.require_group("dfxm_geo")
+            for key, val in dfxm_geo.items():
+                if val is None:
+                    continue
+                if key in d:
+                    del d[key]
+                if isinstance(val, (int, float)):
+                    d.create_dataset(key, data=float(val))
+                else:
+                    d.create_dataset(key, data=val)
+
+
+def _write_sample_dict(group: h5py.Group, sample: dict) -> None:
+    """Write a sample dict into an NXsample group.
+
+    Scalars and arrays become datasets; nested dicts become sub-NXcollection
+    or NXsample groups. Dict keys "dislocations", "primary", "secondary" get
+    NXcollection / NXsample NX_class respectively; everything else is a scalar.
+    """
+    for key, val in sample.items():
+        if key in group:
+            del group[key]
+        if isinstance(val, dict):
+            sub = group.create_group(key)
+            if key == "dislocations":
+                _set_nx_class(sub, "NXcollection")
+                for idx_key, sub_sample in val.items():
+                    item = sub.create_group(str(idx_key))
+                    _set_nx_class(item, "NXsample")
+                    _write_sample_dict(item, sub_sample)
+            else:
+                _set_nx_class(sub, "NXsample")
+                _write_sample_dict(sub, val)
+        elif isinstance(val, (int, float)):
+            group.create_dataset(key, data=float(val) if isinstance(val, float) else int(val))
+        elif isinstance(val, str):
+            group.create_dataset(key, data=val)
+        else:
+            group.create_dataset(key, data=np.asarray(val))
+
+
 def write_h5_scan(
     path: Path,
     scan_id: str,
