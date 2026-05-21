@@ -96,6 +96,21 @@ class AxisScanConfig:
 
 _CANONICAL_AXES = ("phi", "chi", "two_dtheta", "z")
 
+_AXIS_TO_LABEL = {
+    "phi": "rocking",
+    "chi": "rolling",
+    "two_dtheta": "strain",
+    "z": "layer",
+}
+
+_PRE_CANONIZED_MODE_NAMES: dict[frozenset[str], str] = {
+    frozenset(): "single",
+    frozenset({"phi", "chi"}): "mosa",
+    frozenset({"phi", "chi", "two_dtheta"}): "mosa_strain",
+    frozenset({"phi", "chi", "z"}): "mosa_layer",
+    frozenset({"phi", "chi", "two_dtheta", "z"}): "mosa_strain_layer",
+}
+
 
 @dataclass
 class ScanConfig:
@@ -122,6 +137,30 @@ class ScanConfig:
             )
         kwargs = {axis: AxisScanConfig(**data[axis]) for axis in _CANONICAL_AXES if axis in data}
         return cls(**kwargs)
+
+    def scanned_axes(self) -> tuple[str, ...]:
+        """Names of motor axes that carry a range+steps (in canonical order)."""
+        return tuple(a for a in _CANONICAL_AXES if getattr(self, a).is_scanned)
+
+    def is_scanned(self, axis: str) -> bool:
+        if axis not in _CANONICAL_AXES:
+            raise ValueError(f"unknown axis {axis!r}; expected one of {_CANONICAL_AXES}")
+        return getattr(self, axis).is_scanned
+
+    def derived_mode_name(self) -> str:
+        """Derive the scan-mode label from which axes are scanned.
+
+        Pre-canonized: single, rocking, rolling, strain, layer, mosa,
+        mosa_strain, mosa_layer, mosa_strain_layer. All other combos
+        are the 1D labels concatenated in canonical axis order.
+        """
+        scanned = self.scanned_axes()
+        key = frozenset(scanned)
+        if key in _PRE_CANONIZED_MODE_NAMES:
+            return _PRE_CANONIZED_MODE_NAMES[key]
+        if len(scanned) == 1:
+            return _AXIS_TO_LABEL[scanned[0]]
+        return "_".join(_AXIS_TO_LABEL[a] for a in scanned)
 
 
 @dataclass

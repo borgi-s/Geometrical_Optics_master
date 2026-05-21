@@ -105,3 +105,86 @@ class TestScanConfigFromDict:
     def test_invalid_axis_data_propagates_post_init(self) -> None:
         with pytest.raises(ValueError, match="`range` must be > 0"):
             ScanConfig.from_dict({"phi": {"range": 0.0, "steps": 21}})
+
+
+class TestDerivedModeName:
+    def _scanned(self, **axes_with_range: tuple[float, int]) -> ScanConfig:
+        """Build a ScanConfig where named axes are scanned, others fixed."""
+        data = {name: {"range": r, "steps": s} for name, (r, s) in axes_with_range.items()}
+        return ScanConfig.from_dict(data)
+
+    def test_no_axes_scanned_is_single(self) -> None:
+        assert ScanConfig().derived_mode_name() == "single"
+
+    def test_phi_only_is_rocking(self) -> None:
+        assert self._scanned(phi=(6e-4, 61)).derived_mode_name() == "rocking"
+
+    def test_chi_only_is_rolling(self) -> None:
+        assert self._scanned(chi=(2e-3, 61)).derived_mode_name() == "rolling"
+
+    def test_two_dtheta_only_is_strain(self) -> None:
+        assert self._scanned(two_dtheta=(5e-4, 41)).derived_mode_name() == "strain"
+
+    def test_z_only_is_layer(self) -> None:
+        assert self._scanned(z=(1e-6, 5)).derived_mode_name() == "layer"
+
+    def test_phi_chi_is_mosa(self) -> None:
+        assert self._scanned(phi=(6e-4, 61), chi=(2e-3, 61)).derived_mode_name() == "mosa"
+
+    def test_phi_chi_two_dtheta_is_mosa_strain(self) -> None:
+        assert (
+            self._scanned(phi=(6e-4, 61), chi=(2e-3, 61), two_dtheta=(5e-4, 41)).derived_mode_name()
+            == "mosa_strain"
+        )
+
+    def test_phi_chi_z_is_mosa_layer(self) -> None:
+        assert (
+            self._scanned(phi=(6e-4, 61), chi=(2e-3, 61), z=(1e-6, 5)).derived_mode_name()
+            == "mosa_layer"
+        )
+
+    def test_phi_chi_two_dtheta_z_is_mosa_strain_layer(self) -> None:
+        assert (
+            self._scanned(
+                phi=(6e-4, 61), chi=(2e-3, 61), two_dtheta=(5e-4, 41), z=(1e-6, 5)
+            ).derived_mode_name()
+            == "mosa_strain_layer"
+        )
+
+    def test_non_canonical_combo_concatenates_in_axis_order(self) -> None:
+        # phi + two_dtheta = "rocking_strain"  (chi missing → not mosa)
+        assert (
+            self._scanned(phi=(6e-4, 61), two_dtheta=(5e-4, 41)).derived_mode_name()
+            == "rocking_strain"
+        )
+        # chi + z = "rolling_layer"
+        assert self._scanned(chi=(2e-3, 61), z=(1e-6, 5)).derived_mode_name() == "rolling_layer"
+        # phi + z (no chi, no two_dtheta) is "rocking_layer"
+        assert self._scanned(phi=(6e-4, 61), z=(1e-6, 5)).derived_mode_name() == "rocking_layer"
+
+
+class TestScannedAxesAndIsScanned:
+    def test_scanned_axes_empty(self) -> None:
+        assert ScanConfig().scanned_axes() == ()
+
+    def test_scanned_axes_ordered_canonically(self) -> None:
+        cfg = ScanConfig.from_dict(
+            {
+                # Insertion order: z, phi, two_dtheta (deliberately not canonical)
+                "z": {"range": 1e-6, "steps": 5},
+                "phi": {"range": 6e-4, "steps": 61},
+                "two_dtheta": {"range": 5e-4, "steps": 41},
+            }
+        )
+        assert cfg.scanned_axes() == ("phi", "two_dtheta", "z")
+
+    def test_is_scanned_per_axis(self) -> None:
+        cfg = ScanConfig.from_dict({"phi": {"range": 6e-4, "steps": 61}})
+        assert cfg.is_scanned("phi")
+        assert not cfg.is_scanned("chi")
+        assert not cfg.is_scanned("two_dtheta")
+        assert not cfg.is_scanned("z")
+
+    def test_is_scanned_unknown_axis_raises(self) -> None:
+        with pytest.raises(ValueError, match="unknown axis 'omega'"):
+            ScanConfig().is_scanned("omega")
