@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from dfxm_geo.direct_space.forward_model import (
     DislocationPopulation,
@@ -13,6 +14,7 @@ from dfxm_geo.direct_space.forward_model import (
 from dfxm_geo.pipeline import (
     CenteredCrystalConfig,
     CrystalConfig,
+    RandomDislocationsConfig,
     ScanConfig,
     WallCrystalConfig,
 )
@@ -117,3 +119,87 @@ class TestBuildDislocationPopulationWall:
         pop_b = build_dislocation_population(crystal, fov_lateral_um=20.4, rng=None)
         np.testing.assert_array_equal(pop_a.positions_um, pop_b.positions_um)
         np.testing.assert_array_equal(pop_a.Ud, pop_b.Ud)
+
+
+class TestBuildDislocationPopulationRandomDislocations:
+    def _config(self, **kwargs) -> CrystalConfig:
+        return CrystalConfig(
+            mode="random_dislocations",
+            random_dislocations=RandomDislocationsConfig(**kwargs),
+        )
+
+    def test_seeded_run_is_deterministic(self) -> None:
+        crystal = self._config(ndis=4, sigma=5.0, seed=42)
+        rng_a = np.random.default_rng(42)
+        rng_b = np.random.default_rng(42)
+        pop_a = build_dislocation_population(crystal, fov_lateral_um=20.4, rng=rng_a)
+        pop_b = build_dislocation_population(crystal, fov_lateral_um=20.4, rng=rng_b)
+        np.testing.assert_array_equal(pop_a.positions_um, pop_b.positions_um)
+        np.testing.assert_array_equal(pop_a.Ud, pop_b.Ud)
+
+    def test_ndis_dislocations_returned(self) -> None:
+        crystal = self._config(ndis=7, sigma=5.0, seed=1)
+        pop = build_dislocation_population(
+            crystal, fov_lateral_um=20.4, rng=np.random.default_rng(1)
+        )
+        assert pop.positions_um.shape == (7, 3)
+        assert pop.Ud.shape == (7, 3, 3)
+
+    def test_sigma_default_uses_fov(self) -> None:
+        crystal = self._config(ndis=4, sigma=None, seed=1)
+        pop = build_dislocation_population(
+            crystal, fov_lateral_um=20.4, rng=np.random.default_rng(1)
+        )
+        assert pop.sidecar is not None
+        assert pop.sidecar["sigma_um"] == pytest.approx(5.1)
+        assert pop.sidecar["sigma_source"] == "default-fov"
+
+    def test_sigma_override_is_recorded(self) -> None:
+        crystal = self._config(ndis=4, sigma=3.0, seed=1)
+        pop = build_dislocation_population(
+            crystal, fov_lateral_um=20.4, rng=np.random.default_rng(1)
+        )
+        assert pop.sidecar["sigma_um"] == 3.0
+        assert pop.sidecar["sigma_source"] == "user"
+
+    def test_min_distance_enforced(self) -> None:
+        crystal = self._config(ndis=5, sigma=10.0, min_distance=2.0, seed=42)
+        pop = build_dislocation_population(
+            crystal, fov_lateral_um=40.0, rng=np.random.default_rng(42)
+        )
+        xy = pop.positions_um[:, :2]
+        for i in range(len(xy)):
+            for j in range(i + 1, len(xy)):
+                d = float(np.linalg.norm(xy[i] - xy[j]))
+                assert d >= 2.0, f"pair ({i},{j}) too close: {d}"
+
+    def test_impossible_min_distance_raises_runtime_error(self) -> None:
+        crystal = self._config(ndis=100, sigma=0.05, min_distance=10.0, seed=1)
+        with pytest.raises(RuntimeError, match="exceeded retry budget"):
+            build_dislocation_population(crystal, fov_lateral_um=20.4, rng=np.random.default_rng(1))
+
+    def test_sidecar_lists_realized_b_n_t_per_dislocation(self) -> None:
+        crystal = self._config(ndis=3, sigma=5.0, seed=42)
+        pop = build_dislocation_population(
+            crystal, fov_lateral_um=20.4, rng=np.random.default_rng(42)
+        )
+        assert pop.sidecar is not None
+        assert len(pop.sidecar["dislocations"]) == 3
+        for entry in pop.sidecar["dislocations"]:
+            assert "x_um" in entry and "y_um" in entry and "z_um" in entry
+            assert "b" in entry and "n" in entry and "t" in entry
+            assert len(entry["b"]) == 3
+
+    def test_seed_source_user_when_explicit(self) -> None:
+        crystal = self._config(ndis=2, sigma=5.0, seed=42)
+        pop = build_dislocation_population(
+            crystal, fov_lateral_um=20.4, rng=np.random.default_rng(42)
+        )
+        assert pop.sidecar["seed_source"] == "user"
+        assert pop.sidecar["seed"] == 42
+
+    def test_seed_source_entropy_when_absent(self) -> None:
+        crystal = self._config(ndis=2, sigma=5.0, seed=None)
+        pop = build_dislocation_population(crystal, fov_lateral_um=20.4, rng=None)
+        assert pop.sidecar["seed_source"] == "entropy"
+        assert isinstance(pop.sidecar["seed"], int)

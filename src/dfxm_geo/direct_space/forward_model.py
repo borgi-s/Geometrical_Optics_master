@@ -37,6 +37,24 @@ _S_IDENTITY: np.ndarray = np.identity(3)
 # the module was imported via an installed entry point or via `python -c`.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# Sub-project C: random_dislocations placement constants.
+_MAX_REJECTION_TRIES = 10_000
+
+# A subset of FCC slip systems on the {111}/<-110> family used to draw
+# random orientations for random_dislocations mode. Each entry is (b, n, t)
+# with b.n=0 and t parallel to n x b. Six variants spanning two of the
+# four {111} planes -- sufficient for v1.2.0 sampling.
+_SLIP_SYSTEM_111: tuple[
+    tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]], ...
+] = (
+    ((1, -1, 0), (1, 1, 1), (1, 1, -2)),
+    ((-1, 0, 1), (1, 1, 1), (-1, 2, -1)),
+    ((0, 1, -1), (1, 1, 1), (-2, 1, 1)),
+    ((1, 1, 0), (1, -1, 1), (1, -1, -2)),
+    ((-1, 0, 1), (1, -1, 1), (-1, -2, -1)),
+    ((0, -1, -1), (1, -1, 1), (-2, -1, 1)),
+)
+
 fast_inverse2(
     np.random.default_rng().random(size=(100, 3, 3))
 )  # DO NOT OUTCOMMENT, this line jit compiles "fast_inverse2" function so performance on larger arrays are obtained
@@ -643,6 +661,87 @@ def build_dislocation_population(
         return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None)
 
     if crystal.mode == "random_dislocations":
-        raise NotImplementedError("random_dislocations branch implemented in Task 8")
+        rd = crystal.random_dislocations
+        assert rd is not None
+
+        # Resolve sigma: FOV-derived default if user didn't supply.
+        if rd.sigma is None:
+            sigma_um = (fov_lateral_um / 2.0) / 2.0
+            sigma_source = "default-fov"
+        else:
+            sigma_um = rd.sigma
+            sigma_source = "user"
+
+        # Resolve seed + rng. If caller passed an rng, use it; otherwise fall
+        # back to rd.seed or fresh entropy.
+        if rng is None:
+            if rd.seed is None:
+                _entropy = np.random.SeedSequence().entropy
+                resolved_seed = (
+                    int(_entropy)
+                    if isinstance(_entropy, int)
+                    else int(np.random.SeedSequence().generate_state(1)[0])
+                )
+                seed_source = "entropy"
+            else:
+                resolved_seed = rd.seed
+                seed_source = "user"
+            rng = np.random.default_rng(resolved_seed)
+        else:
+            resolved_seed = rd.seed if rd.seed is not None else -1
+            seed_source = "user" if rd.seed is not None else "entropy"
+
+        # Draw positions with optional min_distance rejection sampling.
+        positions = np.zeros((rd.ndis, 3), dtype=np.float64)
+        for i in range(rd.ndis):
+            for _ in range(_MAX_REJECTION_TRIES):
+                cand = rng.normal(loc=0.0, scale=sigma_um, size=2)
+                if rd.min_distance is None or i == 0:
+                    positions[i, 0] = cand[0]
+                    positions[i, 1] = cand[1]
+                    break
+                diffs = positions[:i, :2] - cand
+                dists = np.linalg.norm(diffs, axis=1)
+                if np.all(dists >= rd.min_distance):
+                    positions[i, 0] = cand[0]
+                    positions[i, 1] = cand[1]
+                    break
+            else:
+                raise RuntimeError(
+                    f"random_dislocations placement exceeded retry budget "
+                    f"({_MAX_REJECTION_TRIES}) at dislocation {i}/{rd.ndis}; "
+                    f"check min_distance={rd.min_distance}, sigma={sigma_um}, "
+                    f"ndis={rd.ndis} - configuration may be impossible."
+                )
+
+        # Draw slip-system per dislocation (uniform over {111} family).
+        slip_indices = rng.integers(0, len(_SLIP_SYSTEM_111), size=rd.ndis)
+        Ud = np.zeros((rd.ndis, 3, 3), dtype=np.float64)
+        sidecar_dislocations: list[dict] = []
+        for i in range(rd.ndis):
+            b, n, t = _SLIP_SYSTEM_111[slip_indices[i]]
+            Ud[i] = _ud_matrix_from_bnt(b, n, t)
+            sidecar_dislocations.append(
+                {
+                    "index": i,
+                    "x_um": float(positions[i, 0]),
+                    "y_um": float(positions[i, 1]),
+                    "z_um": float(positions[i, 2]),
+                    "b": list(b),
+                    "n": list(n),
+                    "t": list(t),
+                }
+            )
+
+        sidecar = {
+            "ndis": rd.ndis,
+            "sigma_um": float(sigma_um),
+            "sigma_source": sigma_source,
+            "min_distance_um": rd.min_distance,
+            "seed": resolved_seed,
+            "seed_source": seed_source,
+            "dislocations": sidecar_dislocations,
+        }
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=sidecar)
 
     raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
