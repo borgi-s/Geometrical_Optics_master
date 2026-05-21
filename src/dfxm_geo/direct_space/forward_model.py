@@ -621,11 +621,18 @@ def _ud_matrix_from_bnt(
     """Build a 3x3 column-stacked rotation matrix [b_hat | n_hat | t_hat].
 
     Input vectors are crystallographic integer indices; output columns
-    are unit-normalized.
+    are unit-normalized. If the user supplied `t` antiparallel to the
+    right-handed (n x b) direction, the raw column stack would have
+    det=-1 (a reflection rather than a rotation). Flip the t column
+    in that case so the result is always a proper rotation (det=+1) —
+    matches the legacy IUCrJ 2024 hardcoded Ud convention.
     """
     arr = np.asarray([b, n, t], dtype=np.float64)
     norms = np.linalg.norm(arr, axis=1, keepdims=True)
-    return (arr / norms).T  # columns = b_hat, n_hat, t_hat
+    Ud = (arr / norms).T  # columns = b_hat, n_hat, t_hat
+    if np.linalg.det(Ud) < 0:
+        Ud[:, 2] = -Ud[:, 2]
+    return Ud
 
 
 def build_dislocation_population(
