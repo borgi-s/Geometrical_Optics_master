@@ -90,13 +90,18 @@ class TestBuildDislocationPopulationCentered:
             centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
         )
         pop = build_dislocation_population(crystal, fov_lateral_um=20.4, rng=None)
-        # Columns of Ud are (normalized) b, n, t.
+        # Columns of Ud are (normalized) b, n, and t (with t possibly
+        # flipped so det=+1 — the legacy IUCrJ 2024 right-handed convention).
+        # For b=(1,-1,0), n=(1,1,1), t=(1,1,-2): the raw column stack has
+        # det=-1, so _ud_matrix_from_bnt flips t.
         b_norm = np.array([1, -1, 0]) / np.linalg.norm([1, -1, 0])
         n_norm = np.array([1, 1, 1]) / np.linalg.norm([1, 1, 1])
-        t_norm = np.array([1, 1, -2]) / np.linalg.norm([1, 1, -2])
+        t_norm_flipped = -np.array([1, 1, -2]) / np.linalg.norm([1, 1, -2])
         np.testing.assert_allclose(pop.Ud[0, :, 0], b_norm, atol=1e-12)
         np.testing.assert_allclose(pop.Ud[0, :, 1], n_norm, atol=1e-12)
-        np.testing.assert_allclose(pop.Ud[0, :, 2], t_norm, atol=1e-12)
+        np.testing.assert_allclose(pop.Ud[0, :, 2], t_norm_flipped, atol=1e-12)
+        # And the result is a proper rotation (det=+1).
+        np.testing.assert_allclose(np.linalg.det(pop.Ud[0]), 1.0, atol=1e-12)
 
 
 class TestBuildDislocationPopulationWall:
