@@ -1026,9 +1026,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import h5py
 import numpy as np
+import pytest
 
+import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.io.hdf5 import (
     DETECTOR_INTERNAL_PATH,
     MasterWriter,
@@ -1038,46 +1039,58 @@ from dfxm_geo.io.hdf5 import (
 from dfxm_geo.pipeline import _lookup_and_load_kernel
 
 
+@pytest.fixture(autouse=True)
+def _reset_kernel_state():
+    """Restore module-level forward_model state after each test.
+
+    Mirrors the autouse pattern used in test_master_writer.py: keeps
+    `fm.Hg` / `fm._loaded_kernel_path` from leaking into downstream tests
+    that branch on `_loaded_kernel_path is None`.
+    """
+    yield
+    fm.Hg = None
+    fm._loaded_kernel_path = None
+
+
 def test_load_h5_scan_follows_external_link(tmp_path: Path) -> None:
+    """Verify load_h5_scan reads through ExternalLink correctly (v1.2.0 layout)."""
     _lookup_and_load_kernel((-1, 1, -1), 17.0)
-    scan_dir = tmp_path / "scan0001"
-    det_path = scan_dir / "dfxm_sim_detector_0000.h5"
-    # 2 phi x 3 chi = 6 frames; need phi inner, chi outer ordering preserved
-    h, w = 5, 5
-    stack = np.arange(2 * 3 * h * w, dtype=np.float64).reshape(2 * 3, h, w)
-    _write_detector_file(det_path, stack)
+    try:
+        scan_dir = tmp_path / "scan0001"
+        det_path = scan_dir / "dfxm_sim_detector_0000.h5"
+        # 2 phi x 3 chi = 6 frames; need phi inner, chi outer ordering preserved
+        h, w = 5, 5
+        stack = np.arange(2 * 3 * h * w, dtype=np.float64).reshape(2 * 3, h, w)
+        _write_detector_file(det_path, stack)
 
-    master_path = tmp_path / "dfxm_geo.h5"
-    cfg = "[scan.phi]\nrange = 0.01\nsteps = 2\n[scan.chi]\nrange = 0.01\nsteps = 3\n"
-    with MasterWriter(master_path, cli="t", config_toml=cfg, kernel_npz=Path("placeholder.npz")) as m:
-        # Use a temp kernel placeholder path; provenance recording will fail
-        # if the path doesn't exist, so override _write_provenance kernel_npz to None:
-        pass
-    # The above 'with' fails on kernel_npz validation. Re-do without kernel for this test.
-    master_path.unlink()
-    with MasterWriter(master_path, cli="t", config_toml=cfg, kernel_npz=None) as m:
-        m.add_scan(
-            scan_id="1.1",
-            title="t",
-            start_time="t",
-            end_time="t",
-            sample={"name": "x"},
-            positioners={"phi": np.zeros(6), "chi": np.zeros(6)},
-            detector_links={
-                "dfxm_sim_detector": (
-                    Path("scan0001") / "dfxm_sim_detector_0000.h5",
-                    DETECTOR_INTERNAL_PATH,
-                )
-            },
-            dfxm_geo={},
-            attrs={},
+        master_path = tmp_path / "dfxm_geo.h5"
+        cfg = "[scan.phi]\nrange = 0.01\nsteps = 2\n[scan.chi]\nrange = 0.01\nsteps = 3\n"
+        with MasterWriter(master_path, cli="t", config_toml=cfg, kernel_npz=None) as m:
+            m.add_scan(
+                scan_id="1.1",
+                title="t",
+                start_time="t",
+                end_time="t",
+                sample={"name": "x"},
+                positioners={"phi": np.zeros(6), "chi": np.zeros(6)},
+                detector_links={
+                    "dfxm_sim_detector": (
+                        Path("scan0001") / "dfxm_sim_detector_0000.h5",
+                        DETECTOR_INTERNAL_PATH,
+                    )
+                },
+                dfxm_geo={},
+                attrs={},
+            )
+
+        flat, reshape, dim_h, dim_w = load_h5_scan(
+            master_path, scan_id="1.1", phi_steps=2, chi_steps=3
         )
-
-    flat, reshape, dim_h, dim_w = load_h5_scan(
-        master_path, scan_id="1.1", phi_steps=2, chi_steps=3
-    )
-    np.testing.assert_array_equal(flat, stack)
-    assert dim_h == h and dim_w == w
+        np.testing.assert_array_equal(flat, stack)
+        assert dim_h == h and dim_w == w
+    finally:
+        fm.Hg = None
+        fm._loaded_kernel_path = None
 ```
 
 - [ ] **Step 2: Run test**

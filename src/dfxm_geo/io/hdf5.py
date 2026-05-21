@@ -234,79 +234,6 @@ def _compute_and_write_detector_file_parallel(
                     img[k] = im
 
 
-def _save_scan_parallel_to_h5(
-    path: Path,
-    scan_id: str,
-    Hg: np.ndarray,
-    phi_range: float,
-    phi_steps: int,
-    chi_range: float,
-    chi_steps: int,
-    max_workers: int | None = None,
-    detector_shape: tuple[int, int] | None = None,
-) -> None:
-    """W2 producer-consumer: workers compute forward() and return; main thread writes to HDF5.
-
-    Pre-allocates `(N_frames, H, W)` dataset, dispatches workers, and writes
-    each result into its frame_idx slot as it returns. Frame ordering follows
-    fscan2d convention: phi inner, chi outer. frame_idx = chi_idx * phi_steps + phi_idx.
-
-    Args:
-        path: Output HDF5 file (created or appended).
-        scan_id: BLISS scan id like "1.1".
-        Hg: Strain field passed to forward().
-        phi_range, phi_steps, chi_range, chi_steps: rocking grid params (degrees + counts).
-        max_workers: Override for `_auto_max_workers()`.
-        detector_shape: (H, W) of the forward() output. If None, probes one frame
-            up-front to discover the shape.
-    """
-    Phi = np.linspace(-np.deg2rad(phi_range), np.deg2rad(phi_range), phi_steps)
-    Chi = np.linspace(-np.deg2rad(chi_range), np.deg2rad(chi_range), chi_steps)
-
-    if detector_shape is None:
-        # Run one frame to learn the detector shape, so we can pre-allocate.
-        probe = cast(np.ndarray, _fm.forward(Hg, phi=float(Phi[0]), chi=float(Chi[0])))
-        H, W = probe.shape
-    else:
-        H, W = detector_shape
-        probe = None
-
-    N = phi_steps * chi_steps
-    mode = "a" if path.exists() else "w"
-    workers = max_workers if max_workers is not None else _auto_max_workers()
-
-    with h5py.File(path, mode) as f:
-        scan = f.require_group(scan_id)
-        _set_nx_class(scan, "NXentry")
-        det = scan.require_group("instrument/dfxm_sim_detector")
-        _set_nx_class(scan["instrument"], "NXinstrument")
-        _set_nx_class(det, "NXdetector")
-        if "data" in det:
-            del det["data"]
-        ds = det.create_dataset(
-            "data",
-            shape=(N, H, W),
-            dtype=np.float64,
-            chunks=(1, H, W),
-            compression="gzip",
-            compression_opts=4,
-            shuffle=True,
-        )
-
-        args_list = []
-        for chi_idx in range(chi_steps):
-            for phi_idx in range(phi_steps):
-                k = chi_idx * phi_steps + phi_idx
-                if probe is not None and k == 0:
-                    ds[0] = probe  # we already computed frame 0
-                    continue
-                args_list.append((k, Hg, float(Phi[phi_idx]), float(Chi[chi_idx])))
-
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            for k, im in tqdm(ex.map(_compute_frame, args_list), total=len(args_list)):
-                ds[k] = im
-
-
 def _write_provenance(
     f: h5py.File, *, cli: str = "", kernel_npz: Path | None = None, config_toml: str | None = None
 ) -> None:
@@ -717,14 +644,14 @@ def write_simulation_h5(
     scan_mode: str | None = None,
     scanned_axes: list[str] | None = None,
 ) -> None:
-    """One-call entry point: writes /dfxm_geo/ provenance + /1.1 + optional /2.1.
+    """One-call entry point for forward mode, v1.2.0 layout.
 
-    Called by pipeline.run_simulation. Holds all info needed for a fully
-    self-contained, reproducible output file.
+    `path` is the master file (`<out_dir>/dfxm_geo.h5`); detector pixels live
+    in sibling `scan0001/` / `scan0002/` directories alongside it, linked
+    via ExternalLink. External signature unchanged from v1.1.0.
     """
     import datetime as _dt2
 
-    # Resolve kernel path for provenance hashing if not given.
     if kernel_npz is None:
         kernel_npz = _fm._loaded_kernel_path
         if kernel_npz is None:
@@ -732,6 +659,9 @@ def write_simulation_h5(
                 "no kernel loaded — call _lookup_and_load_kernel(hkl, keV) "
                 "before writing HDF5 provenance."
             )
+
+    out_dir = path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     Phi = np.linspace(-np.deg2rad(phi_range), np.deg2rad(phi_range), phi_steps)
     Chi = np.linspace(-np.deg2rad(chi_range), np.deg2rad(chi_range), chi_steps)
@@ -749,82 +679,94 @@ def write_simulation_h5(
     def _now() -> str:
         return _dt2.datetime.now(_dt2.UTC).isoformat(timespec="seconds")
 
-    # Phase 1: /1.1 dislocations — image data first via the parallel writer,
-    # then metadata-only append via write_h5_scan.
-    start_dislocs = _now()
-    _save_scan_parallel_to_h5(
-        path,
-        "1.1",
-        Hg,
-        phi_range,
-        phi_steps,
-        chi_range,
-        chi_steps,
-        max_workers=max_workers,
-    )
-    end_dislocs = _now()
-    write_h5_scan(
-        path,
-        scan_id="1.1",
-        images=np.empty(0),  # metadata-only append
-        phi=phi_per_frame,
-        chi=chi_per_frame,
-        title=title,
-        start_time=start_dislocs,
-        end_time=end_dislocs,
-        sample_name="simulated, dislocations",
-        sample_dis=sample_dis,
-        sample_ndis=sample_ndis,
-        sample_remount=sample_remount,
-        Hg=Hg,
-        q_hkl=q_hkl,
-        theta=float(_fm.theta),
-        psize=float(_fm.psize),
-        zl_rms=float(_fm.zl_rms),
-    )
+    def _build_args(Hg_in: np.ndarray) -> list[_FrameArgs]:
+        out: list[_FrameArgs] = []
+        for chi_idx in range(chi_steps):
+            for phi_idx in range(phi_steps):
+                k = chi_idx * phi_steps + phi_idx
+                out.append((k, Hg_in, float(Phi[phi_idx]), float(Chi[chi_idx])))
+        return out
 
-    # Phase 2: global provenance + B+C Task 13 scan/crystal-mode attrs on /N.1.
-    with h5py.File(path, "a") as f:
-        _write_provenance(f, cli=cli, kernel_npz=kernel_npz, config_toml=config_toml)
-        # Write scan/crystal mode attrs on /1.1 for darfix/darling/silx inspection.
-        grp_1_1 = f["1.1"]
-        if scan_mode is not None:
-            grp_1_1.attrs["scan_mode"] = scan_mode
-        if scanned_axes is not None:
-            grp_1_1.attrs["scanned_axes"] = list(scanned_axes)
-        if crystal_mode is not None:
-            grp_1_1.attrs["crystal_mode"] = crystal_mode
+    attrs_1_1: dict[str, str | list[str]] = {}
+    if scan_mode is not None:
+        attrs_1_1["scan_mode"] = scan_mode
+    if scanned_axes is not None:
+        attrs_1_1["scanned_axes"] = list(scanned_axes)
+    if crystal_mode is not None:
+        attrs_1_1["crystal_mode"] = crystal_mode
 
-    # Phase 3: optional perfect-crystal scan /2.1
-    if include_perfect_crystal:
-        start_perf = _now()
-        _save_scan_parallel_to_h5(
-            path,
-            "2.1",
-            np.zeros_like(Hg),
-            phi_range,
-            phi_steps,
-            chi_range,
-            chi_steps,
-            max_workers=max_workers,
+    with MasterWriter(path, cli=cli, config_toml=config_toml, kernel_npz=kernel_npz) as master:
+        # /1.1 dislocations
+        scan1_dir = out_dir / SCAN_DIR_FMT.format(1)
+        det1_path = scan1_dir / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
+        start1 = _now()
+        _compute_and_write_detector_file_parallel(
+            det1_path, _build_args(Hg), max_workers=max_workers
         )
-        end_perf = _now()
-        write_h5_scan(
-            path,
-            scan_id="2.1",
-            images=np.empty(0),
-            phi=phi_per_frame,
-            chi=chi_per_frame,
+        end1 = _now()
+        master.add_scan(
+            scan_id="1.1",
             title=title,
-            start_time=start_perf,
-            end_time=end_perf,
-            sample_name="simulated, perfect crystal",
-            sample_dis=sample_dis,
-            sample_ndis=sample_ndis,
-            sample_remount=sample_remount,
-            Hg=np.zeros_like(Hg),
-            q_hkl=q_hkl,
-            theta=float(_fm.theta),
-            psize=float(_fm.psize),
-            zl_rms=float(_fm.zl_rms),
+            start_time=start1,
+            end_time=end1,
+            sample={
+                "name": "simulated, dislocations",
+                "dis": float(sample_dis),
+                "ndis": int(sample_ndis),
+                "sample_remount": sample_remount,
+            },
+            positioners={"phi": phi_per_frame, "chi": chi_per_frame},
+            detector_links={
+                "dfxm_sim_detector": (
+                    Path(SCAN_DIR_FMT.format(1))
+                    / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector"),
+                    DETECTOR_INTERNAL_PATH,
+                )
+            },
+            dfxm_geo={
+                "Hg": Hg,
+                "q_hkl": q_hkl,
+                "theta": float(_fm.theta),
+                "psize": float(_fm.psize),
+                "zl_rms": float(_fm.zl_rms),
+            },
+            attrs=attrs_1_1,
         )
+
+        if include_perfect_crystal:
+            scan2_dir = out_dir / SCAN_DIR_FMT.format(2)
+            det2_path = scan2_dir / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
+            Hg_zero = np.zeros_like(Hg)
+            start2 = _now()
+            _compute_and_write_detector_file_parallel(
+                det2_path, _build_args(Hg_zero), max_workers=max_workers
+            )
+            end2 = _now()
+            master.add_scan(
+                scan_id="2.1",
+                title=title,
+                start_time=start2,
+                end_time=end2,
+                sample={
+                    "name": "simulated, perfect crystal",
+                    "dis": float(sample_dis),
+                    "ndis": int(sample_ndis),
+                    "sample_remount": sample_remount,
+                },
+                positioners={"phi": phi_per_frame, "chi": chi_per_frame},
+                detector_links={
+                    "dfxm_sim_detector": (
+                        Path(SCAN_DIR_FMT.format(2))
+                        / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector"),
+                        DETECTOR_INTERNAL_PATH,
+                    )
+                },
+                dfxm_geo={
+                    "Hg": Hg_zero,
+                    "q_hkl": q_hkl,
+                    "theta": float(_fm.theta),
+                    "psize": float(_fm.psize),
+                    "zl_rms": float(_fm.zl_rms),
+                },
+                attrs=attrs_1_1,  # B+C followup: /2.1 also carries mode attrs
+            )
