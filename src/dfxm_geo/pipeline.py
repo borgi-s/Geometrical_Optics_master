@@ -85,7 +85,7 @@ class AxisScanConfig:
         if self.range is not None:
             if self.range <= 0:
                 raise ValueError(f"`range` must be > 0; got {self.range!r}")
-            if self.steps is None or self.steps < 2:
+            if self.steps < 2:
                 raise ValueError(f"`steps` must be >= 2 when range is set; got {self.steps!r}")
 
     @property
