@@ -422,10 +422,14 @@ class IdentificationCrystalConfig:
 
 
 @dataclass(frozen=True, kw_only=True)
-class IdentificationScanConfig:
-    """Forward-model scan parameters for `dfxm-identify`."""
+class IdentificationNoiseConfig:
+    """Noise + intensity parameters for dfxm-identify forward calls.
 
-    phi_rad: float = 150e-6
+    Sub-project B carry-out: these moved out of the old
+    IdentificationScanConfig (now deleted) into their own block since
+    they describe noise/detector, not the scan trajectory.
+    """
+
     poisson_noise: bool = True
     rng_seed: int = 0
     intensity_scale: float = 7.0
@@ -468,7 +472,8 @@ class IdentificationConfig:
 
     mode: Literal["single", "multi", "z-scan"]
     crystal: IdentificationCrystalConfig
-    scan: IdentificationScanConfig
+    scan: ScanConfig  # shared with forward (was IdentificationScanConfig)
+    noise: IdentificationNoiseConfig  # noise/intensity block (was flat in IdentificationScanConfig)
     io: IOConfig
     multi: IdentificationMonteCarloConfig | None = None
     zscan: IdentificationZScanConfig | None = None
@@ -486,6 +491,11 @@ class IdentificationConfig:
         if self.mode in ("single", "multi") and self.zscan is not None:
             raise ValueError(
                 f"mode={self.mode!r}: zscan config block is only valid in mode='z-scan'"
+            )
+        # z-scan mode owns the z dimension via z_offsets_um; [scan.z] would conflict.
+        if self.mode == "z-scan" and self.scan.is_scanned("z"):
+            raise ValueError(
+                "mode='z-scan' uses [zscan].z_offsets_um for the z dimension; [scan.z] is forbidden"
             )
         # Validate the slip plane against the {111} family (also used in 'multi'
         # mode as the starting / fallback plane).
@@ -522,7 +532,8 @@ def load_identification_config(path: Path) -> IdentificationConfig:
             "slip_plane_normal": tuple(crystal_data["slip_plane_normal"]),
         }
     crystal = IdentificationCrystalConfig(**crystal_data)
-    scan = IdentificationScanConfig(**data.get("scan", {}))
+    scan = ScanConfig.from_dict(data.get("scan"))  # shared ScanConfig
+    noise = IdentificationNoiseConfig(**data.get("noise", {}))  # noise/intensity block
     io = IOConfig(**data.get("io", {}))
     multi = (
         IdentificationMonteCarloConfig(**data["multi"]) if data.get("multi") is not None else None
@@ -534,6 +545,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         mode=data["mode"],
         crystal=crystal,
         scan=scan,
+        noise=noise,
         io=io,
         multi=multi,
         zscan=zscan,
@@ -954,7 +966,7 @@ def _run_identification_single(
     """Deterministic Cartesian sweep: slip planes × Burgers vectors × angles."""
     output_dir.mkdir(parents=True, exist_ok=True)
     crystal_cfg = config.crystal
-    scan_cfg = config.scan
+    noise_cfg = config.noise
 
     all_planes: list[tuple[int, int, int]] = [
         (1, 1, 1),
@@ -970,7 +982,7 @@ def _run_identification_single(
         crystal_cfg.angle_step_deg,
     )
 
-    rng = np.random.default_rng(scan_cfg.rng_seed) if scan_cfg.poisson_noise else None
+    rng = np.random.default_rng(noise_cfg.rng_seed) if noise_cfg.poisson_noise else None
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
 
     manifest_rows: list[dict[str, Any]] = []
@@ -1014,13 +1026,13 @@ def _run_identification_single(
                 fm.Hg = Hg
                 fm.q_hkl = q_hkl
 
-                image_arr = fm.forward(Hg, phi=scan_cfg.phi_rad)
+                image_arr = fm.forward(Hg, phi=config.scan.phi.value)
                 # forward() can return either an ndarray or a (image, qi) tuple
                 # depending on qi_return. We don't pass qi_return so it's always
                 # an ndarray here; assert for the type-checker.
                 assert isinstance(image_arr, np.ndarray)
-                image = image_arr * scan_cfg.intensity_scale
-                if scan_cfg.poisson_noise:
+                image = image_arr * noise_cfg.intensity_scale
+                if noise_cfg.poisson_noise:
                     assert rng is not None
                     image = rng.poisson(np.clip(image, a_min=0.0, a_max=None)).astype(float)
 
@@ -1096,14 +1108,14 @@ def _run_identification_multi(
     """Monte Carlo over n_samples; each sample is 2 random mixed dislocations summed."""
     assert config.multi is not None  # validated in __post_init__
     mc = config.multi
-    scan_cfg = config.scan
+    noise_cfg = config.noise
 
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "im_data").mkdir(exist_ok=True)
     (output_dir / "images").mkdir(exist_ok=True)
 
     # Split master rng → child streams (param draws, Poisson noise).
-    master = np.random.default_rng(scan_cfg.rng_seed)
+    master = np.random.default_rng(noise_cfg.rng_seed)
     param_rng, noise_rng = master.spawn(2)
 
     manifest_rows: list[dict[str, Any]] = []
@@ -1126,10 +1138,10 @@ def _run_identification_multi(
         Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
         fm.Hg = Hg
 
-        image_arr = fm.forward(Hg, phi=scan_cfg.phi_rad)
+        image_arr = fm.forward(Hg, phi=config.scan.phi.value)
         assert isinstance(image_arr, np.ndarray)
-        image = image_arr * scan_cfg.intensity_scale
-        if scan_cfg.poisson_noise:
+        image = image_arr * noise_cfg.intensity_scale
+        if noise_cfg.poisson_noise:
             image = noise_rng.poisson(np.clip(image, a_min=0.0, a_max=None)).astype(float)
 
         stem = f"{k:0{pad}d}"
@@ -1187,7 +1199,7 @@ def _run_identification_zscan(
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
     crystal_cfg = config.crystal
-    scan_cfg = config.scan
+    noise_cfg = config.noise
     io_cfg = config.io
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1209,7 +1221,7 @@ def _run_identification_zscan(
     # Reuse Round 16's RNG-spawn pattern. The secondary stream is at
     # `secondary_rng_offset` in the spawn list so a noise stream could be
     # added later without breaking determinism.
-    master = np.random.default_rng(scan_cfg.rng_seed)
+    master = np.random.default_rng(noise_cfg.rng_seed)
     spawned = master.spawn(zscan.secondary_rng_offset + 1)
     secondary_rng = spawned[zscan.secondary_rng_offset]
 

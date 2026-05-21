@@ -1,5 +1,6 @@
 """Unit tests for dfxm-identify pipeline shape."""
 
+import contextlib
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +11,6 @@ from dfxm_geo.pipeline import (
     IdentificationConfig,
     IdentificationCrystalConfig,
     IdentificationMonteCarloConfig,
-    IdentificationScanConfig,
     IOConfig,
     ReciprocalConfig,
     _run_identification_multi,
@@ -19,6 +19,14 @@ from dfxm_geo.pipeline import (
     load_identification_config,
     run_identification,
 )
+
+# IdentificationScanConfig was deleted in sub-project B Task 12.
+# Existing tests that reference it are T15 carry-forwards; they will fail at
+# runtime (NameError) until T15 rewrites them with ScanConfig + IdentificationNoiseConfig.
+# Importing a missing name here would cause a module-level ImportError and prevent
+# the new T12 tests from collecting, so the import is deliberately absent.
+with contextlib.suppress(ImportError):
+    from dfxm_geo.pipeline import IdentificationScanConfig  # type: ignore[attr-defined]
 
 
 def test_identification_crystal_config_defaults():
@@ -785,3 +793,80 @@ def test_example_zscan_config_loads():
     assert cfg.mode == "z-scan"
     assert cfg.zscan is not None
     assert len(cfg.zscan.z_offsets_um) >= 1
+
+
+class TestIdentificationConfigScanReusesSharedShape:
+    def test_phi_value_from_scan_phi_value(self, tmp_path: Path) -> None:
+        toml_text = (
+            'mode = "single"\n'
+            "\n"
+            "[reciprocal]\n"
+            "hkl = [-1, 1, -1]\n"
+            "keV = 17.0\n"
+            "\n"
+            "[crystal]\n"
+            "slip_plane_normal = [1, 1, 1]\n"
+            "sweep_all_slip_planes = true\n"
+            "exclude_invisibility = true\n"
+            "\n"
+            "[scan.phi]\n"
+            "value = 0.00015\n"
+            "\n"
+            "[noise]\n"
+            "poisson_noise = true\n"
+            "rng_seed = 0\n"
+            "intensity_scale = 7.0\n"
+            "\n"
+            "[io]\n"
+            'fn_prefix = "/mosa_test_0000_"\n'
+            'ftype = ".npy"\n'
+            'dislocs_dirname = "identify"\n'
+            'perfect_dirname = "ignored"\n'
+            "include_perfect_crystal = false\n"
+        )
+        cfg_path = tmp_path / "id.toml"
+        cfg_path.write_text(toml_text)
+        cfg = load_identification_config(cfg_path)
+        # New shape: scan is the shared ScanConfig
+        from dfxm_geo.pipeline import ScanConfig
+
+        assert isinstance(cfg.scan, ScanConfig)
+        assert cfg.scan.phi.value == 1.5e-4
+        # Noise lives in its own block
+        assert cfg.noise.poisson_noise is True
+        assert cfg.noise.intensity_scale == 7.0
+
+
+class TestIdentificationConfigZScanForbidsScanZ:
+    def test_zscan_mode_with_scan_z_rejected(self, tmp_path: Path) -> None:
+        # When mode='z-scan', the [zscan].z_offsets_um drives z; [scan.z] is forbidden.
+        toml_text = (
+            'mode = "z-scan"\n'
+            "\n"
+            "[reciprocal]\n"
+            "hkl = [-1, 1, -1]\n"
+            "keV = 17.0\n"
+            "\n"
+            "[crystal]\n"
+            "slip_plane_normal = [1, 1, 1]\n"
+            "\n"
+            "[scan.phi]\n"
+            "value = 0.00015\n"
+            "[scan.z]\n"
+            "range = 1e-6\n"
+            "steps = 3\n"
+            "\n"
+            "[zscan]\n"
+            "z_offsets_um = [-1.0, 0.0, 1.0]\n"
+            "phi_range_deg = 0.03\n"
+            "phi_steps = 5\n"
+            "chi_range_deg = 0.1\n"
+            "chi_steps = 5\n"
+            "\n"
+            "[io]\n"
+            "include_perfect_crystal = false\n"
+        )
+        cfg_path = tmp_path / "id.toml"
+        cfg_path.write_text(toml_text)
+        with pytest.raises(ValueError, match=r"mode='z-scan'.*\[scan.z\] is forbidden"):
+            load_identification_config(cfg_path)
