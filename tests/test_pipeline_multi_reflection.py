@@ -227,6 +227,11 @@ class TestRunSimulationCrystalModes:
         out_dir = tmp_path / "out"
         result = run_simulation(cfg, out_dir)
         assert result["h5_path"].exists()
+        # v1.2.0 layout: master + per-scan detector file.
+        assert (out_dir / "dfxm_geo.h5").is_file()
+        assert (out_dir / "scan0001" / "dfxm_sim_detector_0000.h5").is_file()
+        # This config has include_perfect_crystal = false → no scan0002.
+        assert not (out_dir / "scan0002").exists()
         assert not (out_dir / "dfxm_geo_random_dislocations.json").exists()
 
     def test_wall_mode_preserves_legacy_behavior(
@@ -251,6 +256,10 @@ class TestRunSimulationCrystalModes:
         out_dir = tmp_path / "out"
         result = run_simulation(cfg, out_dir)
         assert result["h5_path"].exists()
+        # v1.2.0 layout: master + per-scan detector file.
+        assert (out_dir / "dfxm_geo.h5").is_file()
+        assert (out_dir / "scan0001" / "dfxm_sim_detector_0000.h5").is_file()
+        assert not (out_dir / "scan0002").exists()
         assert not (out_dir / "dfxm_geo_random_dislocations.json").exists()
 
     def test_random_dislocations_mode_writes_sidecar(
@@ -274,6 +283,10 @@ class TestRunSimulationCrystalModes:
         cfg = SimulationConfig.from_toml(cfg_path)
         out_dir = tmp_path / "out"
         run_simulation(cfg, out_dir)
+        # v1.2.0 layout: master + per-scan detector file.
+        assert (out_dir / "dfxm_geo.h5").is_file()
+        assert (out_dir / "scan0001" / "dfxm_sim_detector_0000.h5").is_file()
+        assert not (out_dir / "scan0002").exists()
         sidecar = out_dir / "dfxm_geo_random_dislocations.json"
         assert sidecar.exists()
         import json
