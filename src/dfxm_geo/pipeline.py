@@ -93,12 +93,34 @@ class AxisScanConfig:
         return self.range is not None and self.steps is not None
 
 
+_CANONICAL_AXES = ("phi", "chi", "two_dtheta", "z")
+
+
 @dataclass
 class ScanConfig:
-    phi_range: float  # half-range in degrees
-    phi_steps: int
-    chi_range: float  # half-range in degrees
-    chi_steps: int
+    """Per-axis scan primitives (sub-project B).
+
+    Each motor axis is independently fixed or scanned. The "scan mode"
+    label is derived from which axes carry range+steps — see
+    `derived_mode_name` (Task 3).
+    """
+
+    phi: AxisScanConfig = field(default_factory=AxisScanConfig)
+    chi: AxisScanConfig = field(default_factory=AxisScanConfig)
+    two_dtheta: AxisScanConfig = field(default_factory=AxisScanConfig)
+    z: AxisScanConfig = field(default_factory=AxisScanConfig)
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> ScanConfig:
+        if not data:
+            return cls()
+        unknown = set(data.keys()) - set(_CANONICAL_AXES)
+        if unknown:
+            raise ValueError(
+                f"unknown scan axis {sorted(unknown)[0]!r}; expected one of {_CANONICAL_AXES}"
+            )
+        kwargs = {axis: AxisScanConfig(**data[axis]) for axis in _CANONICAL_AXES if axis in data}
+        return cls(**kwargs)
 
 
 @dataclass
@@ -166,14 +188,7 @@ class ReciprocalConfig:
 @dataclass
 class SimulationConfig:
     crystal: CrystalConfig = field(default_factory=CrystalConfig)
-    scan: ScanConfig = field(
-        default_factory=lambda: ScanConfig(
-            phi_range=0.0006 * 180 / np.pi,
-            phi_steps=61,
-            chi_range=0.002 * 180 / np.pi,
-            chi_steps=61,
-        )
-    )
+    scan: ScanConfig = field(default_factory=ScanConfig)
     io: IOConfig = field(default_factory=IOConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     # Sub-project D: optional in Python construction (defaults to None for
