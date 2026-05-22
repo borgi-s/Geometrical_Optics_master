@@ -230,3 +230,54 @@ def test_multi_with_two_dtheta_scanned_keeps_one_scan_per_mc_sample(tmp_path: Pa
         for sid in scan_keys:
             assert f[f"/{sid}/instrument/dfxm_sim_detector/data"].shape[0] == 2
             assert f[f"/{sid}/instrument/positioners/two_dtheta"].shape == (2,)
+
+
+def test_single_with_all_four_axes_scanned(tmp_path: Path) -> None:
+    """All 4 axes scanned in identification single mode.
+
+    z is between-scan (multiplies scan count). phi, chi, two_dtheta are
+    within-scan (multiply n_frames).
+    """
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="single",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=(1, 1, 1),
+            angle_start_deg=0.0,
+            angle_stop_deg=0.0,
+            angle_step_deg=10.0,
+            b_vector_indices=[0],
+            sweep_all_slip_planes=False,
+            exclude_invisibility=False,
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=6e-4, steps=2),
+            chi=AxisScanConfig(range=2e-3, steps=2),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=2),
+            z=AxisScanConfig(range=1.0, steps=2),  # 2 z values
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        scan_keys = sorted(k for k in f if k != "dfxm_geo")
+        # 2 z * 1 plane * 1 b * 1 alpha = 2 scans
+        assert scan_keys == ["1.1", "2.1"]
+        # n_frames per scan = 2 phi * 2 chi * 2 two_dtheta = 8
+        for sid in scan_keys:
+            assert f[f"/{sid}/instrument/dfxm_sim_detector/data"].shape[0] == 8
+            positioners = f[f"/{sid}/instrument/positioners"]
+            for axis in ("phi", "chi", "two_dtheta"):
+                assert positioners[axis].shape == (8,), (
+                    f"{axis} should be a per-frame array of length 8; "
+                    f"got shape {positioners[axis].shape}"
+                )
+            # z is fixed within a scan (scalar)
+            assert positioners["z"].shape == ()
+            assert positioners["z"].attrs["units"] == "micrometer"
+        # The two scans have different z values.
+        z0 = f["/1.1/instrument/positioners/z"][()]
+        z1 = f["/2.1/instrument/positioners/z"][()]
+        assert z0 != z1
