@@ -265,16 +265,11 @@ def test_run_simulation_z_scan_recomputes_hg_per_z(
         pytest.skip(f"no kernel npz found in {kernel_dir}")
 
     # Spy on Find_Hg_from_population to count calls.
-    calls: list[float] = []
+    calls: list[None] = []
     real = fm.Find_Hg_from_population
 
-    def spy(pop, *args, rl=None, **kwargs):  # type: ignore[no-untyped-def]
-        # Reverse-engineer z from rl identity: rl is None -> z=0; rl is shifted otherwise.
-        if rl is None:
-            calls.append(0.0)
-        else:
-            # We can't easily reverse the offset from rl alone; just record "non-zero".
-            calls.append(float("nan"))
+    def spy(pop, *args, rl=None, **kwargs):
+        calls.append(None)
         return real(pop, *args, rl=rl, **kwargs)
 
     monkeypatch.setattr(fm, "Find_Hg_from_population", spy)
@@ -293,8 +288,8 @@ def test_run_simulation_z_scan_recomputes_hg_per_z(
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
     )
     run_simulation(cfg, tmp_path)
-    # 3 unique z values + 1 baseline call (Hg_provider(0.0) for q_hkl provenance)
-    assert len(calls) >= 3, f"expected >=3 Find_Hg_from_population calls, got {len(calls)}"
+    # 1 provenance call (q_hkl) + 3 unique z values (z.steps=3) = 4 total
+    assert len(calls) == 4, f"expected 4 Find_Hg_from_population calls, got {len(calls)}"
 
     import h5py
 
