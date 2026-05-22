@@ -997,6 +997,30 @@ def _build_scan_frames(scan: ScanConfig) -> ScanFrames:
     )
 
 
+def _build_scan_frames_at_z(scan: ScanConfig, z_value: float) -> ScanFrames:
+    """Inner (phi × chi × two_dtheta) trajectory with z_pf fixed to z_value.
+
+    Used by identification iterators that loop outer over z themselves.
+    The scan's `[scan.z]` configuration is ignored; only z_value is used.
+    """
+    from dfxm_geo.direct_space.forward_model import build_scan_grid
+
+    grid = build_scan_grid(scan)
+    phi, chi, two_dtheta, _z_ignored = grid.samples
+    phi_g, chi_g, twodt_g = np.meshgrid(phi, chi, two_dtheta, indexing="ij")
+    phi_pf = phi_g.ravel(order="F")
+    chi_pf = chi_g.ravel(order="F")
+    two_dtheta_pf = twodt_g.ravel(order="F")
+    n = int(phi_pf.size)
+    return ScanFrames(
+        phi_pf=phi_pf,
+        chi_pf=chi_pf,
+        two_dtheta_pf=two_dtheta_pf,
+        z_pf=np.full(n, float(z_value), dtype=np.float64),
+        n_frames=n,
+    )
+
+
 def _frame_grid_from_scan(
     scan: ScanConfig,
 ) -> tuple[np.ndarray, np.ndarray, int]:

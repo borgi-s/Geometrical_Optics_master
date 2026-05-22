@@ -9,6 +9,7 @@ from dfxm_geo.pipeline import (
     ScanConfig,
     ScanFrames,
     _build_scan_frames,
+    _build_scan_frames_at_z,
 )
 
 
@@ -84,3 +85,39 @@ def test_n_frames_matches_array_length():
     assert frames.chi_pf.size == 12
     assert frames.two_dtheta_pf.size == 12
     assert frames.z_pf.size == 12
+
+
+def test_build_scan_frames_at_z_fixes_z_axis():
+    """At a specific z, z_pf is full-length constant; other axes walk product."""
+    cfg = ScanConfig(
+        phi=AxisScanConfig(range=1e-3, steps=2),
+        chi=AxisScanConfig(range=2e-3, steps=3),
+    )
+    frames = _build_scan_frames_at_z(cfg, z_value=12.5)
+    assert frames.n_frames == 6  # phi x chi only
+    np.testing.assert_array_equal(frames.z_pf, np.full(6, 12.5))
+
+
+def test_build_scan_frames_at_z_with_two_dtheta_scanned():
+    """If two_dtheta is scanned, inner trajectory is phi x chi x two_dtheta."""
+    cfg = ScanConfig(
+        phi=AxisScanConfig(range=1e-3, steps=2),
+        two_dtheta=AxisScanConfig(range=3.0, steps=2),
+    )
+    frames = _build_scan_frames_at_z(cfg, z_value=0.0)
+    assert frames.n_frames == 4  # 2 * 2
+    np.testing.assert_array_equal(frames.z_pf, np.zeros(4))
+    # phi cycles fastest: [-1e-3, +1e-3, -1e-3, +1e-3]
+    np.testing.assert_allclose(frames.phi_pf, [-1e-3, 1e-3, -1e-3, 1e-3])
+
+
+def test_build_scan_frames_at_z_ignores_z_scan_config():
+    """z range/steps in the config are ignored; only the passed-in z_value is used."""
+    cfg = ScanConfig(
+        phi=AxisScanConfig(range=1e-3, steps=2),
+        z=AxisScanConfig(range=10.0, steps=5),  # scanned in cfg
+    )
+    # Identification iterators handle z themselves; helper takes one z at a time.
+    frames = _build_scan_frames_at_z(cfg, z_value=7.7)
+    assert frames.n_frames == 2  # phi only; z collapsed to the passed value
+    np.testing.assert_array_equal(frames.z_pf, [7.7, 7.7])
