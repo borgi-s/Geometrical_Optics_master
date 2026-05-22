@@ -120,7 +120,11 @@ writes one `/N.1/` per config drawn from the runner generator. For
 For `mode="z-scan"`: `len(z_offsets_um) × phi_chi_configs` (legacy z-scan
 mode, distinct from `[scan.z]` axis scanning). New in v1.3.0: `[scan.z]`
 in single/multi multiplies the scan count by `n_z` and recomputes the
-strain field at each z-slice.
+strain field at each z-slice. New in v1.3.1: `[scan.two_dtheta]` is a
+within-scan axis in identification (multiplies `n_frames`-per-scan, not
+the scan count) — it differs from `[scan.z]` because the
+deformation-gradient `Hg` is two_dtheta-independent, so `forward()`
+shifts the Bragg angle internally without recomputing `Hg`.
 
 The metadata schema of `/N.1/` is identical to v1.1.0 except that
 `instrument/dfxm_sim_detector/data` is now an `ExternalLink` to the

@@ -138,3 +138,146 @@ def test_multi_with_phi_and_chi_scanned_produces_phi_x_chi_frames(
         pos = f["/1.1/instrument/positioners"]
         assert pos["phi"].shape == (6,)
         assert pos["chi"].shape == (6,)
+
+
+def test_single_with_two_dtheta_scanned_does_not_raise(tmp_path: Path) -> None:
+    """[scan.two_dtheta] in identification single mode runs to completion."""
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="single",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=(1, 1, 1),
+            angle_start_deg=0.0,
+            angle_stop_deg=0.0,
+            angle_step_deg=10.0,
+            b_vector_indices=[0],
+            sweep_all_slip_planes=False,
+            exclude_invisibility=False,
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(value=1.5e-4),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=3),
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    # Must not raise. (Pre-v1.3.0-B this raised ValueError eagerly.)
+    run_identification(cfg, tmp_path)
+    assert (tmp_path / "dfxm_identify.h5").is_file()
+
+
+def test_single_with_two_dtheta_scanned_keeps_one_scan_per_plane(tmp_path: Path) -> None:
+    """`[scan.two_dtheta]` is a within-scan axis in identification single mode.
+
+    Scan count is unchanged (1 plane * 1 b * 1 alpha = 1 scan); the n_frames
+    per scan is multiplied by n_two_dtheta.
+    """
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="single",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=(1, 1, 1),
+            angle_start_deg=0.0,
+            angle_stop_deg=0.0,
+            angle_step_deg=10.0,
+            b_vector_indices=[0],
+            sweep_all_slip_planes=False,
+            exclude_invisibility=False,
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(value=1.5e-4),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=3),  # 3 two_dtheta values
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        scan_keys = sorted(k for k in f if k != "dfxm_geo")
+        # 1 z * 1 plane * 1 b * 1 alpha = 1 scan (two_dtheta is within-scan)
+        assert scan_keys == ["1.1"]
+        # n_frames = 3 (n_two_dtheta)
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape[0] == 3
+        # two_dtheta is a per-frame positioner array of length 3
+        assert f["/1.1/instrument/positioners/two_dtheta"].shape == (3,)
+        # Angular axis stored in degrees
+        assert f["/1.1/instrument/positioners/two_dtheta"].attrs["units"] == "degree"
+
+
+def test_multi_with_two_dtheta_scanned_keeps_one_scan_per_mc_sample(tmp_path: Path) -> None:
+    """`[scan.two_dtheta]` in identification multi mode multiplies n_frames, not scan count."""
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="multi",
+        crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
+        scan=ScanConfig(
+            phi=AxisScanConfig(value=1e-4),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=2),  # 2 two_dtheta values
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        multi=IdentificationMonteCarloConfig(n_samples=2, pos_std_um=5.0),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        scan_keys = sorted(k for k in f if k != "dfxm_geo")
+        # 1 z * 2 n_samples = 2 scans (two_dtheta is within-scan)
+        assert scan_keys == ["1.1", "2.1"]
+        # n_frames = 2 (n_two_dtheta) per scan
+        for sid in scan_keys:
+            assert f[f"/{sid}/instrument/dfxm_sim_detector/data"].shape[0] == 2
+            assert f[f"/{sid}/instrument/positioners/two_dtheta"].shape == (2,)
+
+
+def test_single_with_all_four_axes_scanned(tmp_path: Path) -> None:
+    """All 4 axes scanned in identification single mode.
+
+    z is between-scan (multiplies scan count). phi, chi, two_dtheta are
+    within-scan (multiply n_frames).
+    """
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="single",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=(1, 1, 1),
+            angle_start_deg=0.0,
+            angle_stop_deg=0.0,
+            angle_step_deg=10.0,
+            b_vector_indices=[0],
+            sweep_all_slip_planes=False,
+            exclude_invisibility=False,
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=6e-4, steps=2),
+            chi=AxisScanConfig(range=2e-3, steps=2),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=2),
+            z=AxisScanConfig(range=1.0, steps=2),  # 2 z values
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        scan_keys = sorted(k for k in f if k != "dfxm_geo")
+        # 2 z * 1 plane * 1 b * 1 alpha = 2 scans
+        assert scan_keys == ["1.1", "2.1"]
+        # n_frames per scan = 2 phi * 2 chi * 2 two_dtheta = 8
+        for sid in scan_keys:
+            assert f[f"/{sid}/instrument/dfxm_sim_detector/data"].shape[0] == 8
+            positioners = f[f"/{sid}/instrument/positioners"]
+            for axis in ("phi", "chi", "two_dtheta"):
+                assert positioners[axis].shape == (8,), (
+                    f"{axis} should be a per-frame array of length 8; "
+                    f"got shape {positioners[axis].shape}"
+                )
+            # z is fixed within a scan (scalar)
+            assert positioners["z"].shape == ()
+            assert positioners["z"].attrs["units"] == "micrometer"
+        # The two scans have different z values.
+        z0 = f["/1.1/instrument/positioners/z"][()]
+        z1 = f["/2.1/instrument/positioners/z"][()]
+        assert z0 != z1

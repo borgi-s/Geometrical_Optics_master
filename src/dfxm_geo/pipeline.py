@@ -1083,6 +1083,11 @@ def _positioners_for_scan_frames(
     Scanned axes -> the full per-frame array (np.ndarray of length n_frames).
     Fixed axes -> the scalar axis value (float). Matches v1.2.0 convention
     for phi/chi; now extended to two_dtheta + z.
+
+    Special case: when z is configured as scanned but all per-frame z values
+    are identical (i.e. z was looped externally as a between-scan axis in
+    identification mode), z is stored as a scalar.  This preserves the
+    HDF5 contract that z is a 0-D positioner within a single scan.
     """
     pf_arrays: dict[str, np.ndarray] = {
         "phi": frames.phi_pf,
@@ -1093,10 +1098,11 @@ def _positioners_for_scan_frames(
     out: dict[str, np.ndarray | float] = {}
     for axis_name in _CANONICAL_AXES:
         axis = getattr(scan, axis_name)
-        if axis.is_scanned:
-            out[axis_name] = pf_arrays[axis_name]
+        arr = pf_arrays[axis_name]
+        if axis.is_scanned and not (axis_name == "z" and np.all(arr == arr[0])):
+            out[axis_name] = arr
         else:
-            out[axis_name] = float(pf_arrays[axis_name][0])
+            out[axis_name] = float(arr[0])
     return out
 
 
@@ -1723,15 +1729,6 @@ def run_identification(
         raise ValueError(
             "IdentificationConfig.reciprocal is None — must specify [reciprocal] "
             "block in TOML or set it programmatically before calling run_identification."
-        )
-    # two_dtheta is not yet wired into the identify forward path. Raise eagerly
-    # so users don't get silently-wrong output. z is now wired for single + multi
-    # (v1.3.0-A); two_dtheta lifting is tracked as a future follow-up.
-    if config.scan.is_scanned("two_dtheta"):
-        raise ValueError(
-            "scan axis two_dtheta is configured but not yet wired into "
-            "identification. For now, set range+steps only on "
-            "[scan.phi], [scan.chi], and/or [scan.z]."
         )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
