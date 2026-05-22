@@ -207,3 +207,51 @@ def test_write_simulation_h5_title_correct_for_asymmetric_grid(
     assert " 3 chi " in title, f"phi_steps=3 not in title: {title!r}"
     assert " 2 1.0" in title, f"chi_steps=2 not in title: {title!r}"
     assert " 6 chi " not in title, f"n_frames=6 wrongly emitted as phi_steps: {title!r}"
+
+
+def test_scan_title_from_frames_asymmetric_step_counts() -> None:
+    """Helper emits correct per-axis step counts in the darfix-parsed title.
+
+    Catches the regression where n_frames was substituted for chi_steps,
+    mangling the (phi, chi, H, W) reshape for non-square grids.
+    """
+    from dfxm_geo.io.hdf5 import _scan_title_from_frames
+
+    # 3 phi x 2 chi = 6 frames; phi-innermost layout.
+    phi_pf = np.tile(np.linspace(-1e-3, 1e-3, 3), 2)
+    chi_pf = np.repeat(np.linspace(-2e-3, 2e-3, 2), 3)
+    frames = ScanFrames(
+        phi_pf=phi_pf,
+        chi_pf=chi_pf,
+        two_dtheta_pf=np.zeros(6),
+        z_pf=np.zeros(6),
+        n_frames=6,
+    )
+
+    title = _scan_title_from_frames(frames, phi_steps=3, chi_steps=2)
+
+    # phi_steps=3 between "phi <min> <max>" and "chi"
+    assert " 3 chi " in title, f"phi_steps=3 not in title: {title!r}"
+    # chi_steps=2 immediately before the trailing " 1.0"
+    assert title.rstrip().endswith(" 2 1.0"), f"chi_steps=2 not before trailing 1.0: {title!r}"
+    # n_frames=6 must NOT appear as either step count
+    assert " 6 chi " not in title, f"n_frames=6 wrongly emitted as phi_steps: {title!r}"
+    assert " 6 1.0" not in title, f"n_frames=6 wrongly emitted as chi_steps: {title!r}"
+
+
+def test_scan_title_from_frames_single_step() -> None:
+    """Helper handles 1-step (single-value) axes correctly."""
+    from dfxm_geo.io.hdf5 import _scan_title_from_frames
+
+    # 1 phi x 1 chi = 1 frame (fully fixed scan).
+    frames = ScanFrames(
+        phi_pf=np.array([0.0]),
+        chi_pf=np.array([0.0]),
+        two_dtheta_pf=np.array([0.0]),
+        z_pf=np.array([0.0]),
+        n_frames=1,
+    )
+
+    title = _scan_title_from_frames(frames, phi_steps=1, chi_steps=1)
+    assert " 1 chi " in title, f"phi_steps=1 not in title: {title!r}"
+    assert title.rstrip().endswith(" 1 1.0"), f"chi_steps=1 not in title: {title!r}"
