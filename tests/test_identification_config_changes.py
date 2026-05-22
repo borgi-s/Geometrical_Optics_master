@@ -47,7 +47,8 @@ def test_multi_config_drops_n_png_previews() -> None:
     assert not hasattr(cfg, "n_png_previews")
 
 
-def test_run_identification_eager_guards_unwired_axes(tmp_path) -> None:
+@pytest.mark.parametrize("axis_name", ["two_dtheta", "z"])
+def test_run_identification_eager_guards_unwired_axes(axis_name, tmp_path) -> None:
     from dfxm_geo.pipeline import (
         AxisScanConfig,
         IdentificationConfig,
@@ -61,7 +62,7 @@ def test_run_identification_eager_guards_unwired_axes(tmp_path) -> None:
 
     scan = ScanConfig(
         phi=AxisScanConfig(value=1e-4),
-        two_dtheta=AxisScanConfig(value=0.0, range=1e-3, steps=3),
+        **{axis_name: AxisScanConfig(value=0.0, range=1e-3, steps=3)},
     )
     cfg = IdentificationConfig(
         mode="single",
@@ -71,5 +72,5 @@ def test_run_identification_eager_guards_unwired_axes(tmp_path) -> None:
         io=IOConfig(),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
     )
-    with pytest.raises(ValueError, match=r"two_dtheta"):
+    with pytest.raises(ValueError, match=axis_name):
         run_identification(cfg, tmp_path)

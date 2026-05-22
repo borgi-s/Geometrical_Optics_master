@@ -605,8 +605,8 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     # yet wired into save_images_parallel. Raise eagerly so users don't get
     # silently-wrong output from scanning two_dtheta or z. Lifting this guard
     # is tracked as a v1.3.0 follow-up.
-    if config.scan.two_dtheta.is_scanned or config.scan.z.is_scanned:
-        unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
+    unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
+    if unwired:
         raise ValueError(
             f"scan axes {unwired} are configured but not yet wired into the "
             f"forward kernel (v1.2.0 scope). For now, set range+steps only on "
@@ -1397,9 +1397,10 @@ def run_identification(
         )
     # v1.2.0 scope: identify kernels only consume phi + chi. ScanGrid for
     # two_dtheta / z is implemented but not wired into the identify forward
-    # path. Raise eagerly so users don't get silently-wrong output.
-    if config.scan.two_dtheta.is_scanned or config.scan.z.is_scanned:
-        unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
+    # path. Raise eagerly so users don't get silently-wrong output. Lifting
+    # this guard is tracked as a v1.3.0 follow-up.
+    unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
+    if unwired:
         raise ValueError(
             f"scan axes {unwired} are configured but not yet wired into "
             f"identification (v1.2.0 scope). For now, set range+steps only on "
