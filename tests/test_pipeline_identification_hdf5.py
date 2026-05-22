@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import h5py
+import pytest
 
+import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     AxisScanConfig,
     IdentificationConfig,
@@ -17,6 +19,13 @@ from dfxm_geo.pipeline import (
     ScanConfig,
     run_identification,
 )
+
+
+def _require_kernel() -> None:
+    """Skip unless a bootstrapped (-1,1,-1) 17 keV kernel npz is on disk."""
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
 
 
 def _minimal_single_cfg() -> IdentificationConfig:
@@ -39,6 +48,7 @@ def _minimal_single_cfg() -> IdentificationConfig:
 
 
 def test_single_mode_writes_master_plus_scan_dirs(tmp_path: Path) -> None:
+    _require_kernel()
     cfg = _minimal_single_cfg()
     run_identification(cfg, tmp_path)
 
@@ -69,6 +79,7 @@ def test_single_mode_writes_master_plus_scan_dirs(tmp_path: Path) -> None:
 
 
 def test_single_mode_drops_legacy_sidecars(tmp_path: Path) -> None:
+    _require_kernel()
     cfg = _minimal_single_cfg()
     run_identification(cfg, tmp_path)
     assert not (tmp_path / "manifest.csv").exists()
@@ -78,6 +89,7 @@ def test_single_mode_drops_legacy_sidecars(tmp_path: Path) -> None:
 
 
 def test_multi_mode_writes_master_plus_scan_dirs(tmp_path: Path) -> None:
+    _require_kernel()
     cfg = IdentificationConfig(
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
@@ -112,6 +124,7 @@ def test_multi_mode_writes_master_plus_scan_dirs(tmp_path: Path) -> None:
 
 
 def test_zscan_mode_writes_master_plus_scan_dirs(tmp_path: Path) -> None:
+    _require_kernel()
     from dfxm_geo.pipeline import IdentificationZScanConfig
 
     cfg = IdentificationConfig(

@@ -12,7 +12,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import h5py
+import pytest
 
+import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     AxisScanConfig,
     IdentificationConfig,
@@ -26,7 +28,15 @@ from dfxm_geo.pipeline import (
 )
 
 
+def _require_kernel() -> None:
+    """Skip unless a bootstrapped (-1,1,-1) 17 keV kernel npz is on disk."""
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+
 def test_single_with_phi_scanned_produces_phi_steps_frames(tmp_path: Path) -> None:
+    _require_kernel()
     cfg = IdentificationConfig(
         mode="single",
         crystal=IdentificationCrystalConfig(
@@ -53,6 +63,7 @@ def test_single_with_phi_scanned_produces_phi_steps_frames(tmp_path: Path) -> No
 def test_multi_with_phi_and_chi_scanned_produces_phi_x_chi_frames(
     tmp_path: Path,
 ) -> None:
+    _require_kernel()
     cfg = IdentificationConfig(
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),

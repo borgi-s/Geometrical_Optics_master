@@ -18,6 +18,13 @@ from dfxm_geo.io.hdf5 import (
 from dfxm_geo.pipeline import _lookup_and_load_kernel
 
 
+def _require_kernel() -> None:
+    """Skip unless a bootstrapped (-1,1,-1) 17 keV kernel npz is on disk."""
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+
 def _fake_scan_iter(Hg: np.ndarray) -> Iterator[ScanSpec]:
     # Two scan entries, each with one detector and one frame.
     for k in range(2):
@@ -41,6 +48,7 @@ def _fake_scan_iter(Hg: np.ndarray) -> Iterator[ScanSpec]:
 
 
 def test_write_identification_h5_basic(tmp_path: Path) -> None:
+    _require_kernel()
     _lookup_and_load_kernel((-1, 1, -1), 17.0)
     if fm.Hg is None:
         pytest.skip("forward_model.Hg not populated; run dfxm-bootstrap.")

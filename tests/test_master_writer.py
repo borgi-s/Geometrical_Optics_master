@@ -34,9 +34,16 @@ def _reset_kernel_state():
 
 
 def _kernel_for_tests() -> Path:
-    """Pick the bundled kernel for provenance + lookup tests."""
+    """Pick the bundled kernel for provenance + lookup tests.
+
+    Skipped on CI runners without a bootstrapped kernel npz.
+    """
     import dfxm_geo.direct_space.forward_model as fm
     from dfxm_geo.pipeline import _lookup_and_load_kernel
+
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
 
     _lookup_and_load_kernel((-1, 1, -1), 17.0)
     assert fm._loaded_kernel_path is not None

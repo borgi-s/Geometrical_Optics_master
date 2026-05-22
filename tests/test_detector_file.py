@@ -18,6 +18,13 @@ from dfxm_geo.io.hdf5 import (
 from dfxm_geo.pipeline import _lookup_and_load_kernel
 
 
+def _require_kernel() -> None:
+    """Skip unless a bootstrapped (-1,1,-1) 17 keV kernel npz is on disk."""
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+
 def test_write_detector_file_structure(tmp_path: Path) -> None:
     stack = np.arange(2 * 3 * 4, dtype=np.float64).reshape(2, 3, 4)
     out = tmp_path / "dfxm_sim_detector_0000.h5"
@@ -62,6 +69,7 @@ def test_write_detector_file_internal_path_matches_constant(tmp_path: Path) -> N
 def test_compute_and_write_detector_file_parallel_roundtrip(tmp_path: Path) -> None:
     """Workers run forward() and stream into one detector file; pixels match a
     serial reference (probed-frame-0 plus the workers' results)."""
+    _require_kernel()
     # Ensure a kernel is loaded (test fixtures use the bundled kernel).
     # `_lookup_and_load_kernel` also calls `Find_Hg`, which populates
     # `fm.Hg` to the correct (NN1*NN2*NN3, 3, 3) shape that forward()
