@@ -18,6 +18,7 @@ import argparse
 import csv
 import sys
 import tomllib
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -41,7 +42,12 @@ from dfxm_geo.crystal.dislocations import (
 )
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
-from dfxm_geo.io.hdf5 import load_h5_scan, write_simulation_h5
+from dfxm_geo.io.hdf5 import (
+    ScanSpec,
+    load_h5_scan,
+    write_identification_h5,
+    write_simulation_h5,
+)
 from dfxm_geo.io.images import (  # save_images_parallel: zscan runner
     save_images_parallel,
 )
@@ -953,6 +959,139 @@ def _slip_plane_slug(n: tuple[int, int, int]) -> str:
     return "_".join("m" + str(abs(c)) if c < 0 else str(c) for c in n)
 
 
+def _frame_grid_from_scan(
+    scan: ScanConfig,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Return (Phi_rad, Chi_rad, n_frames) for a single-scan rocking grid.
+
+    Both arrays are 1-D of length n_frames, in phi-inner / chi-outer order.
+    Fixed axes contribute a single repeated value (the axis ``value`` in
+    radians).
+    """
+    if scan.phi.is_scanned:
+        assert scan.phi.range is not None and scan.phi.steps is not None
+        Phi = np.linspace(-np.deg2rad(scan.phi.range), np.deg2rad(scan.phi.range), scan.phi.steps)
+    else:
+        Phi = np.asarray([scan.phi.value], dtype=float)
+    if scan.chi.is_scanned:
+        assert scan.chi.range is not None and scan.chi.steps is not None
+        Chi = np.linspace(-np.deg2rad(scan.chi.range), np.deg2rad(scan.chi.range), scan.chi.steps)
+    else:
+        Chi = np.asarray([scan.chi.value], dtype=float)
+    return Phi, Chi, Phi.size * Chi.size
+
+
+def _scan_frames_args(
+    Hg: np.ndarray, Phi: np.ndarray, Chi: np.ndarray
+) -> tuple[list[tuple[int, np.ndarray, float, float]], np.ndarray, np.ndarray]:
+    """Build (args_list, phi_per_frame, chi_per_frame) for one ScanSpec.
+
+    Frame order: phi-inner, chi-outer (matches forward fscan2d convention).
+    Each args tuple is (frame_idx, Hg, phi_rad, chi_rad).
+    """
+    n = Phi.size * Chi.size
+    args_list: list[tuple[int, np.ndarray, float, float]] = []
+    phi_pf = np.empty(n, dtype=np.float64)
+    chi_pf = np.empty(n, dtype=np.float64)
+    for chi_idx in range(Chi.size):
+        for phi_idx in range(Phi.size):
+            k = chi_idx * Phi.size + phi_idx
+            phi_pf[k] = float(Phi[phi_idx])
+            chi_pf[k] = float(Chi[chi_idx])
+            args_list.append((k, Hg, float(Phi[phi_idx]), float(Chi[chi_idx])))
+    return args_list, phi_pf, chi_pf
+
+
+def _positioners_for_scan(
+    phi_pf: np.ndarray, chi_pf: np.ndarray, scan: ScanConfig
+) -> dict[str, np.ndarray | float]:
+    """Return phi/chi entries for ScanSpec.positioners.
+
+    Fixed axes collapse to a scalar in radians; scanned axes are the
+    full (N_frames,) array (also in radians, per ScanSpec convention).
+    """
+    out: dict[str, np.ndarray | float] = {}
+    out["phi"] = phi_pf if scan.phi.is_scanned else float(scan.phi.value)
+    out["chi"] = chi_pf if scan.chi.is_scanned else float(scan.chi.value)
+    return out
+
+
+def _identify_title(scan_mode: str, n_frames: int, scan: ScanConfig) -> str:
+    """Compact human title for /N.1/title in identification masters."""
+    return f"identify-{scan_mode} N_frames={n_frames}"
+
+
+def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
+    """Best-effort TOML render of an IdentificationConfig (for /dfxm_geo/config_toml).
+
+    Not round-trip-perfect; the goal is provenance, not reconstruction.
+    Captures mode, reciprocal, scan, crystal (identification), noise, multi, zscan.
+    """
+    lines: list[str] = [f'mode = "{cfg.mode}"']
+    if cfg.reciprocal is not None:
+        h, k, l = cfg.reciprocal.hkl
+        lines += [
+            "",
+            "[reciprocal]",
+            f"hkl = [{h}, {k}, {l}]",
+            f"keV = {cfg.reciprocal.keV}",
+        ]
+    # [crystal] (identification flavor; not the SimulationConfig crystal)
+    c = cfg.crystal
+    lines += [
+        "",
+        "[crystal]",
+        f"slip_plane_normal = [{c.slip_plane_normal[0]}, "
+        f"{c.slip_plane_normal[1]}, {c.slip_plane_normal[2]}]",
+        f"angle_start_deg = {c.angle_start_deg}",
+        f"angle_stop_deg = {c.angle_stop_deg}",
+        f"angle_step_deg = {c.angle_step_deg}",
+        f"sweep_all_slip_planes = {str(c.sweep_all_slip_planes).lower()}",
+        f"exclude_invisibility = {str(c.exclude_invisibility).lower()}",
+        f"invisibility_threshold_deg = {c.invisibility_threshold_deg}",
+    ]
+    if c.b_vector_indices is not None:
+        lines.append(f"b_vector_indices = {list(c.b_vector_indices)}")
+    # [scan.<axis>]
+    for axis_name in _CANONICAL_AXES:
+        axis = getattr(cfg.scan, axis_name)
+        if axis.value == 0.0 and not axis.is_scanned:
+            continue
+        lines += ["", f"[scan.{axis_name}]"]
+        if axis.value != 0.0:
+            lines.append(f"value = {axis.value}")
+        if axis.is_scanned:
+            lines.append(f"range = {axis.range}")
+            lines.append(f"steps = {axis.steps}")
+    # [noise]
+    lines += [
+        "",
+        "[noise]",
+        f"poisson_noise = {str(cfg.noise.poisson_noise).lower()}",
+        f"rng_seed = {cfg.noise.rng_seed}",
+        f"intensity_scale = {cfg.noise.intensity_scale}",
+    ]
+    # [multi]
+    if cfg.multi is not None:
+        lines += [
+            "",
+            "[multi]",
+            f"n_samples = {cfg.multi.n_samples}",
+            f"pos_std_um = {cfg.multi.pos_std_um}",
+            f"render_per_dislocation = {str(cfg.multi.render_per_dislocation).lower()}",
+        ]
+    # [zscan]
+    if cfg.zscan is not None:
+        lines += [
+            "",
+            "[zscan]",
+            f"z_offsets_um = {list(cfg.zscan.z_offsets_um)}",
+            f"include_secondary = {str(cfg.zscan.include_secondary).lower()}",
+            f"secondary_rng_offset = {cfg.zscan.secondary_rng_offset}",
+        ]
+    return "\n".join(lines) + "\n"
+
+
 def _save_preview_png(arr: np.ndarray, png_path: Path) -> None:
     """Quick matplotlib heatmap snapshot for spot-checking."""
     import matplotlib
@@ -983,22 +1122,23 @@ def _passes_invisibility(
     return bool(cos_angle >= np.cos(np.deg2rad(90.0 - threshold_deg)))
 
 
-def _run_identification_single(
+def _iter_identification_single(
     config: IdentificationConfig,
-    output_dir: Path,
-) -> dict[str, Any]:
-    """Deterministic Cartesian sweep: slip planes × Burgers vectors × angles."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    crystal_cfg = config.crystal
-    noise_cfg = config.noise
+) -> Iterator[ScanSpec]:
+    """Yield one ScanSpec per (plane, b_idx, alpha) configuration.
 
-    all_planes: list[tuple[int, int, int]] = [
-        (1, 1, 1),
-        (1, -1, 1),
-        (1, 1, -1),
-        (-1, 1, 1),
-    ]
-    planes = all_planes if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
+    Supports `[scan.phi]` / `[scan.chi]` from the shared ScanConfig: when
+    either axis is scanned, each scan dir contains a (N_frames, H, W)
+    stack with frame ordering phi-inner, chi-outer.
+    """
+    crystal_cfg = config.crystal
+    # Noise hook lives one phase out: Phase 8.3 of the v1.2.0 plan restores
+    # Poisson + intensity_scale by applying them after write_identification_h5
+    # returns. Phase 7 leaves single-mode noise-free on purpose.
+
+    planes = (
+        _ALL_111_PLANES if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
+    )
 
     angles_deg = np.arange(
         crystal_cfg.angle_start_deg,
@@ -1006,19 +1146,12 @@ def _run_identification_single(
         crystal_cfg.angle_step_deg,
     )
 
-    rng = np.random.default_rng(noise_cfg.rng_seed) if noise_cfg.poisson_noise else None
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
-
-    manifest_rows: list[dict[str, Any]] = []
-    n_written = 0
+    scan_mode = config.scan.derived_mode_name()
+    scanned_axes = list(config.scan.scanned_axes())
+    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
 
     for plane in planes:
-        plane_slug = _slip_plane_slug(plane)
-        im_dir = output_dir / f"n_{plane_slug}" / "im_data"
-        png_dir = output_dir / f"n_{plane_slug}" / "images"
-        im_dir.mkdir(parents=True, exist_ok=True)
-        png_dir.mkdir(parents=True, exist_ok=True)
-
         b_table = _burgers_vectors(plane)
         b_indices = (
             crystal_cfg.b_vector_indices
@@ -1028,9 +1161,8 @@ def _run_identification_single(
         b_subset = b_table[b_indices]
         n_arr_unnorm = np.asarray(plane, dtype=float)
         n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
-
         rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
-        Ud_all = _ud_matrices(n_arr, rotated)  # (n_angles, n_b, 3, 3)
+        Ud_all = _ud_matrices(n_arr, rotated)
 
         for j, b_idx in enumerate(b_indices):
             if crystal_cfg.exclude_invisibility and not _passes_invisibility(
@@ -1047,50 +1179,69 @@ def _run_identification_single(
                     Theta=fm.Theta,
                 )
                 Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
+                # Mutating module state (fm.Hg / fm.q_hkl) is safe across the
+                # ThreadPoolExecutor inside write_identification_h5 because the
+                # orchestrator drains all workers for one ScanSpec before
+                # consuming the next yield (see io/hdf5.py:593-621).
                 fm.Hg = Hg
                 fm.q_hkl = q_hkl
 
-                image_arr = fm.forward(Hg, phi=config.scan.phi.value)
-                # forward() can return either an ndarray or a (image, qi) tuple
-                # depending on qi_return. We don't pass qi_return so it's always
-                # an ndarray here; assert for the type-checker.
-                assert isinstance(image_arr, np.ndarray)
-                image = image_arr * noise_cfg.intensity_scale
-                if noise_cfg.poisson_noise:
-                    assert rng is not None
-                    image = rng.poisson(np.clip(image, a_min=0.0, a_max=None)).astype(float)
+                args_list, phi_pf, chi_pf = _scan_frames_args(Hg, Phi, Chi)
 
-                stem = f"b{b_idx}_alpha{int(round(alpha)):03d}"
-                npy_path = im_dir / f"{stem}.npy"
-                png_path = png_dir / f"{stem}.png"
-                np.save(npy_path, image)
-                _save_preview_png(image, png_path)
-
-                manifest_rows.append(
-                    {
-                        "image_path": str(npy_path.relative_to(output_dir)),
-                        "n_h": plane[0],
-                        "n_k": plane[1],
-                        "n_l": plane[2],
-                        "b_idx": b_idx,
-                        "b_h": int(round(b_table[b_idx, 0] * np.sqrt(2))),
-                        "b_k": int(round(b_table[b_idx, 1] * np.sqrt(2))),
-                        "b_l": int(round(b_table[b_idx, 2] * np.sqrt(2))),
-                        "rotation_deg": float(alpha),
-                    }
+                burgers_int = (
+                    int(round(b_table[b_idx, 0] * np.sqrt(2))),
+                    int(round(b_table[b_idx, 1] * np.sqrt(2))),
+                    int(round(b_table[b_idx, 2] * np.sqrt(2))),
                 )
-                n_written += 1
+                yield ScanSpec(
+                    title=_identify_title(scan_mode, n_frames, config.scan),
+                    sample={
+                        "name": "simulated, dislocation identification (single)",
+                        "slip_plane_normal": np.asarray(plane, dtype=np.int32),
+                        "burgers": np.asarray(burgers_int, dtype=np.int32),
+                        "rotation_deg": float(alpha),
+                    },
+                    positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
+                    dfxm_geo={
+                        "Hg": Hg,
+                        "q_hkl": q_hkl,
+                        "theta": float(fm.theta),
+                        "psize": float(fm.psize),
+                        "zl_rms": float(fm.zl_rms),
+                    },
+                    detectors={"dfxm_sim_detector": args_list},
+                    attrs={
+                        "scan_mode": scan_mode,
+                        "scanned_axes": scanned_axes,
+                        "identify_mode": "single",
+                    },
+                )
 
-    manifest_path = output_dir / "manifest.csv"
-    with open(manifest_path, "w", newline="") as fh:
-        if manifest_rows:
-            writer = csv.DictWriter(fh, fieldnames=list(manifest_rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(manifest_rows)
-        else:
-            fh.write("")
 
-    return {"n_images": n_written, "output_dir": output_dir, "manifest_path": manifest_path}
+def _run_identification_single(
+    config: IdentificationConfig,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Dispatcher: feed `_iter_identification_single` into write_identification_h5.
+
+    Empty sweep (e.g. exclude_invisibility filters out everything) is
+    allowed: the orchestrator writes an empty master with `n_images=0`.
+    Mirrors the old behavior which also emitted an empty manifest.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    config_toml = _identification_config_to_toml_str(config)
+    n_scans = write_identification_h5(
+        output_dir,
+        scan_iter=_iter_identification_single(config),
+        cli=" ".join(sys.argv),
+        config_toml=config_toml,
+        max_workers=config.io.max_workers,
+    )
+    return {
+        "n_images": n_scans,
+        "output_dir": output_dir,
+        "master_path": output_dir / "dfxm_identify.h5",
+    }
 
 
 _ALL_111_PLANES: list[tuple[int, int, int]] = [

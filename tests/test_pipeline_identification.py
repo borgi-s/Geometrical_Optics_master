@@ -252,27 +252,38 @@ def _tiny_single_config(tmp_path):
 
 
 def test_run_identification_single_writes_expected_count(tmp_path, monkeypatch):
-    """Tiny sweep (1 slip plane × 2 b × 2 angles = 4 images) writes 4 .npy files
-    and 4 PNGs, and one manifest.csv with 4 rows.
+    """Tiny sweep (1 slip plane × 2 b × 2 angles = 4 configs) writes a master
+    HDF5 with 4 /N.1 scans and 4 per-scan detector files (v1.2.0 layout).
     """
+    import h5py
+
     expected_image = np.ones((170, 510))
     monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: expected_image)
+    # Writer falls back to fm._loaded_kernel_path for provenance when
+    # kernel_npz is None. Point it at a dummy file; no real kernel IO.
+    fake_kernel = tmp_path / "fake_kernel.npz"
+    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
 
     output_dir = tmp_path / "out"
     cfg = _tiny_single_config(tmp_path)
 
     result = _run_identification_single(cfg, output_dir)
 
-    npys = sorted((output_dir / "n_1_1_1" / "im_data").glob("*.npy"))
-    assert len(npys) == 4
-    pngs = sorted((output_dir / "n_1_1_1" / "images").glob("*.png"))
-    assert len(pngs) == 4
-    manifest = output_dir / "manifest.csv"
-    assert manifest.is_file()
-    lines = manifest.read_text(encoding="utf-8").strip().splitlines()
-    assert len(lines) == 5  # 1 header + 4 rows
+    master = output_dir / "dfxm_identify.h5"
+    assert master.is_file()
+    # 4 scan dirs, one detector file each
+    for k in range(1, 5):
+        det = output_dir / f"scan{k:04d}" / "dfxm_sim_detector_0000.h5"
+        assert det.is_file(), f"missing {det}"
+    # No legacy sidecars
+    assert not (output_dir / "manifest.csv").exists()
+    assert not (output_dir / "n_1_1_1").exists()
+    with h5py.File(master, "r") as f:
+        scan_ids = sorted(k for k in f if k != "dfxm_geo")
+        assert scan_ids == ["1.1", "2.1", "3.1", "4.1"]
     assert result["n_images"] == 4
 
 
@@ -356,6 +367,10 @@ def test_run_identification_dispatches_to_single(tmp_path, monkeypatch):
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
     monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
+    # Stand in for the kernel provenance the writer reads.
+    fake_kernel = tmp_path / "fake_kernel.npz"
+    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
 
     cfg = _tiny_single_config(tmp_path)
     result = run_identification(cfg, tmp_path / "out")
@@ -389,6 +404,9 @@ def test_cli_main_identify_parses_args(tmp_path, monkeypatch):
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
     monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
+    fake_kernel = tmp_path / "fake_kernel.npz"
+    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
 
     toml_text = """
 mode = "single"
@@ -427,7 +445,7 @@ keV = 17.0
 
     exit_code = cli_main_identify(["--config", str(cfg_path), "--output", str(out_dir)])
     assert exit_code == 0
-    assert (out_dir / "manifest.csv").is_file()
+    assert (out_dir / "dfxm_identify.h5").is_file()
 
 
 def test_example_single_config_loads():
@@ -512,8 +530,14 @@ keV = 17.0
         timeout=180,
     )
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
-    npys = list((out_dir / "n_1_1_1" / "im_data").glob("*.npy"))
-    assert len(npys) == 1
+    master = out_dir / "dfxm_identify.h5"
+    assert master.is_file(), f"missing master HDF5 in {out_dir}"
+    # 1 plane × 1 b × 1 angle (0 to 0 inclusive @ step 10) = 1 scan
+    det = out_dir / "scan0001" / "dfxm_sim_detector_0000.h5"
+    assert det.is_file(), f"missing per-scan detector file: {det}"
+    # No legacy sidecar layout
+    assert not (out_dir / "n_1_1_1").exists()
+    assert not (out_dir / "manifest.csv").exists()
 
 
 def test_identification_zscan_config_defaults():
