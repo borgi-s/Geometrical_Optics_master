@@ -36,8 +36,9 @@ SCAN_DIR_FMT = "scan{:04d}"
 DETECTOR_FILE_FMT = "{name}_0000.h5"
 DETECTOR_INTERNAL_PATH = "/entry_0000/dfxm_sim_detector/image"
 
-# (frame_idx, Hg, phi, chi) — one frame's worth of args for `_compute_frame`.
-_FrameArgs = tuple[int, np.ndarray, float, float]
+# (frame_idx, Hg, phi, chi, two_dtheta) — one frame's worth of args for `_compute_frame`.
+_FrameArgs = tuple[int, np.ndarray, float, float, float]
+"""(frame_idx, Hg, phi_rad, chi_rad, two_dtheta_rad)"""
 
 
 @dataclass(frozen=True)
@@ -57,7 +58,7 @@ class ScanSpec:
         dfxm_geo: sim-specific per-scan metadata (Hg, q_hkl, theta, psize,
             zl_rms). Any subset may be supplied.
         detectors: detector_name → list of frame args tuples
-            `(frame_idx, Hg, phi, chi)` for the parallel writer. Each
+            `(frame_idx, Hg, phi, chi, two_dtheta)` for the parallel writer. Each
             detector becomes its own LIMA-style file inside the scan dir.
         attrs: per-`/N.1` attrs — at minimum `scan_mode`, `scanned_axes`,
             `identify_mode`.
@@ -138,10 +139,10 @@ def _auto_max_workers() -> int:
 def _compute_frame(args: _FrameArgs) -> tuple[int, np.ndarray]:
     """Worker function: run forward() and return (frame_idx, image).
 
-    args = (frame_idx, Hg, phi, chi)
+    args = (frame_idx, Hg, phi, chi, two_dtheta)
     """
-    frame_idx, Hg, phi, chi = args
-    im = cast(np.ndarray, _fm.forward(Hg, phi=phi, chi=chi))
+    frame_idx, Hg, phi, chi, two_dtheta = args
+    im = cast(np.ndarray, _fm.forward(Hg, phi=phi, chi=chi, TwoDeltaTheta=two_dtheta))
     return frame_idx, im
 
 
@@ -681,7 +682,7 @@ def write_simulation_h5(
         for chi_idx in range(chi_steps):
             for phi_idx in range(phi_steps):
                 k = chi_idx * phi_steps + phi_idx
-                out.append((k, Hg_in, float(Phi[phi_idx]), float(Chi[chi_idx])))
+                out.append((k, Hg_in, float(Phi[phi_idx]), float(Chi[chi_idx]), 0.0))
         return out
 
     attrs_1_1: dict[str, str | list[str]] = {}

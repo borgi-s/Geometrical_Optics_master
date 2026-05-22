@@ -38,7 +38,7 @@ def _fake_scan_iter(Hg: np.ndarray) -> Iterator[ScanSpec]:
             },
             positioners={"phi": 1.5e-4, "chi": 0.0},
             dfxm_geo={"Hg": Hg, "q_hkl": np.array([0.0, 0.0, 1.0])},
-            detectors={"dfxm_sim_detector": [(0, Hg, 1.5e-4, 0.0)]},
+            detectors={"dfxm_sim_detector": [(0, Hg, 1.5e-4, 0.0, 0.0)]},
             attrs={
                 "scan_mode": "single",
                 "scanned_axes": [],

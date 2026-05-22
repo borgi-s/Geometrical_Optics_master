@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from dfxm_geo.pipeline import (
     AxisScanConfig,
@@ -10,6 +11,7 @@ from dfxm_geo.pipeline import (
     ScanFrames,
     _build_scan_frames,
     _build_scan_frames_at_z,
+    _scan_frames_args,
 )
 
 
@@ -121,3 +123,42 @@ def test_build_scan_frames_at_z_ignores_z_scan_config():
     frames = _build_scan_frames_at_z(cfg, z_value=7.7)
     assert frames.n_frames == 2  # phi only; z collapsed to the passed value
     np.testing.assert_array_equal(frames.z_pf, [7.7, 7.7])
+
+
+def test_scan_frames_args_returns_5_tuples():
+    """_scan_frames_args(Hg, frames) emits (idx, Hg, phi, chi, two_dtheta)."""
+    cfg = ScanConfig(
+        phi=AxisScanConfig(range=1e-3, steps=2),
+        two_dtheta=AxisScanConfig(range=3e-4, steps=2),
+    )
+    frames = _build_scan_frames_at_z(cfg, z_value=0.0)
+    Hg = np.zeros((10, 3, 3))
+    args_list, positioners = _scan_frames_args(Hg, frames)
+    assert len(args_list) == 4
+    for tup in args_list:
+        assert len(tup) == 5  # idx, Hg, phi, chi, two_dtheta
+    indices = [tup[0] for tup in args_list]
+    assert indices == [0, 1, 2, 3]
+    # Per-frame phi/chi/two_dtheta come straight from frames
+    np.testing.assert_allclose([tup[2] for tup in args_list], frames.phi_pf)
+    np.testing.assert_allclose([tup[4] for tup in args_list], frames.two_dtheta_pf)
+
+
+@pytest.mark.xfail(reason="collapse logic lands in Task 4", strict=True)
+def test_scan_frames_args_positioners_contain_all_four_axes():
+    """positioners dict has phi/chi/two_dtheta/z (per-frame arrays or scalars)."""
+    cfg = ScanConfig(
+        phi=AxisScanConfig(range=1e-3, steps=3),
+        two_dtheta=AxisScanConfig(range=3e-4, steps=2),
+    )
+    frames = _build_scan_frames_at_z(cfg, z_value=5.0)
+    Hg = np.zeros((10, 3, 3))
+    _, positioners = _scan_frames_args(Hg, frames)
+    assert set(positioners.keys()) == {"phi", "chi", "two_dtheta", "z"}
+    # Scanned axes are arrays
+    assert isinstance(positioners["phi"], np.ndarray)
+    assert isinstance(positioners["two_dtheta"], np.ndarray)
+    # Fixed axes are scalars (chi default value is 0.0)
+    assert positioners["chi"] == 0.0
+    # z is fixed at 5.0 by _build_scan_frames_at_z
+    assert positioners["z"] == 5.0

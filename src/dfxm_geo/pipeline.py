@@ -1021,47 +1021,41 @@ def _build_scan_frames_at_z(scan: ScanConfig, z_value: float) -> ScanFrames:
     )
 
 
-def _frame_grid_from_scan(
-    scan: ScanConfig,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    """Return (Phi_rad, Chi_rad, n_frames) for a single-scan rocking grid.
-
-    Both arrays are 1-D of length n_frames, in phi-inner / chi-outer order.
-    Fixed axes contribute a single repeated value (the axis ``value`` in
-    radians).
-    """
-    if scan.phi.is_scanned:
-        assert scan.phi.range is not None and scan.phi.steps is not None
-        Phi = np.linspace(-np.deg2rad(scan.phi.range), np.deg2rad(scan.phi.range), scan.phi.steps)
-    else:
-        Phi = np.asarray([scan.phi.value], dtype=float)
-    if scan.chi.is_scanned:
-        assert scan.chi.range is not None and scan.chi.steps is not None
-        Chi = np.linspace(-np.deg2rad(scan.chi.range), np.deg2rad(scan.chi.range), scan.chi.steps)
-    else:
-        Chi = np.asarray([scan.chi.value], dtype=float)
-    return Phi, Chi, Phi.size * Chi.size
-
-
 def _scan_frames_args(
-    Hg: np.ndarray, Phi: np.ndarray, Chi: np.ndarray
-) -> tuple[list[tuple[int, np.ndarray, float, float]], np.ndarray, np.ndarray]:
-    """Build (args_list, phi_per_frame, chi_per_frame) for one ScanSpec.
+    Hg: np.ndarray, frames: ScanFrames
+) -> tuple[list[tuple[int, np.ndarray, float, float, float]], dict[str, np.ndarray | float]]:
+    """Build (args_list, positioners) for one ScanSpec.
 
-    Frame order: phi-inner, chi-outer (matches forward fscan2d convention).
-    Each args tuple is (frame_idx, Hg, phi_rad, chi_rad).
+    args_list elements: (frame_idx, Hg, phi_rad, chi_rad, two_dtheta_rad).
+    positioners: dict keyed by canonical axis; scanned axes -> per-frame array,
+    fixed axes -> scalar (matching `_positioners_for_scan`'s previous shape).
     """
-    n = Phi.size * Chi.size
-    args_list: list[tuple[int, np.ndarray, float, float]] = []
-    phi_pf = np.empty(n, dtype=np.float64)
-    chi_pf = np.empty(n, dtype=np.float64)
-    for chi_idx in range(Chi.size):
-        for phi_idx in range(Phi.size):
-            k = chi_idx * Phi.size + phi_idx
-            phi_pf[k] = float(Phi[phi_idx])
-            chi_pf[k] = float(Chi[chi_idx])
-            args_list.append((k, Hg, float(Phi[phi_idx]), float(Chi[chi_idx])))
-    return args_list, phi_pf, chi_pf
+    args_list: list[tuple[int, np.ndarray, float, float, float]] = []
+    for k in range(frames.n_frames):
+        args_list.append(
+            (
+                k,
+                Hg,
+                float(frames.phi_pf[k]),
+                float(frames.chi_pf[k]),
+                float(frames.two_dtheta_pf[k]),
+            )
+        )
+    positioners = _positioners_for_scan_frames(frames)
+    return args_list, positioners
+
+
+def _positioners_for_scan_frames(frames: ScanFrames) -> dict[str, np.ndarray | float]:
+    """Temporary stub: always returns per-frame arrays.
+
+    Task 4 replaces this with the scanned/fixed-axis collapse logic.
+    """
+    return {
+        "phi": frames.phi_pf,
+        "chi": frames.chi_pf,
+        "two_dtheta": frames.two_dtheta_pf,
+        "z": frames.z_pf,
+    }
 
 
 def _positioners_for_scan(
@@ -1196,7 +1190,8 @@ def _iter_identification_single(
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
-    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
+    frames_at_z = _build_scan_frames_at_z(config.scan, z_value=0.0)
+    n_frames = frames_at_z.n_frames
 
     for plane in planes:
         b_table = _burgers_vectors(plane)
@@ -1227,7 +1222,7 @@ def _iter_identification_single(
                 )
                 Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
 
-                args_list, phi_pf, chi_pf = _scan_frames_args(Hg, Phi, Chi)
+                args_list, positioners = _scan_frames_args(Hg, frames_at_z)
 
                 burgers_int = (
                     int(round(b_table[b_idx, 0] * np.sqrt(2))),
@@ -1242,7 +1237,7 @@ def _iter_identification_single(
                         "burgers": np.asarray(burgers_int, dtype=np.int32),
                         "rotation_deg": float(alpha),
                     },
-                    positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
+                    positioners=positioners,
                     dfxm_geo={
                         "Hg": Hg,
                         "q_hkl": q_hkl,
@@ -1361,7 +1356,8 @@ def _iter_identification_multi(
 
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
-    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
+    frames_at_z = _build_scan_frames_at_z(config.scan, z_value=0.0)
+    n_frames = frames_at_z.n_frames
 
     for _ in range(mc.n_samples):
         d1 = _draw_dislocation(param_rng, mc.pos_std_um)
@@ -1383,8 +1379,8 @@ def _iter_identification_multi(
         Fg_combined = Fd_find_multi_dislocs_mixed(fm.rl, fm.Us, specs, fm.Theta)
         Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
 
-        combined_args, phi_pf, chi_pf = _scan_frames_args(Hg_combined, Phi, Chi)
-        detectors: dict[str, list[tuple[int, np.ndarray, float, float]]] = {
+        combined_args, positioners = _scan_frames_args(Hg_combined, frames_at_z)
+        detectors: dict[str, list[tuple[int, np.ndarray, float, float, float]]] = {
             "dfxm_sim_detector": combined_args,
         }
 
@@ -1407,8 +1403,8 @@ def _iter_identification_multi(
                 Theta=fm.Theta,
             )
             Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
-            dis0_args, _, _ = _scan_frames_args(Hg_dis0, Phi, Chi)
-            dis1_args, _, _ = _scan_frames_args(Hg_dis1, Phi, Chi)
+            dis0_args, _ = _scan_frames_args(Hg_dis0, frames_at_z)
+            dis1_args, _ = _scan_frames_args(Hg_dis1, frames_at_z)
             detectors["dfxm_sim_detector_dis0"] = dis0_args
             detectors["dfxm_sim_detector_dis1"] = dis1_args
 
@@ -1423,7 +1419,7 @@ def _iter_identification_multi(
         yield ScanSpec(
             title=_identify_title(scan_mode, n_frames, config.scan),
             sample=sample,
-            positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
+            positioners=positioners,
             dfxm_geo={
                 "Hg": Hg_combined,
                 "q_hkl": q_hkl,
@@ -1538,9 +1534,10 @@ def _iter_identification_zscan(
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
-    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
 
     for z_off in zscan.z_offsets_um:
+        frames_at_z = _build_scan_frames_at_z(config.scan, z_value=float(z_off))
+        n_frames = frames_at_z.n_frames
         rl_shifted = fm.Z_shift(z_off)
         for plane in planes:
             b_table = _burgers_vectors(plane)
@@ -1611,12 +1608,12 @@ def _iter_identification_zscan(
                         )
 
                     Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
-                    args_list, phi_pf, chi_pf = _scan_frames_args(Hg, Phi, Chi)
+                    args_list, positioners = _scan_frames_args(Hg, frames_at_z)
 
                     yield ScanSpec(
                         title=_identify_title(scan_mode, n_frames, config.scan),
                         sample=sample,
-                        positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
+                        positioners=positioners,
                         dfxm_geo={
                             "Hg": Hg,
                             "q_hkl": q_hkl,
