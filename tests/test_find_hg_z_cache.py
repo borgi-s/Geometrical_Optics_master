@@ -109,3 +109,30 @@ def test_z_offset_zero_does_not_call_z_shift(tmp_path, monkeypatch):
 
     fm.Find_Hg(dis=4.0, ndis=1, psize=fm.psize, zl_rms=fm.zl_rms, h=-1, k=1, l=-1)
     assert calls == [], f"Z_shift should not be called for z=0; got {calls}"
+
+
+def test_find_hg_from_population_accepts_rl_kwarg():
+    """Find_Hg_from_population(population, rl=Z_shift(z)) uses the passed rl."""
+    import numpy as np
+
+    _require_kernel()
+    from dfxm_geo.pipeline import _lookup_and_load_kernel
+
+    fm.Hg = None
+    fm._loaded_kernel_path = None
+    _lookup_and_load_kernel((-1, 1, -1), 17.0)
+
+    # Single centered dislocation
+    from dfxm_geo.pipeline import CenteredCrystalConfig, CrystalConfig
+
+    cfg = CrystalConfig(
+        mode="centered",
+        centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+    )
+    pop = fm.build_dislocation_population(cfg, fov_lateral_um=20.0, rng=None)
+
+    rl_shifted = fm.Z_shift(3.0)
+    Hg_shifted, _ = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1, rl=rl_shifted)
+    Hg_zero, _ = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1)
+    # Different rl -> different Hg
+    assert not np.allclose(Hg_shifted, Hg_zero), "Hg from z-shifted rl should differ from Hg at z=0"

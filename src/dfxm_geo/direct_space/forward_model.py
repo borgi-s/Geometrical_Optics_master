@@ -775,6 +775,7 @@ def Find_Hg_from_population(
     l: int = -1,
     *,
     S: np.ndarray = _S_IDENTITY,
+    rl: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute Hg + q_hkl from an arbitrary DislocationPopulation.
 
@@ -790,11 +791,16 @@ def Find_Hg_from_population(
         population: DislocationPopulation from `build_dislocation_population`.
         h, k, l: Miller indices of the active reflection.
         S: 3x3 sample-remount rotation (default identity).
+        rl: Detector ray grid to evaluate the strain on. Defaults to the
+            module-level `fm.rl`. Pass `Z_shift(z_um)` to evaluate at a
+            non-zero sample-depth offset (z-scan support).
 
     Returns:
         (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
     """
     from dfxm_geo.crystal.dislocations import Fd_find_multi_dislocs_mixed, MixedDislocSpec
+
+    rl_eff = rl if rl is not None else globals()["rl"]
 
     Q_norm = np.sqrt(h * h + k * k + l * l)
     q_hkl = np.asarray([h, k, l]) / Q_norm
@@ -816,7 +822,7 @@ def Find_Hg_from_population(
 
     # Compute Fg via the multi-dislocation kernel.
     # Returns shape (X, 3, 3) with identity already added (Fg, not Fdd).
-    Fg = Fd_find_multi_dislocs_mixed(rl, Us, crystals, Theta, S=S)
+    Fg = Fd_find_multi_dislocs_mixed(rl_eff, Us, crystals, Theta, S=S)
 
     # Convert Fg → Hg using the same convention as load_or_generate_Hg:
     #   Hg = transpose(Fg^-1) - I
