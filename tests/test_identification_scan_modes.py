@@ -138,3 +138,30 @@ def test_multi_with_phi_and_chi_scanned_produces_phi_x_chi_frames(
         pos = f["/1.1/instrument/positioners"]
         assert pos["phi"].shape == (6,)
         assert pos["chi"].shape == (6,)
+
+
+def test_single_with_two_dtheta_scanned_does_not_raise(tmp_path: Path) -> None:
+    """[scan.two_dtheta] in identification single mode runs to completion."""
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="single",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=(1, 1, 1),
+            angle_start_deg=0.0,
+            angle_stop_deg=0.0,
+            angle_step_deg=10.0,
+            b_vector_indices=[0],
+            sweep_all_slip_planes=False,
+            exclude_invisibility=False,
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(value=1.5e-4),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=3),
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    # Must not raise. (Pre-v1.3.0-B this raised ValueError eagerly.)
+    run_identification(cfg, tmp_path)
+    assert (tmp_path / "dfxm_identify.h5").is_file()

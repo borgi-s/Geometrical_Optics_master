@@ -1724,15 +1724,6 @@ def run_identification(
             "IdentificationConfig.reciprocal is None — must specify [reciprocal] "
             "block in TOML or set it programmatically before calling run_identification."
         )
-    # two_dtheta is not yet wired into the identify forward path. Raise eagerly
-    # so users don't get silently-wrong output. z is now wired for single + multi
-    # (v1.3.0-A); two_dtheta lifting is tracked as a future follow-up.
-    if config.scan.is_scanned("two_dtheta"):
-        raise ValueError(
-            "scan axis two_dtheta is configured but not yet wired into "
-            "identification. For now, set range+steps only on "
-            "[scan.phi], [scan.chi], and/or [scan.z]."
-        )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
     if config.mode == "single":
