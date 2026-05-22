@@ -979,9 +979,7 @@ def _build_scan_frames(scan: ScanConfig) -> ScanFrames:
     then z-outermost (largest stride). Fixed axes contribute a
     singleton sample, so they degenerate to a constant column.
     """
-    from dfxm_geo.direct_space.forward_model import build_scan_grid
-
-    grid = build_scan_grid(scan)
+    grid = fm.build_scan_grid(scan)
     phi, chi, two_dtheta, z = grid.samples
     # `np.meshgrid(..., indexing="ij")` returns arrays ordered (phi, chi, two_dtheta, z).
     # Ravel in Fortran order so the FIRST index (phi) varies fastest -- giving
@@ -1006,9 +1004,7 @@ def _build_scan_frames_at_z(scan: ScanConfig, z_value: float) -> ScanFrames:
     Used by identification iterators that loop outer over z themselves.
     The scan's `[scan.z]` configuration is ignored; only z_value is used.
     """
-    from dfxm_geo.direct_space.forward_model import build_scan_grid
-
-    grid = build_scan_grid(scan)
+    grid = fm.build_scan_grid(scan)
     phi, chi, two_dtheta, _z_ignored = grid.samples
     phi_g, chi_g, twodt_g = np.meshgrid(phi, chi, two_dtheta, indexing="ij")
     phi_pf = phi_g.ravel(order="F")
@@ -1230,12 +1226,11 @@ def _iter_identification_single(
 
     # Outer z loop. When z is fixed, z_samples is a length-1 array so the
     # loop body executes once — identical to the pre-z-aware behaviour.
-    from dfxm_geo.direct_space.forward_model import build_scan_grid
-
-    z_samples = build_scan_grid(config.scan).samples[3]
+    z_samples = fm.build_scan_grid(config.scan).samples[3]
 
     for z in z_samples:
         z_float = float(z)
+        # fm.rl (not None) — Fd_find_mixed takes rl positionally and expects an ndarray.
         rl_eff = fm.Z_shift(z_float) if z_float != 0.0 else fm.rl
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
@@ -1411,12 +1406,13 @@ def _iter_identification_multi(
 
     # Outer z loop. When z is fixed, z_samples is a length-1 array so the
     # loop body executes once — identical to the pre-z-aware behaviour.
-    from dfxm_geo.direct_space.forward_model import build_scan_grid
+    z_samples = fm.build_scan_grid(config.scan).samples[3]
 
-    z_samples = build_scan_grid(config.scan).samples[3]
-
+    # param_rng walks continuously across z; dislocation draws are NOT z-invariant
+    # by design (sample i at z=-2 and sample i at z=+2 use different dislocations).
     for z in z_samples:
         z_float = float(z)
+        # fm.rl (not None) — Fd_find_mixed takes rl positionally and expects an ndarray.
         rl_eff = fm.Z_shift(z_float) if z_float != 0.0 else fm.rl
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
