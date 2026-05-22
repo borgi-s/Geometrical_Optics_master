@@ -21,7 +21,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from dfxm_geo.pipeline import ScanFrames
 
 import h5py
 import numpy as np
@@ -36,8 +41,9 @@ SCAN_DIR_FMT = "scan{:04d}"
 DETECTOR_FILE_FMT = "{name}_0000.h5"
 DETECTOR_INTERNAL_PATH = "/entry_0000/dfxm_sim_detector/image"
 
-# (frame_idx, Hg, phi, chi) — one frame's worth of args for `_compute_frame`.
-_FrameArgs = tuple[int, np.ndarray, float, float]
+# (frame_idx, Hg, phi, chi, two_dtheta) — one frame's worth of args for `_compute_frame`.
+_FrameArgs = tuple[int, np.ndarray, float, float, float]
+"""(frame_idx, Hg, phi_rad, chi_rad, two_dtheta_rad)"""
 
 
 @dataclass(frozen=True)
@@ -57,7 +63,7 @@ class ScanSpec:
         dfxm_geo: sim-specific per-scan metadata (Hg, q_hkl, theta, psize,
             zl_rms). Any subset may be supplied.
         detectors: detector_name → list of frame args tuples
-            `(frame_idx, Hg, phi, chi)` for the parallel writer. Each
+            `(frame_idx, Hg, phi, chi, two_dtheta)` for the parallel writer. Each
             detector becomes its own LIMA-style file inside the scan dir.
         attrs: per-`/N.1` attrs — at minimum `scan_mode`, `scanned_axes`,
             `identify_mode`.
@@ -138,10 +144,10 @@ def _auto_max_workers() -> int:
 def _compute_frame(args: _FrameArgs) -> tuple[int, np.ndarray]:
     """Worker function: run forward() and return (frame_idx, image).
 
-    args = (frame_idx, Hg, phi, chi)
+    args = (frame_idx, Hg, phi, chi, two_dtheta)
     """
-    frame_idx, Hg, phi, chi = args
-    im = cast(np.ndarray, _fm.forward(Hg, phi=phi, chi=chi))
+    frame_idx, Hg, phi, chi, two_dtheta = args
+    im = cast(np.ndarray, _fm.forward(Hg, phi=phi, chi=chi, TwoDeltaTheta=two_dtheta))
     return frame_idx, im
 
 
@@ -446,11 +452,20 @@ class MasterWriter:
         for axis_name, val in positioners.items():
             if axis_name in pos:
                 del pos[axis_name]
-            if isinstance(val, np.ndarray):
-                ds = pos.create_dataset(axis_name, data=np.degrees(val))
+            # z is a translation in micrometers; the other axes are angular
+            # (radians upstream → degrees on disk).
+            if axis_name == "z":
+                if isinstance(val, np.ndarray):
+                    ds = pos.create_dataset(axis_name, data=val)
+                else:
+                    ds = pos.create_dataset(axis_name, data=float(val))
+                ds.attrs["units"] = "micrometer"
             else:
-                ds = pos.create_dataset(axis_name, data=float(np.degrees(val)))
-            ds.attrs["units"] = "degree"
+                if isinstance(val, np.ndarray):
+                    ds = pos.create_dataset(axis_name, data=np.degrees(val))
+                else:
+                    ds = pos.create_dataset(axis_name, data=float(np.degrees(val)))
+                ds.attrs["units"] = "degree"
             if axis_name in meas:
                 del meas[axis_name]
             meas[axis_name] = h5py.SoftLink(f"/{scan_id}/instrument/positioners/{axis_name}")
@@ -550,6 +565,22 @@ def _scan_title(phi_range: float, phi_steps: int, chi_range: float, chi_steps: i
     )
 
 
+def _scan_title_from_frames(frames: ScanFrames, phi_steps: int, chi_steps: int) -> str:
+    """fscan2d title string derived from a ScanFrames (radians, explicit step counts).
+
+    The darfix-parsed title encodes per-axis step counts separately; for non-
+    square grids, they cannot be inferred from n_frames alone.
+    """
+    phi_min = float(frames.phi_pf.min())
+    phi_max = float(frames.phi_pf.max())
+    chi_min = float(frames.chi_pf.min())
+    chi_max = float(frames.chi_pf.max())
+    return (
+        f"fscan2d phi {phi_min:.6f} {phi_max:.6f} {phi_steps} "
+        f"chi {chi_min:.6f} {chi_max:.6f} {chi_steps} 1.0"
+    )
+
+
 def write_identification_h5(
     output_dir: Path,
     *,
@@ -626,10 +657,7 @@ def write_simulation_h5(
     *,
     Hg: np.ndarray,
     q_hkl: np.ndarray,
-    phi_range: float,
-    phi_steps: int,
-    chi_range: float,
-    chi_steps: int,
+    frames: ScanFrames,
     include_perfect_crystal: bool = True,
     sample_dis: float | None,
     sample_ndis: int,
@@ -641,12 +669,22 @@ def write_simulation_h5(
     crystal_mode: str | None = None,
     scan_mode: str | None = None,
     scanned_axes: list[str] | None = None,
+    positioners: dict[str, np.ndarray | float] | None = None,
+    Hg_provider: Callable[[float], tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> None:
     """One-call entry point for forward mode, v1.2.0 layout.
 
     `path` is the master file (`<out_dir>/dfxm_geo.h5`); detector pixels live
     in sibling `scan0001/` / `scan0002/` directories alongside it, linked
-    via ExternalLink. External signature unchanged from v1.1.0.
+    via ExternalLink.
+
+    `frames` replaces the legacy `phi_range/phi_steps/chi_range/chi_steps` kwargs
+    (removed in v1.3.0-A).  All per-frame arrays in `frames` are in radians /
+    micrometers — no degree conversion is applied here.
+
+    `positioners`, if provided, is passed verbatim to `master.add_scan`.
+    If None, it is derived from `frames` + `scanned_axes`: scanned axes
+    receive the full per-frame array, fixed axes default to 0.0.
     """
 
     if kernel_npz is None:
@@ -660,29 +698,30 @@ def write_simulation_h5(
     out_dir = path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    Phi = np.linspace(-np.deg2rad(phi_range), np.deg2rad(phi_range), phi_steps)
-    Chi = np.linspace(-np.deg2rad(chi_range), np.deg2rad(chi_range), chi_steps)
-    n = phi_steps * chi_steps
-    phi_per_frame = np.empty(n, dtype=np.float64)
-    chi_per_frame = np.empty(n, dtype=np.float64)
-    for chi_idx in range(chi_steps):
-        for phi_idx in range(phi_steps):
-            k = chi_idx * phi_steps + phi_idx
-            phi_per_frame[k] = Phi[phi_idx]
-            chi_per_frame[k] = Chi[chi_idx]
+    n = frames.n_frames
+    phi_per_frame = frames.phi_pf
+    chi_per_frame = frames.chi_pf
+    two_dtheta_per_frame = frames.two_dtheta_pf
+    z_per_frame = frames.z_pf
 
-    title = _scan_title(phi_range, phi_steps, chi_range, chi_steps)
+    phi_steps = int(np.unique(frames.phi_pf).size)
+    chi_steps = int(np.unique(frames.chi_pf).size)
+    title = _scan_title_from_frames(frames, phi_steps=phi_steps, chi_steps=chi_steps)
 
     def _now() -> str:
         return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
 
     def _build_args(Hg_in: np.ndarray) -> list[_FrameArgs]:
-        out: list[_FrameArgs] = []
-        for chi_idx in range(chi_steps):
-            for phi_idx in range(phi_steps):
-                k = chi_idx * phi_steps + phi_idx
-                out.append((k, Hg_in, float(Phi[phi_idx]), float(Chi[chi_idx])))
-        return out
+        return [
+            (
+                i,
+                Hg_in,
+                float(phi_per_frame[i]),
+                float(chi_per_frame[i]),
+                float(two_dtheta_per_frame[i]),
+            )
+            for i in range(n)
+        ]
 
     attrs_1_1: dict[str, str | list[str]] = {}
     if scan_mode is not None:
@@ -691,6 +730,23 @@ def write_simulation_h5(
         attrs_1_1["scanned_axes"] = list(scanned_axes)
     if crystal_mode is not None:
         attrs_1_1["crystal_mode"] = crystal_mode
+
+    # Build positioners dict once; reused for both /1.1 and /2.1 add_scan calls.
+    if positioners is None:
+        pos_dict: dict[str, np.ndarray | float] = {
+            "phi": phi_per_frame,
+            "chi": chi_per_frame,
+        }
+        if scan_mode and "two_dtheta" in (scanned_axes or []):
+            pos_dict["two_dtheta"] = two_dtheta_per_frame
+        else:
+            pos_dict["two_dtheta"] = 0.0
+        if scan_mode and "z" in (scanned_axes or []):
+            pos_dict["z"] = z_per_frame
+        else:
+            pos_dict["z"] = 0.0
+    else:
+        pos_dict = positioners
 
     # Build the per-scan plan: /1.1 dislocations always, /2.1 perfect crystal
     # only if requested. Both scans share positioners, attrs, sample metadata
@@ -704,8 +760,33 @@ def write_simulation_h5(
             scan_dir = out_dir / SCAN_DIR_FMT.format(scan_idx)
             det_path = scan_dir / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
             start = _now()
+            if Hg_provider is not None and scan_idx == 1:
+                # Dislocation scan: use Hg_provider for z-aware per-frame Hg.
+                # z-outermost frame order (from _build_scan_frames) means all frames
+                # at a given z are contiguous; we drop each Hg after its last frame.
+                z_to_Hg: dict[float, np.ndarray] = {}
+                provider_args_list: list[_FrameArgs] = []
+                for k in range(n):
+                    z = float(z_per_frame[k])
+                    if z not in z_to_Hg:
+                        z_to_Hg[z] = Hg_provider(z)[0]  # discard q_hkl on per-z calls
+                    provider_args_list.append(
+                        (
+                            k,
+                            z_to_Hg[z],
+                            float(phi_per_frame[k]),
+                            float(chi_per_frame[k]),
+                            float(two_dtheta_per_frame[k]),
+                        )
+                    )
+                    if k == n - 1 or float(z_per_frame[k + 1]) != z:
+                        del z_to_Hg[z]
+                args_list_for_scan = provider_args_list
+            else:
+                # Perfect crystal /2.1, or back-compat single-Hg case.
+                args_list_for_scan = _build_args(Hg_for_scan)
             _compute_and_write_detector_file_parallel(
-                det_path, _build_args(Hg_for_scan), max_workers=max_workers
+                det_path, args_list_for_scan, max_workers=max_workers
             )
             end = _now()
             sample = {
@@ -723,7 +804,7 @@ def write_simulation_h5(
                 start_time=start,
                 end_time=end,
                 sample=sample,
-                positioners={"phi": phi_per_frame, "chi": chi_per_frame},
+                positioners=pos_dict,
                 detector_links={
                     "dfxm_sim_detector": (
                         Path(SCAN_DIR_FMT.format(scan_idx))

@@ -60,6 +60,60 @@ def test_single_with_phi_scanned_produces_phi_steps_frames(tmp_path: Path) -> No
         assert list(f["/1.1"].attrs["scanned_axes"]) == ["phi"]
 
 
+def test_single_with_z_scanned_emits_one_scanspec_per_z(tmp_path: Path) -> None:
+    """[scan.z] in identification single mode produces (n_z * n_planes * n_b * n_alpha) ScanSpecs."""
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="single",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=(1, 1, 1),
+            angle_start_deg=0.0,
+            angle_stop_deg=0.0,
+            angle_step_deg=10.0,
+            b_vector_indices=[0],
+            sweep_all_slip_planes=False,
+            exclude_invisibility=False,
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(value=1.5e-4),
+            z=AxisScanConfig(range=2.0, steps=3),  # 3 z values
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        scan_keys = sorted(k for k in f if k != "dfxm_geo")
+        # 3 z * 1 plane * 1 b * 1 alpha = 3 scans
+        assert scan_keys == ["1.1", "2.1", "3.1"]
+        for sid in scan_keys:
+            # Each scan's positioners include a z entry (scalar — z is fixed within a scan)
+            assert "z" in f[f"/{sid}/instrument/positioners"]
+
+
+def test_multi_with_z_scanned_emits_one_scanspec_per_z(tmp_path: Path) -> None:
+    """[scan.z] in identification multi mode multiplies the scan count by n_z."""
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="multi",
+        crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
+        scan=ScanConfig(
+            phi=AxisScanConfig(value=1e-4),
+            z=AxisScanConfig(range=2.0, steps=2),  # 2 z values
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        multi=IdentificationMonteCarloConfig(n_samples=2, pos_std_um=5.0),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        scan_keys = sorted(k for k in f if k != "dfxm_geo")
+        # 2 z * 2 n_samples = 4 scans
+        assert scan_keys == ["1.1", "2.1", "3.1", "4.1"]
+
+
 def test_multi_with_phi_and_chi_scanned_produces_phi_x_chi_frames(
     tmp_path: Path,
 ) -> None:

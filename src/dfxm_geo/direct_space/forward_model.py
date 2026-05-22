@@ -165,6 +165,7 @@ def Find_Hg(
     *,
     S: np.ndarray = _S_IDENTITY,
     remount_name: str = "S1",
+    z_offset_um: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the displacement gradient field Hg and reciprocal vector q_hkl.
 
@@ -180,6 +181,11 @@ def Find_Hg(
         h, k, l: Miller indices of the active reflection.
         S: 3x3 sample-remount rotation (default identity).
         remount_name: Name used in the Fg cache filename (default "S1").
+        z_offset_um: z offset in micrometres for z-scan mode (default 0.0).
+            When non-zero, a shifted reciprocal-lattice grid is computed via
+            ``Z_shift(z_offset_um)`` and the cache filename gains a
+            ``_z{round(z_offset_um*1000)}nm`` suffix so each z layer has its
+            own Fg cache. When zero, behaviour is identical to v1.2.0.
 
     Returns:
         (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
@@ -206,18 +212,26 @@ def Find_Hg(
     # `load_or_generate_Hg`'s shape guard).
     Fg_dir = _REPO_ROOT / "direct_space" / "deformation_gradient_tensors"
     Fg_dir.mkdir(parents=True, exist_ok=True)
+
+    # z-aware cache filename. When z_offset_um == 0.0, identical to v1.2.0
+    # filename — non-z scans hit the same cache file as before.
+    z_suffix = "" if z_offset_um == 0.0 else f"_z{round(z_offset_um * 1000)}nm"
     Fg_path = str(
         Fg_dir
-        / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}.npy".format(
+        / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}{}.npy".format(
             str(dis).replace(".", ""),
             int(psize * 1e9),
             int(zl_rms * 2.35e9),
             Npixels,
             Nsub,
             remount_name,
+            z_suffix,
         )
     )
-    Hg = load_or_generate_Hg(rl, Ud, Us, Theta, dis, ndis, Fg_path, S=S)
+
+    # Pick the rl grid: shifted if z_offset_um != 0, else the module-level rl.
+    rl_eff = Z_shift(z_offset_um) if z_offset_um != 0.0 else rl
+    Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta, dis, ndis, Fg_path, S=S)
 
     if not os.path.exists(Fg_path.replace(".npy", "_vars.txt")):
         vars = {
@@ -761,6 +775,7 @@ def Find_Hg_from_population(
     l: int = -1,
     *,
     S: np.ndarray = _S_IDENTITY,
+    rl: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute Hg + q_hkl from an arbitrary DislocationPopulation.
 
@@ -776,11 +791,16 @@ def Find_Hg_from_population(
         population: DislocationPopulation from `build_dislocation_population`.
         h, k, l: Miller indices of the active reflection.
         S: 3x3 sample-remount rotation (default identity).
+        rl: Detector ray grid to evaluate the strain on. Defaults to the
+            module-level `fm.rl`. Pass `Z_shift(z_um)` to evaluate at a
+            non-zero sample-depth offset (z-scan support).
 
     Returns:
         (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
     """
     from dfxm_geo.crystal.dislocations import Fd_find_multi_dislocs_mixed, MixedDislocSpec
+
+    rl_eff = rl if rl is not None else globals()["rl"]
 
     Q_norm = np.sqrt(h * h + k * k + l * l)
     q_hkl = np.asarray([h, k, l]) / Q_norm
@@ -802,7 +822,7 @@ def Find_Hg_from_population(
 
     # Compute Fg via the multi-dislocation kernel.
     # Returns shape (X, 3, 3) with identity already added (Fg, not Fdd).
-    Fg = Fd_find_multi_dislocs_mixed(rl, Us, crystals, Theta, S=S)
+    Fg = Fd_find_multi_dislocs_mixed(rl_eff, Us, crystals, Theta, S=S)
 
     # Convert Fg → Hg using the same convention as load_or_generate_Hg:
     #   Hg = transpose(Fg^-1) - I

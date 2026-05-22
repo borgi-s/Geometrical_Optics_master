@@ -1,0 +1,70 @@
+# Demo: z-scan in mosa mode (phi + chi default rocking + z translation).
+# Run: dfxm-forward --config configs/variants/forward_z_scan.toml --output <out>
+# Produces n_z * phi_steps * chi_steps frames; positioners["z"] is a length-n_z
+# array repeated within each z-slice. scan_mode = "mosa_layer". Wall mode would
+# additionally write per-z Fg cache files with _z{nm}nm suffix.
+#
+# NOTE: phi_steps and chi_steps are reduced to 3 (from the default 61) to keep
+# demo runtime sane. The full 4 * 61 * 61 = 14884-frame run would be too slow.
+
+[reciprocal]
+hkl        = [-1, 1, -1]   # Al 111 reflection (default)
+keV        = 17.0          # beam energy in keV
+Nrays      = 100_000_000   # 1e8
+npoints1   = 400
+npoints2   = 200
+npoints3   = 200
+qi1_range  = 5e-4
+qi2_range  = 7.5e-3
+qi3_range  = 7.5e-3
+zeta_v_fwhm = 5.3e-4
+zeta_h_fwhm = 0.0
+NA_rms      = 3.1106382978723403e-4
+eps_rms     = 6.0e-5
+D  = 0.000565685424949238
+d1 = 0.274
+beamstop   = true
+bs_height  = 25e-3
+aperture   = true
+knife_edge = false
+dphi_range = 0.0
+
+# Scan: phi + chi mosa (reduced steps for demo speed) + z translation.
+# Derived scan-mode label: "mosa_layer".
+
+[scan.phi]
+range = 6e-4       # rad; half-range
+steps = 3          # reduced from default 61 for demo speed
+
+[scan.chi]
+range = 2e-3       # rad; half-range
+steps = 3          # reduced from default 61 for demo speed
+
+# [scan.two_dtheta]  # omitted -> fixed at 0 (no strain scan)
+
+[scan.z]
+range = 5.0        # µm; half-range around value (default 0)
+steps = 4          # 4 z-slices: -5, -1.667, +1.667, +5 µm
+
+[crystal]
+mode = "centered"
+
+[crystal.centered]
+b = [1, -1, 0]
+n = [1, 1, 1]
+t = [1, 1, -2]
+
+[io]
+fn_prefix = "/mosa_layer_0000_"
+ftype = ".npy"
+dislocs_dirname = "images10"
+perfect_dirname = "images10_perf_crystal"
+include_perfect_crystal = true
+
+[postprocess]
+enabled = true
+chi_oversample = 20
+phi_oversample = 20
+chi_oversample_for_shift = 100
+figures_dirname = "figures"
+data_dirname = "analysis"

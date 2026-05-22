@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from dfxm_geo.pipeline import AxisScanConfig, ScanConfig
@@ -188,3 +190,228 @@ class TestScannedAxesAndIsScanned:
     def test_is_scanned_unknown_axis_raises(self) -> None:
         with pytest.raises(ValueError, match="unknown axis 'omega'"):
             ScanConfig().is_scanned("omega")
+
+
+# ---------------------------------------------------------------------------
+# Integration test: run_simulation with two_dtheta scan no longer raises
+# ---------------------------------------------------------------------------
+
+
+def test_run_simulation_two_dtheta_scan_lifts_value_error(tmp_path: Path) -> None:
+    """Setting [scan.two_dtheta] no longer raises; produces a 4D scan."""
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        CenteredCrystalConfig,
+        CrystalConfig,
+        IOConfig,
+        PostprocessConfig,
+        ReciprocalConfig,
+        ScanConfig,
+        SimulationConfig,
+        run_simulation,
+    )
+
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+    cfg = SimulationConfig(
+        crystal=CrystalConfig(
+            mode="centered",
+            centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=6e-4, steps=2),
+            chi=AxisScanConfig(range=2e-3, steps=2),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=2),
+        ),
+        io=IOConfig(include_perfect_crystal=False),
+        postprocess=PostprocessConfig(enabled=False),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_simulation(cfg, tmp_path)
+
+    import h5py
+
+    with h5py.File(tmp_path / "dfxm_geo.h5", "r") as f:
+        # 2 phi * 2 chi * 2 two_dtheta = 8 frames
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape[0] == 8
+        assert f["/1.1"].attrs["scan_mode"] == "mosa_strain"
+        assert sorted(f["/1.1"].attrs["scanned_axes"]) == ["chi", "phi", "two_dtheta"]
+        # two_dtheta is a per-frame positioner array
+        assert f["/1.1/instrument/positioners/two_dtheta"].shape == (8,)
+
+
+def test_run_simulation_z_scan_recomputes_hg_per_z(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A [scan.z] config triggers one Find_Hg(_from_population) call per unique z."""
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        CenteredCrystalConfig,
+        CrystalConfig,
+        IOConfig,
+        PostprocessConfig,
+        ReciprocalConfig,
+        ScanConfig,
+        SimulationConfig,
+        run_simulation,
+    )
+
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+    # Spy on Find_Hg_from_population to count calls.
+    calls: list[None] = []
+    real = fm.Find_Hg_from_population
+
+    def spy(pop, *args, rl=None, **kwargs):
+        calls.append(None)
+        return real(pop, *args, rl=rl, **kwargs)
+
+    monkeypatch.setattr(fm, "Find_Hg_from_population", spy)
+
+    cfg = SimulationConfig(
+        crystal=CrystalConfig(
+            mode="centered",
+            centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=6e-4, steps=2),
+            z=AxisScanConfig(range=5.0, steps=3),
+        ),
+        io=IOConfig(include_perfect_crystal=False),
+        postprocess=PostprocessConfig(enabled=False),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_simulation(cfg, tmp_path)
+    # 1 provenance call (q_hkl) + 3 unique z values (z.steps=3) = 4 total
+    assert len(calls) == 4, f"expected 4 Find_Hg_from_population calls, got {len(calls)}"
+
+    import h5py
+
+    with h5py.File(tmp_path / "dfxm_geo.h5", "r") as f:
+        # 2 phi * 3 z = 6 frames
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape[0] == 6
+        # z is a per-frame positioner
+        assert f["/1.1/instrument/positioners/z"].shape == (6,)
+
+
+def test_phi_chi_only_scan_remains_v120_compatible(tmp_path: Path) -> None:
+    """Phi/chi scan with both two_dtheta/z fixed at 0 produces output with the
+    same flat ordering and frame count as v1.2.0. No two_dtheta/z positioners
+    are present (they collapse to scalars when fixed)."""
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        CenteredCrystalConfig,
+        CrystalConfig,
+        IOConfig,
+        PostprocessConfig,
+        ReciprocalConfig,
+        ScanConfig,
+        SimulationConfig,
+        run_simulation,
+    )
+
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+    cfg = SimulationConfig(
+        crystal=CrystalConfig(
+            mode="centered",
+            centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=6e-4, steps=3),
+            chi=AxisScanConfig(range=2e-3, steps=3),
+        ),
+        io=IOConfig(include_perfect_crystal=False),
+        postprocess=PostprocessConfig(enabled=False),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_simulation(cfg, tmp_path)
+
+    import h5py
+
+    with h5py.File(tmp_path / "dfxm_geo.h5", "r") as f:
+        # 3 phi * 3 chi = 9 frames; detector image is (NN2//Nsub, NN1//Nsub) = (510, 170)
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape == (9, 510, 170)
+        positioners = f["/1.1/instrument/positioners"]
+        assert positioners["phi"].shape == (9,)
+        assert positioners["chi"].shape == (9,)
+        # Fixed axes collapsed to scalars
+        assert positioners["two_dtheta"].shape == ()
+        assert positioners["z"].shape == ()
+        # Frame ordering: phi-innermost
+        phi_pf = positioners["phi"][...]
+        # First 3 frames cycle through phi values, then chi steps.
+        unique_phi = sorted(set(phi_pf[:3].tolist()))
+        assert len(unique_phi) == 3
+
+
+def test_run_simulation_mosa_strain_layer_2x2x2x2(tmp_path: Path) -> None:
+    """All 4 axes scanned at 2 steps each = 16 frames, scan_mode='mosa_strain_layer'."""
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        CenteredCrystalConfig,
+        CrystalConfig,
+        IOConfig,
+        PostprocessConfig,
+        ReciprocalConfig,
+        ScanConfig,
+        SimulationConfig,
+        run_simulation,
+    )
+
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+    cfg = SimulationConfig(
+        crystal=CrystalConfig(
+            mode="centered",
+            centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=6e-4, steps=2),
+            chi=AxisScanConfig(range=2e-3, steps=2),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=2),
+            z=AxisScanConfig(range=1.0, steps=2),
+        ),
+        io=IOConfig(include_perfect_crystal=False),
+        postprocess=PostprocessConfig(enabled=False),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_simulation(cfg, tmp_path)
+
+    import h5py
+
+    with h5py.File(tmp_path / "dfxm_geo.h5", "r") as f:
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape[0] == 16  # 2^4
+        assert f["/1.1"].attrs["scan_mode"] == "mosa_strain_layer"
+        assert sorted(f["/1.1"].attrs["scanned_axes"]) == ["chi", "phi", "two_dtheta", "z"]
+        positioners = f["/1.1/instrument/positioners"]
+        # All 4 axes are per-frame arrays.
+        for axis in ("phi", "chi", "two_dtheta", "z"):
+            assert positioners[axis].shape == (16,), (
+                f"{axis} should be per-frame; got shape {positioners[axis].shape}"
+            )
+        # z-outermost: first 8 frames share z[0], last 8 share z[1]
+        z_pf = positioners["z"][...]
+        assert len(set(z_pf[:8].tolist())) == 1
+        assert len(set(z_pf[8:].tolist())) == 1
+        assert z_pf[0] != z_pf[8]
+        # z is stored in micrometers (raw value, NOT np.degrees-converted).
+        # With range=1.0 and steps=2, z_samples == linspace(-1, +1, 2) == [-1, +1].
+        assert positioners["z"].attrs["units"] == "micrometer"
+        assert z_pf[0] == pytest.approx(-1.0)
+        assert z_pf[8] == pytest.approx(1.0)
+        # Angular axes still in degrees.
+        assert positioners["phi"].attrs["units"] == "degree"
+        assert positioners["two_dtheta"].attrs["units"] == "degree"

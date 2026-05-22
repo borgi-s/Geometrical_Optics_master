@@ -47,8 +47,12 @@ def test_multi_config_drops_n_png_previews() -> None:
     assert not hasattr(cfg, "n_png_previews")
 
 
-@pytest.mark.parametrize("axis_name", ["two_dtheta", "z"])
+@pytest.mark.parametrize("axis_name", ["two_dtheta"])
 def test_run_identification_eager_guards_unwired_axes(axis_name, tmp_path) -> None:
+    # NOTE: `z` was removed from this parametrize in v1.3.0-A — it is now a
+    # valid scan axis in identification single/multi modes (see Task 11).
+    # `two_dtheta` is still rejected eagerly because the kernel can't yet
+    # consume it in the identification path.
     from dfxm_geo.pipeline import (
         AxisScanConfig,
         IdentificationConfig,

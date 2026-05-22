@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import sys
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -608,18 +608,6 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
             "SimulationConfig.reciprocal is None — must specify [reciprocal] "
             "block in TOML or set it programmatically before calling run_simulation."
         )
-    # v1.2.0 scope: the forward kernel only consumes the phi + chi axes from
-    # ScanConfig. ScanGrid/build_scan_grid is implemented and tested but not
-    # yet wired into write_simulation_h5. Raise eagerly so users don't get
-    # silently-wrong output from scanning two_dtheta or z. Lifting this guard
-    # is tracked as a v1.3.0 follow-up.
-    unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
-    if unwired:
-        raise ValueError(
-            f"scan axes {unwired} are configured but not yet wired into the "
-            f"forward kernel (v1.2.0 scope). For now, set range+steps only on "
-            f"[scan.phi] and/or [scan.chi]."
-        )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -653,49 +641,62 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
 
     # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
     # Centered + random_dislocations use Find_Hg_from_population.
+    # Hg_provider(z) returns (Hg, q_hkl) for a given z offset in micrometers.
+    # For non-z scans z is always 0.0 — this preserves v1.2.0 behavior exactly.
     if config.crystal.mode == "wall":
         w = config.crystal.wall
         assert w is not None
         S = SAMPLE_REMOUNT_OPTIONS[w.sample_remount]
-        Hg, q_hkl = fm.Find_Hg(
-            w.dis,
-            w.ndis,
-            fm.psize,
-            fm.zl_rms,
-            h=config.reciprocal.hkl[0],
-            k=config.reciprocal.hkl[1],
-            l=config.reciprocal.hkl[2],
-            S=S,
-            remount_name=w.sample_remount,
-        )
+
+        def Hg_provider(z: float) -> tuple[np.ndarray, np.ndarray]:
+            return fm.Find_Hg(
+                w.dis,
+                w.ndis,
+                fm.psize,
+                fm.zl_rms,
+                h=config.reciprocal.hkl[0],  # type: ignore[union-attr]
+                k=config.reciprocal.hkl[1],  # type: ignore[union-attr]
+                l=config.reciprocal.hkl[2],  # type: ignore[union-attr]
+                S=S,
+                remount_name=w.sample_remount,
+                z_offset_um=z,
+            )
+
         sample_dis = w.dis
         sample_ndis = w.ndis
         sample_remount = w.sample_remount
     else:
-        Hg, q_hkl = fm.Find_Hg_from_population(
-            population,
-            h=config.reciprocal.hkl[0],
-            k=config.reciprocal.hkl[1],
-            l=config.reciprocal.hkl[2],
-        )
+
+        def Hg_provider(z: float) -> tuple[np.ndarray, np.ndarray]:
+            rl_eff = fm.Z_shift(z) if z != 0.0 else None
+            return fm.Find_Hg_from_population(
+                population,
+                h=config.reciprocal.hkl[0],  # type: ignore[union-attr]
+                k=config.reciprocal.hkl[1],  # type: ignore[union-attr]
+                l=config.reciprocal.hkl[2],  # type: ignore[union-attr]
+                rl=rl_eff,
+            )
+
         sample_dis = None  # not applicable for centered/random_dislocations
         sample_ndis = len(population.positions_um)
         sample_remount = "N/A"
 
-    fm.Hg = Hg
+    # Use Hg at z=0 as the "base" provenance Hg stored in /dfxm_geo/Hg.
+    # Per-frame variation is captured in the detector stack + positioners[z].
+    Hg_base, q_hkl = Hg_provider(0.0)
+    fm.Hg = Hg_base
     fm.q_hkl = q_hkl
 
     config_toml = _dataclass_to_toml_str(config)
 
     h5_path = output_dir / "dfxm_geo.h5"
+    frames = _build_scan_frames(config.scan)
+    positioners = _positioners_for_scan_frames(frames, config.scan)
     write_simulation_h5(
         h5_path,
-        Hg=Hg,
+        Hg=Hg_base,
         q_hkl=q_hkl,
-        phi_range=config.scan.phi.range or 0.0,
-        phi_steps=config.scan.phi.steps or 1,
-        chi_range=config.scan.chi.range or 0.0,
-        chi_steps=config.scan.chi.steps or 1,
+        frames=frames,
         include_perfect_crystal=config.io.include_perfect_crystal,
         sample_dis=sample_dis,
         sample_ndis=sample_ndis,
@@ -706,10 +707,12 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         crystal_mode=config.crystal.mode,
         scan_mode=config.scan.derived_mode_name(),
         scanned_axes=list(config.scan.scanned_axes()),
+        positioners=positioners,
+        Hg_provider=Hg_provider,
     )
     return {
         "h5_path": h5_path,
-        "Hg": Hg,
+        "Hg": Hg_base,
         "q_hkl": q_hkl,
         "include_perfect_crystal": config.io.include_perfect_crystal,
     }
@@ -954,60 +957,146 @@ def cli_main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _frame_grid_from_scan(
-    scan: ScanConfig,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    """Return (Phi_rad, Chi_rad, n_frames) for a single-scan rocking grid.
+@dataclass(frozen=True, kw_only=True)
+class ScanFrames:
+    """Per-frame trajectory for one scan, all parallel arrays of length n_frames.
 
-    Both arrays are 1-D of length n_frames, in phi-inner / chi-outer order.
-    Fixed axes contribute a single repeated value (the axis ``value`` in
-    radians).
+    Frame ordering: phi-innermost, chi, two_dtheta, z-outermost.
+    Units: phi/chi/two_dtheta in radians; z in micrometers.
     """
-    if scan.phi.is_scanned:
-        assert scan.phi.range is not None and scan.phi.steps is not None
-        Phi = np.linspace(-np.deg2rad(scan.phi.range), np.deg2rad(scan.phi.range), scan.phi.steps)
-    else:
-        Phi = np.asarray([scan.phi.value], dtype=float)
-    if scan.chi.is_scanned:
-        assert scan.chi.range is not None and scan.chi.steps is not None
-        Chi = np.linspace(-np.deg2rad(scan.chi.range), np.deg2rad(scan.chi.range), scan.chi.steps)
-    else:
-        Chi = np.asarray([scan.chi.value], dtype=float)
-    return Phi, Chi, Phi.size * Chi.size
+
+    phi_pf: np.ndarray
+    chi_pf: np.ndarray
+    two_dtheta_pf: np.ndarray
+    z_pf: np.ndarray
+    n_frames: int
+
+
+def _build_scan_frames(scan: ScanConfig) -> ScanFrames:
+    """Flatten the 4-axis Cartesian product of `build_scan_grid` into per-frame arrays.
+
+    Order: phi-innermost (stride 1), then chi, then two_dtheta,
+    then z-outermost (largest stride). Fixed axes contribute a
+    singleton sample, so they degenerate to a constant column.
+    """
+    grid = fm.build_scan_grid(scan)
+    phi, chi, two_dtheta, z = grid.samples
+    # `np.meshgrid(..., indexing="ij")` returns arrays ordered (phi, chi, two_dtheta, z).
+    # Ravel in Fortran order so the FIRST index (phi) varies fastest -- giving
+    # phi-innermost, z-outermost flat layout.
+    phi_g, chi_g, twodt_g, z_g = np.meshgrid(phi, chi, two_dtheta, z, indexing="ij")
+    phi_pf = phi_g.ravel(order="F")
+    chi_pf = chi_g.ravel(order="F")
+    two_dtheta_pf = twodt_g.ravel(order="F")
+    z_pf = z_g.ravel(order="F")
+    return ScanFrames(
+        phi_pf=phi_pf,
+        chi_pf=chi_pf,
+        two_dtheta_pf=two_dtheta_pf,
+        z_pf=z_pf,
+        n_frames=int(phi_pf.size),
+    )
+
+
+def _build_scan_frames_at_z(scan: ScanConfig, z_value: float) -> ScanFrames:
+    """Inner (phi × chi × two_dtheta) trajectory with z_pf fixed to z_value.
+
+    Used by identification iterators that loop outer over z themselves.
+    The scan's `[scan.z]` configuration is ignored; only z_value is used.
+    """
+    grid = fm.build_scan_grid(scan)
+    phi, chi, two_dtheta, _z_ignored = grid.samples
+    phi_g, chi_g, twodt_g = np.meshgrid(phi, chi, two_dtheta, indexing="ij")
+    phi_pf = phi_g.ravel(order="F")
+    chi_pf = chi_g.ravel(order="F")
+    two_dtheta_pf = twodt_g.ravel(order="F")
+    n = int(phi_pf.size)
+    return ScanFrames(
+        phi_pf=phi_pf,
+        chi_pf=chi_pf,
+        two_dtheta_pf=two_dtheta_pf,
+        z_pf=np.full(n, float(z_value), dtype=np.float64),
+        n_frames=n,
+    )
+
+
+def _iterate_simulation_frames(
+    frames: ScanFrames,
+    Hg_provider: Callable[[float], np.ndarray],
+) -> Iterator[tuple[int, np.ndarray, float, float, float]]:
+    """Yield (idx, Hg, phi, chi, two_dtheta) per frame; Hg_provider called once per unique z.
+
+    Memory mitigation: because z is the outermost loop in `_build_scan_frames`
+    (z-outermost frame order), all frames sharing a z value are contiguous in
+    `frames.z_pf`. After the last frame at a given z is yielded, the cached
+    Hg is dropped — only one Hg lives in memory at any time during the walk.
+    """
+    z_to_Hg: dict[float, np.ndarray] = {}
+    z_pf = frames.z_pf
+    n = frames.n_frames
+    for k in range(n):
+        z = float(z_pf[k])
+        if z not in z_to_Hg:
+            z_to_Hg[z] = Hg_provider(z)
+        yield (
+            k,
+            z_to_Hg[z],
+            float(frames.phi_pf[k]),
+            float(frames.chi_pf[k]),
+            float(frames.two_dtheta_pf[k]),
+        )
+        # If this is the last frame at this z (either we're at the end,
+        # or the next frame has a different z), free the Hg array.
+        if k == n - 1 or float(z_pf[k + 1]) != z:
+            del z_to_Hg[z]
 
 
 def _scan_frames_args(
-    Hg: np.ndarray, Phi: np.ndarray, Chi: np.ndarray
-) -> tuple[list[tuple[int, np.ndarray, float, float]], np.ndarray, np.ndarray]:
-    """Build (args_list, phi_per_frame, chi_per_frame) for one ScanSpec.
+    Hg: np.ndarray, frames: ScanFrames, scan: ScanConfig
+) -> tuple[list[tuple[int, np.ndarray, float, float, float]], dict[str, np.ndarray | float]]:
+    """Build (args_list, positioners) for one ScanSpec.
 
-    Frame order: phi-inner, chi-outer (matches forward fscan2d convention).
-    Each args tuple is (frame_idx, Hg, phi_rad, chi_rad).
+    args_list elements: (frame_idx, Hg, phi_rad, chi_rad, two_dtheta_rad).
+    positioners: dict keyed by canonical axis; scanned axes -> per-frame array,
+    fixed axes -> scalar.
     """
-    n = Phi.size * Chi.size
-    args_list: list[tuple[int, np.ndarray, float, float]] = []
-    phi_pf = np.empty(n, dtype=np.float64)
-    chi_pf = np.empty(n, dtype=np.float64)
-    for chi_idx in range(Chi.size):
-        for phi_idx in range(Phi.size):
-            k = chi_idx * Phi.size + phi_idx
-            phi_pf[k] = float(Phi[phi_idx])
-            chi_pf[k] = float(Chi[chi_idx])
-            args_list.append((k, Hg, float(Phi[phi_idx]), float(Chi[chi_idx])))
-    return args_list, phi_pf, chi_pf
+    args_list: list[tuple[int, np.ndarray, float, float, float]] = []
+    for k in range(frames.n_frames):
+        args_list.append(
+            (
+                k,
+                Hg,
+                float(frames.phi_pf[k]),
+                float(frames.chi_pf[k]),
+                float(frames.two_dtheta_pf[k]),
+            )
+        )
+    positioners = _positioners_for_scan_frames(frames, scan)
+    return args_list, positioners
 
 
-def _positioners_for_scan(
-    phi_pf: np.ndarray, chi_pf: np.ndarray, scan: ScanConfig
+def _positioners_for_scan_frames(
+    frames: ScanFrames, scan: ScanConfig
 ) -> dict[str, np.ndarray | float]:
-    """Return phi/chi entries for ScanSpec.positioners.
+    """Build the positioners dict for a ScanSpec.
 
-    Fixed axes collapse to a scalar in radians; scanned axes are the
-    full (N_frames,) array (also in radians, per ScanSpec convention).
+    Scanned axes -> the full per-frame array (np.ndarray of length n_frames).
+    Fixed axes -> the scalar axis value (float). Matches v1.2.0 convention
+    for phi/chi; now extended to two_dtheta + z.
     """
+    pf_arrays: dict[str, np.ndarray] = {
+        "phi": frames.phi_pf,
+        "chi": frames.chi_pf,
+        "two_dtheta": frames.two_dtheta_pf,
+        "z": frames.z_pf,
+    }
     out: dict[str, np.ndarray | float] = {}
-    out["phi"] = phi_pf if scan.phi.is_scanned else float(scan.phi.value)
-    out["chi"] = chi_pf if scan.chi.is_scanned else float(scan.chi.value)
+    for axis_name in _CANONICAL_AXES:
+        axis = getattr(scan, axis_name)
+        if axis.is_scanned:
+            out[axis_name] = pf_arrays[axis_name]
+        else:
+            out[axis_name] = float(pf_arrays[axis_name][0])
     return out
 
 
@@ -1105,11 +1194,16 @@ def _passes_invisibility(
 def _iter_identification_single(
     config: IdentificationConfig,
 ) -> Iterator[ScanSpec]:
-    """Yield one ScanSpec per (plane, b_idx, alpha) configuration.
+    """Yield one ScanSpec per (z, plane, b_idx, alpha) configuration.
 
     Supports `[scan.phi]` / `[scan.chi]` from the shared ScanConfig: when
     either axis is scanned, each scan dir contains a (N_frames, H, W)
     stack with frame ordering phi-inner, chi-outer.
+
+    When `[scan.z]` is configured, the iterator loops z outermost: each
+    unique z value produces its own set of (plane × b × alpha) ScanSpecs,
+    with `rl_eff = fm.Z_shift(z)` substituted into `Fd_find_mixed`.
+    When z is fixed, z_samples has length 1 (no extra scans emitted).
     """
     crystal_cfg = config.crystal
     # Noiseless frames are emitted here; intensity scaling and optional
@@ -1129,67 +1223,76 @@ def _iter_identification_single(
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
-    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
 
-    for plane in planes:
-        b_table = _burgers_vectors(plane)
-        b_indices = (
-            crystal_cfg.b_vector_indices
-            if crystal_cfg.b_vector_indices is not None
-            else list(range(len(b_table)))
-        )
-        b_subset = b_table[b_indices]
-        n_arr_unnorm = np.asarray(plane, dtype=float)
-        n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
-        rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
-        Ud_all = _ud_matrices(n_arr, rotated)
+    # Outer z loop. When z is fixed, z_samples is a length-1 array so the
+    # loop body executes once — identical to the pre-z-aware behaviour.
+    z_samples = fm.build_scan_grid(config.scan).samples[3]
 
-        for j, b_idx in enumerate(b_indices):
-            if crystal_cfg.exclude_invisibility and not _passes_invisibility(
-                q_hkl, b_table[b_idx], crystal_cfg.invisibility_threshold_deg
-            ):
-                continue
-            for i, alpha in enumerate(angles_deg):
-                Ud_mix = Ud_all[i, j]
-                Fg = Fd_find_mixed(
-                    fm.rl,
-                    fm.Us,
-                    Ud_mix=Ud_mix,
-                    rotation_deg=float(alpha),
-                    Theta=fm.Theta,
-                )
-                Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
+    for z in z_samples:
+        z_float = float(z)
+        # fm.rl (not None) — Fd_find_mixed takes rl positionally and expects an ndarray.
+        rl_eff = fm.Z_shift(z_float) if z_float != 0.0 else fm.rl
+        frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
-                args_list, phi_pf, chi_pf = _scan_frames_args(Hg, Phi, Chi)
+        for plane in planes:
+            b_table = _burgers_vectors(plane)
+            b_indices = (
+                crystal_cfg.b_vector_indices
+                if crystal_cfg.b_vector_indices is not None
+                else list(range(len(b_table)))
+            )
+            b_subset = b_table[b_indices]
+            n_arr_unnorm = np.asarray(plane, dtype=float)
+            n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
+            rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
+            Ud_all = _ud_matrices(n_arr, rotated)
 
-                burgers_int = (
-                    int(round(b_table[b_idx, 0] * np.sqrt(2))),
-                    int(round(b_table[b_idx, 1] * np.sqrt(2))),
-                    int(round(b_table[b_idx, 2] * np.sqrt(2))),
-                )
-                yield ScanSpec(
-                    title=_identify_title(scan_mode, n_frames, config.scan),
-                    sample={
-                        "name": "simulated, dislocation identification (single)",
-                        "slip_plane_normal": np.asarray(plane, dtype=np.int32),
-                        "burgers": np.asarray(burgers_int, dtype=np.int32),
-                        "rotation_deg": float(alpha),
-                    },
-                    positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
-                    dfxm_geo={
-                        "Hg": Hg,
-                        "q_hkl": q_hkl,
-                        "theta": float(fm.theta),
-                        "psize": float(fm.psize),
-                        "zl_rms": float(fm.zl_rms),
-                    },
-                    detectors={"dfxm_sim_detector": args_list},
-                    attrs={
-                        "scan_mode": scan_mode,
-                        "scanned_axes": scanned_axes,
-                        "identify_mode": "single",
-                    },
-                )
+            for j, b_idx in enumerate(b_indices):
+                if crystal_cfg.exclude_invisibility and not _passes_invisibility(
+                    q_hkl, b_table[b_idx], crystal_cfg.invisibility_threshold_deg
+                ):
+                    continue
+                for i, alpha in enumerate(angles_deg):
+                    Ud_mix = Ud_all[i, j]
+                    Fg = Fd_find_mixed(
+                        rl_eff,
+                        fm.Us,
+                        Ud_mix=Ud_mix,
+                        rotation_deg=float(alpha),
+                        Theta=fm.Theta,
+                    )
+                    Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
+
+                    args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan)
+
+                    burgers_int = (
+                        int(round(b_table[b_idx, 0] * np.sqrt(2))),
+                        int(round(b_table[b_idx, 1] * np.sqrt(2))),
+                        int(round(b_table[b_idx, 2] * np.sqrt(2))),
+                    )
+                    yield ScanSpec(
+                        title=_identify_title(scan_mode, frames_at_z.n_frames, config.scan),
+                        sample={
+                            "name": "simulated, dislocation identification (single)",
+                            "slip_plane_normal": np.asarray(plane, dtype=np.int32),
+                            "burgers": np.asarray(burgers_int, dtype=np.int32),
+                            "rotation_deg": float(alpha),
+                        },
+                        positioners=positioners,
+                        dfxm_geo={
+                            "Hg": Hg,
+                            "q_hkl": q_hkl,
+                            "theta": float(fm.theta),
+                            "psize": float(fm.psize),
+                            "zl_rms": float(fm.zl_rms),
+                        },
+                        detectors={"dfxm_sim_detector": args_list},
+                        attrs={
+                            "scan_mode": scan_mode,
+                            "scanned_axes": scanned_axes,
+                            "identify_mode": "single",
+                        },
+                    )
 
 
 def _run_identification_single(
@@ -1269,7 +1372,7 @@ def _build_dislocation_sample_entry(d: dict[str, Any]) -> dict[str, Any]:
 def _iter_identification_multi(
     config: IdentificationConfig,
 ) -> Iterator[ScanSpec]:
-    """Yield one ScanSpec per Monte Carlo sample (2 random mixed dislocations).
+    """Yield one ScanSpec per (z, Monte Carlo sample) pair.
 
     `render_per_dislocation=False` (default): a single detector
     (`dfxm_sim_detector`) holds the combined-scene frames. `=True`: two
@@ -1280,6 +1383,12 @@ def _iter_identification_multi(
     All frames yielded here are NOISELESS; intensity scaling and
     optional Poisson noise are applied to the combined detector file
     post-write by `_maybe_apply_poisson_noise`.
+
+    When `[scan.z]` is configured, the iterator loops z outermost: each
+    unique z value produces its own set of n_samples ScanSpecs, with
+    `rl_eff = fm.Z_shift(z)` substituted into all Fd_find calls.
+    When z is fixed, z_samples has length 1 — identical to pre-z-aware
+    behaviour.
     """
     assert config.multi is not None  # validated in __post_init__
     mc = config.multi
@@ -1294,83 +1403,94 @@ def _iter_identification_multi(
 
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
-    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
 
-    for _ in range(mc.n_samples):
-        d1 = _draw_dislocation(param_rng, mc.pos_std_um)
-        d2 = _draw_dislocation(param_rng, mc.pos_std_um)
+    # Outer z loop. When z is fixed, z_samples is a length-1 array so the
+    # loop body executes once — identical to the pre-z-aware behaviour.
+    z_samples = fm.build_scan_grid(config.scan).samples[3]
 
-        # Combined-scene Hg (sum of both dislocations)
-        specs = [
-            MixedDislocSpec(
-                Ud_mix=d1["Ud"],
-                rotation_deg=d1["alpha_deg"],
-                position_lab_um=d1["pos_um"],
-            ),
-            MixedDislocSpec(
-                Ud_mix=d2["Ud"],
-                rotation_deg=d2["alpha_deg"],
-                position_lab_um=d2["pos_um"],
-            ),
-        ]
-        Fg_combined = Fd_find_multi_dislocs_mixed(fm.rl, fm.Us, specs, fm.Theta)
-        Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
+    # param_rng walks continuously across z; dislocation draws are NOT z-invariant
+    # by design (sample i at z=-2 and sample i at z=+2 use different dislocations).
+    for z in z_samples:
+        z_float = float(z)
+        # fm.rl (not None) — Fd_find_mixed takes rl positionally and expects an ndarray.
+        rl_eff = fm.Z_shift(z_float) if z_float != 0.0 else fm.rl
+        frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
-        combined_args, phi_pf, chi_pf = _scan_frames_args(Hg_combined, Phi, Chi)
-        detectors: dict[str, list[tuple[int, np.ndarray, float, float]]] = {
-            "dfxm_sim_detector": combined_args,
-        }
+        for _ in range(mc.n_samples):
+            d1 = _draw_dislocation(param_rng, mc.pos_std_um)
+            d2 = _draw_dislocation(param_rng, mc.pos_std_um)
 
-        if mc.render_per_dislocation:
-            # Per-dislocation Hg: each rendered alone (other one absent).
-            # Noiseless by design — these are ground-truth instance labels.
-            Fg_dis0 = Fd_find_mixed(
-                fm.rl,
-                fm.Us,
-                Ud_mix=d1["Ud"],
-                rotation_deg=d1["alpha_deg"],
-                Theta=fm.Theta,
+            # Combined-scene Hg (sum of both dislocations)
+            specs = [
+                MixedDislocSpec(
+                    Ud_mix=d1["Ud"],
+                    rotation_deg=d1["alpha_deg"],
+                    position_lab_um=d1["pos_um"],
+                ),
+                MixedDislocSpec(
+                    Ud_mix=d2["Ud"],
+                    rotation_deg=d2["alpha_deg"],
+                    position_lab_um=d2["pos_um"],
+                ),
+            ]
+            Fg_combined = Fd_find_multi_dislocs_mixed(rl_eff, fm.Us, specs, fm.Theta)
+            Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
+
+            combined_args, positioners = _scan_frames_args(Hg_combined, frames_at_z, config.scan)
+            detectors: dict[str, list[tuple[int, np.ndarray, float, float, float]]] = {
+                "dfxm_sim_detector": combined_args,
+            }
+
+            if mc.render_per_dislocation:
+                # Per-dislocation Hg: each rendered alone (other one absent).
+                # Noiseless by design — these are ground-truth instance labels.
+                Fg_dis0 = Fd_find_mixed(
+                    rl_eff,
+                    fm.Us,
+                    Ud_mix=d1["Ud"],
+                    rotation_deg=d1["alpha_deg"],
+                    Theta=fm.Theta,
+                )
+                Hg_dis0 = np.transpose(fast_inverse2(Fg_dis0), [0, 2, 1]) - np.identity(3)
+                Fg_dis1 = Fd_find_mixed(
+                    rl_eff,
+                    fm.Us,
+                    Ud_mix=d2["Ud"],
+                    rotation_deg=d2["alpha_deg"],
+                    Theta=fm.Theta,
+                )
+                Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
+                dis0_args, _ = _scan_frames_args(Hg_dis0, frames_at_z, config.scan)
+                dis1_args, _ = _scan_frames_args(Hg_dis1, frames_at_z, config.scan)
+                detectors["dfxm_sim_detector_dis0"] = dis0_args
+                detectors["dfxm_sim_detector_dis1"] = dis1_args
+
+            sample: dict[str, Any] = {
+                "name": "simulated, dislocation identification (multi)",
+                "dislocations": {
+                    "0": _build_dislocation_sample_entry(d1),
+                    "1": _build_dislocation_sample_entry(d2),
+                },
+            }
+
+            yield ScanSpec(
+                title=_identify_title(scan_mode, frames_at_z.n_frames, config.scan),
+                sample=sample,
+                positioners=positioners,
+                dfxm_geo={
+                    "Hg": Hg_combined,
+                    "q_hkl": q_hkl,
+                    "theta": float(fm.theta),
+                    "psize": float(fm.psize),
+                    "zl_rms": float(fm.zl_rms),
+                },
+                detectors=detectors,
+                attrs={
+                    "scan_mode": scan_mode,
+                    "scanned_axes": scanned_axes,
+                    "identify_mode": "multi",
+                },
             )
-            Hg_dis0 = np.transpose(fast_inverse2(Fg_dis0), [0, 2, 1]) - np.identity(3)
-            Fg_dis1 = Fd_find_mixed(
-                fm.rl,
-                fm.Us,
-                Ud_mix=d2["Ud"],
-                rotation_deg=d2["alpha_deg"],
-                Theta=fm.Theta,
-            )
-            Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
-            dis0_args, _, _ = _scan_frames_args(Hg_dis0, Phi, Chi)
-            dis1_args, _, _ = _scan_frames_args(Hg_dis1, Phi, Chi)
-            detectors["dfxm_sim_detector_dis0"] = dis0_args
-            detectors["dfxm_sim_detector_dis1"] = dis1_args
-
-        sample: dict[str, Any] = {
-            "name": "simulated, dislocation identification (multi)",
-            "dislocations": {
-                "0": _build_dislocation_sample_entry(d1),
-                "1": _build_dislocation_sample_entry(d2),
-            },
-        }
-
-        yield ScanSpec(
-            title=_identify_title(scan_mode, n_frames, config.scan),
-            sample=sample,
-            positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
-            dfxm_geo={
-                "Hg": Hg_combined,
-                "q_hkl": q_hkl,
-                "theta": float(fm.theta),
-                "psize": float(fm.psize),
-                "zl_rms": float(fm.zl_rms),
-            },
-            detectors=detectors,
-            attrs={
-                "scan_mode": scan_mode,
-                "scanned_axes": scanned_axes,
-                "identify_mode": "multi",
-            },
-        )
 
 
 def _run_identification_multi(
@@ -1471,9 +1591,10 @@ def _iter_identification_zscan(
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
-    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
 
     for z_off in zscan.z_offsets_um:
+        frames_at_z = _build_scan_frames_at_z(config.scan, z_value=float(z_off))
+        n_frames = frames_at_z.n_frames
         rl_shifted = fm.Z_shift(z_off)
         for plane in planes:
             b_table = _burgers_vectors(plane)
@@ -1544,12 +1665,12 @@ def _iter_identification_zscan(
                         )
 
                     Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
-                    args_list, phi_pf, chi_pf = _scan_frames_args(Hg, Phi, Chi)
+                    args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan)
 
                     yield ScanSpec(
                         title=_identify_title(scan_mode, n_frames, config.scan),
                         sample=sample,
-                        positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
+                        positioners=positioners,
                         dfxm_geo={
                             "Hg": Hg,
                             "q_hkl": q_hkl,
@@ -1603,16 +1724,14 @@ def run_identification(
             "IdentificationConfig.reciprocal is None — must specify [reciprocal] "
             "block in TOML or set it programmatically before calling run_identification."
         )
-    # v1.2.0 scope: identify kernels only consume phi + chi. ScanGrid for
-    # two_dtheta / z is implemented but not wired into the identify forward
-    # path. Raise eagerly so users don't get silently-wrong output. Lifting
-    # this guard is tracked as a v1.3.0 follow-up.
-    unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
-    if unwired:
+    # two_dtheta is not yet wired into the identify forward path. Raise eagerly
+    # so users don't get silently-wrong output. z is now wired for single + multi
+    # (v1.3.0-A); two_dtheta lifting is tracked as a future follow-up.
+    if config.scan.is_scanned("two_dtheta"):
         raise ValueError(
-            f"scan axes {unwired} are configured but not yet wired into "
-            f"identification (v1.2.0 scope). For now, set range+steps only on "
-            f"[scan.phi] and/or [scan.chi]."
+            "scan axis two_dtheta is configured but not yet wired into "
+            "identification. For now, set range+steps only on "
+            "[scan.phi], [scan.chi], and/or [scan.z]."
         )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 

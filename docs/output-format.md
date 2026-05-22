@@ -1,4 +1,4 @@
-# dfxm-geo HDF5 output format (v1.2.0)
+# dfxm-geo HDF5 output format (v1.3.0)
 
 ## Overview
 
@@ -44,10 +44,12 @@ out_dir/
                               '/entry_0000/dfxm_sim_detector/image')
         positioners/
           @NX_class = "NXcollection"
-          phi, chi  ← (N_frames,) for scanned, scalar for fixed; degrees with @units
+          phi, chi, two_dtheta, z  ← (N_frames,) for scanned, scalar for fixed
+                                     phi/chi/two_dtheta in degrees (@units="degree");
+                                     z in micrometers (@units="micrometer")
       measurement/                               ← BLISS soft-links
         @NX_class = "NXcollection"
-        dfxm_sim_detector, phi, chi   ← SoftLink to instrument/...
+        dfxm_sim_detector, phi, chi, two_dtheta, z   ← SoftLink to instrument/...
       dfxm_geo/                                  ← per-scan sim-specific
         Hg, q_hkl, theta, psize, zl_rms
         analysis/...                             ← present only after forward postprocess
@@ -112,9 +114,13 @@ produced) is different.
 Each scan in the run becomes one `/N.1/` entry under the master root.
 Forward mode writes `/1.1/` (dislocations) and optionally `/2.1/` (perfect
 crystal, when `[io].include_perfect_crystal = true`). Identification mode
-writes one `/N.1/` per config drawn from the runner generator — typically
-hundreds for `dfxm-identify single` / `multi`, or
-`len(z_offsets_um) × phi_chi_configs` for `z-scan`.
+writes one `/N.1/` per config drawn from the runner generator. For
+`mode="single"`: `n_z × n_planes × n_b × n_alpha` entries (where `n_z` =
+`[scan.z].steps` if set, else 1). For `mode="multi"`: `n_z × n_samples`.
+For `mode="z-scan"`: `len(z_offsets_um) × phi_chi_configs` (legacy z-scan
+mode, distinct from `[scan.z]` axis scanning). New in v1.3.0: `[scan.z]`
+in single/multi multiplies the scan count by `n_z` and recomputes the
+strain field at each z-slice.
 
 The metadata schema of `/N.1/` is identical to v1.1.0 except that
 `instrument/dfxm_sim_detector/data` is now an `ExternalLink` to the
@@ -129,12 +135,12 @@ crystal/identify mode used to generate it. These are written verbatim from
 the B+C `[scan.<axis>]` schema for `scan_mode` / `scanned_axes` and from
 the C / E discriminators for `crystal_mode` / `identify_mode`.
 
-| Attr            | Forward | Identify | Example values                                          |
-| --------------- | :-----: | :------: | ------------------------------------------------------- |
-| `scan_mode`     |    ✓    |    ✓     | `"single"`, `"rocking"`, `"rolling"`, `"mosa"`          |
-| `scanned_axes`  |    ✓    |    ✓     | `[]`, `["phi"]`, `["chi"]`, `["phi", "chi"]`            |
-| `crystal_mode`  |    ✓    |    —     | `"centered"`, `"wall"`, `"random_dislocations"`         |
-| `identify_mode` |    —    |    ✓     | `"single"`, `"multi"`, `"z-scan"`                       |
+| Attr            | Forward | Identify | Example values                                                                                                            |
+| --------------- | :-----: | :------: | ------------------------------------------------------------------------------------------------------------------------- |
+| `scan_mode`     |    ✓    |    ✓     | `"single"`, `"rocking"`, `"rolling"`, `"strain"`, `"layer"`, `"mosa"`, `"mosa_strain"`, `"mosa_layer"`, `"mosa_strain_layer"` |
+| `scanned_axes`  |    ✓    |    ✓     | `[]`, `["phi"]`, `["chi"]`, `["phi", "chi"]`, `["phi", "chi", "two_dtheta", "z"]` |
+| `crystal_mode`  |    ✓    |    —     | `"centered"`, `"wall"`, `"random_dislocations"`                                                                           |
+| `identify_mode` |    —    |    ✓     | `"single"`, `"multi"`, `"z-scan"`                                                                                         |
 
 `scan_mode` and `scanned_axes` are derived from
 `config.scan.derived_mode_name()` and `config.scan.scanned_axes()`.
@@ -297,31 +303,44 @@ simultaneously, so the layout stays BLISS-faithful.
 
 ## Frame ordering
 
-The fscan2d convention from v1.1.0 is preserved: phi inner, chi outer.
-The k-th frame in any detector file corresponds to:
+Starting in v1.3.0, the canonical scan trajectory walks 4 axes:
+phi-innermost, then chi, then `two_dtheta`, then z-outermost.
+Phi/chi-only scans remain v1.1.0/v1.2.0-compatible (the outer two loop
+levels collapse to length-1 when their axis is fixed). The k-th frame
+in any detector file corresponds to:
 
 ```python
-phi_idx = k % phi_steps
-chi_idx = k // phi_steps
-# equivalently:
-k = chi_idx * phi_steps + phi_idx
+phi_idx        = k % phi_steps
+chi_idx        = (k // phi_steps) % chi_steps
+two_dtheta_idx = (k // (phi_steps * chi_steps)) % two_dtheta_steps
+z_idx          = k // (phi_steps * chi_steps * two_dtheta_steps)
 ```
 
 `N_frames` per `/N.1/` depends on which axes are scanned:
 
-| scan_mode | scanned_axes     | N_frames                  |
-| --------- | ---------------- | ------------------------- |
-| `single`  | `[]`             | 1                         |
-| `rocking` | `["phi"]`        | `phi_steps`               |
-| `rolling` | `["chi"]`        | `chi_steps`               |
-| `mosa`    | `["phi", "chi"]` | `phi_steps × chi_steps`   |
+| scan_mode           | scanned_axes                              | N_frames                                                |
+| ------------------- | ----------------------------------------- | ------------------------------------------------------- |
+| `single`            | `[]`                                      | 1                                                       |
+| `rocking`           | `["phi"]`                                 | `phi_steps`                                             |
+| `rolling`           | `["chi"]`                                 | `chi_steps`                                             |
+| `strain`            | `["two_dtheta"]`                          | `two_dtheta_steps`                                      |
+| `layer`             | `["z"]`                                   | `z_steps`                                               |
+| `mosa`              | `["phi", "chi"]`                          | `phi_steps × chi_steps`                                 |
+| `mosa_strain`       | `["phi", "chi", "two_dtheta"]`            | `phi_steps × chi_steps × two_dtheta_steps`              |
+| `mosa_layer`        | `["phi", "chi", "z"]`                     | `phi_steps × chi_steps × z_steps`                       |
+| `mosa_strain_layer` | `["phi", "chi", "two_dtheta", "z"]`       | `phi_steps × chi_steps × two_dtheta_steps × z_steps`   |
 
 Positioners follow the same rule: scanned axes get `(N_frames,)` 1-D
-arrays (in degrees, with `@units = "degree"`); fixed axes get scalar
-0-D datasets equal to `axis.value` (also in degrees).
+arrays; fixed axes get scalar 0-D datasets equal to `axis.value`. Units:
+`phi`, `chi`, `two_dtheta` are stored in degrees (`@units="degree"`);
+`z` is stored in micrometers (`@units="micrometer"`).
 
 `load_h5_scan` returns the data both as a flat `(N_frames, H, W)` stack
 and as a `(phi_steps, chi_steps, H, W)` reshape for convenience.
+For 4-axis scans, `load_h5_scan`'s `stack_reshape` may not match the
+higher-rank trajectory — fall back to indexing `stack` directly using
+the formula above when consuming `mosa_strain_layer` / `mosa_strain` /
+`mosa_layer` data.
 
 ## NX_class table
 
@@ -503,3 +522,27 @@ Best practice: don't symlink across the master/scan-dir boundary.
 Either symlink the whole `out_dir/` tree as one unit (which works
 correctly because relative paths are preserved inside the tree), or
 copy it to its destination.
+
+## Implementation notes
+
+### Fg disk cache (wall mode, v1.3.0)
+
+`Find_Hg` writes a disk cache for the per-z dislocation-wall strain
+tensor (`direct_space/deformation_gradient_tensors/Fg_<dis>_<...>.npy`).
+When `z_offset_um` is non-zero (forward-mode `[scan.z]` outer loop), the
+filename gains a `_z{nm}nm` suffix encoding `round(z_offset_um * 1000)`.
+Example: `z_offset_um = 12.5` → `Fg_...remountS1_z12500nm.npy`. The
+`z = 0` filename is unchanged from v1.2.0, so existing caches remain
+hit-eligible for non-z-scan runs. `Find_Hg_from_population` (centered +
+random_dislocations modes) does not write a disk cache and is therefore
+unaffected by this suffix.
+
+### z positioner unit handling (v1.3.0)
+
+The z positioner is a translation axis stored in **micrometers**
+(`@units="micrometer"`) — the raw value from `[scan.z].range / .value`
+is written without conversion. The three angular axes (`phi`, `chi`,
+`two_dtheta`) are radians upstream and stored in degrees on disk
+(`@units="degree"`). `MasterWriter.add_scan` special-cases `z` to skip
+the `np.degrees()` conversion that would otherwise produce a meaningless
+value with a misleading unit attribute.
