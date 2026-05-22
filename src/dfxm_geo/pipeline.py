@@ -1395,6 +1395,16 @@ def run_identification(
             "IdentificationConfig.reciprocal is None — must specify [reciprocal] "
             "block in TOML or set it programmatically before calling run_identification."
         )
+    # v1.2.0 scope: identify kernels only consume phi + chi. ScanGrid for
+    # two_dtheta / z is implemented but not wired into the identify forward
+    # path. Raise eagerly so users don't get silently-wrong output.
+    if config.scan.two_dtheta.is_scanned or config.scan.z.is_scanned:
+        unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
+        raise ValueError(
+            f"scan axes {unwired} are configured but not yet wired into "
+            f"identification (v1.2.0 scope). For now, set range+steps only on "
+            f"[scan.phi] and/or [scan.chi]."
+        )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
     if config.mode == "single":

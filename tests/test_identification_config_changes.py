@@ -45,3 +45,31 @@ def test_multi_config_render_per_dislocation_opt_in() -> None:
 def test_multi_config_drops_n_png_previews() -> None:
     cfg = IdentificationMonteCarloConfig(n_samples=10, pos_std_um=5.0)
     assert not hasattr(cfg, "n_png_previews")
+
+
+def test_run_identification_eager_guards_unwired_axes(tmp_path) -> None:
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        IdentificationConfig,
+        IdentificationCrystalConfig,
+        IdentificationNoiseConfig,
+        IOConfig,
+        ReciprocalConfig,
+        ScanConfig,
+        run_identification,
+    )
+
+    scan = ScanConfig(
+        phi=AxisScanConfig(value=1e-4),
+        two_dtheta=AxisScanConfig(value=0.0, range=1e-3, steps=3),
+    )
+    cfg = IdentificationConfig(
+        mode="single",
+        crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
+        scan=scan,
+        noise=IdentificationNoiseConfig(),
+        io=IOConfig(),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    with pytest.raises(ValueError, match=r"two_dtheta"):
+        run_identification(cfg, tmp_path)
