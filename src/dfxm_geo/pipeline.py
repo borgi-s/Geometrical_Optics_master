@@ -1022,13 +1022,13 @@ def _build_scan_frames_at_z(scan: ScanConfig, z_value: float) -> ScanFrames:
 
 
 def _scan_frames_args(
-    Hg: np.ndarray, frames: ScanFrames
+    Hg: np.ndarray, frames: ScanFrames, scan: ScanConfig
 ) -> tuple[list[tuple[int, np.ndarray, float, float, float]], dict[str, np.ndarray | float]]:
     """Build (args_list, positioners) for one ScanSpec.
 
     args_list elements: (frame_idx, Hg, phi_rad, chi_rad, two_dtheta_rad).
     positioners: dict keyed by canonical axis; scanned axes -> per-frame array,
-    fixed axes -> scalar (matching `_positioners_for_scan`'s previous shape).
+    fixed axes -> scalar.
     """
     args_list: list[tuple[int, np.ndarray, float, float, float]] = []
     for k in range(frames.n_frames):
@@ -1041,34 +1041,32 @@ def _scan_frames_args(
                 float(frames.two_dtheta_pf[k]),
             )
         )
-    positioners = _positioners_for_scan_frames(frames)
+    positioners = _positioners_for_scan_frames(frames, scan)
     return args_list, positioners
 
 
-def _positioners_for_scan_frames(frames: ScanFrames) -> dict[str, np.ndarray | float]:
-    """Temporary stub: always returns per-frame arrays.
+def _positioners_for_scan_frames(
+    frames: ScanFrames, scan: ScanConfig
+) -> dict[str, np.ndarray | float]:
+    """Build the positioners dict for a ScanSpec.
 
-    Task 4 replaces this with the scanned/fixed-axis collapse logic.
+    Scanned axes -> the full per-frame array (np.ndarray of length n_frames).
+    Fixed axes -> the scalar axis value (float). Matches v1.2.0 convention
+    for phi/chi; now extended to two_dtheta + z.
     """
-    return {
+    pf_arrays: dict[str, np.ndarray] = {
         "phi": frames.phi_pf,
         "chi": frames.chi_pf,
         "two_dtheta": frames.two_dtheta_pf,
         "z": frames.z_pf,
     }
-
-
-def _positioners_for_scan(
-    phi_pf: np.ndarray, chi_pf: np.ndarray, scan: ScanConfig
-) -> dict[str, np.ndarray | float]:
-    """Return phi/chi entries for ScanSpec.positioners.
-
-    Fixed axes collapse to a scalar in radians; scanned axes are the
-    full (N_frames,) array (also in radians, per ScanSpec convention).
-    """
     out: dict[str, np.ndarray | float] = {}
-    out["phi"] = phi_pf if scan.phi.is_scanned else float(scan.phi.value)
-    out["chi"] = chi_pf if scan.chi.is_scanned else float(scan.chi.value)
+    for axis_name in _CANONICAL_AXES:
+        axis = getattr(scan, axis_name)
+        if axis.is_scanned:
+            out[axis_name] = pf_arrays[axis_name]
+        else:
+            out[axis_name] = float(pf_arrays[axis_name][0])
     return out
 
 
@@ -1222,7 +1220,7 @@ def _iter_identification_single(
                 )
                 Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
 
-                args_list, positioners = _scan_frames_args(Hg, frames_at_z)
+                args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan)
 
                 burgers_int = (
                     int(round(b_table[b_idx, 0] * np.sqrt(2))),
@@ -1379,7 +1377,7 @@ def _iter_identification_multi(
         Fg_combined = Fd_find_multi_dislocs_mixed(fm.rl, fm.Us, specs, fm.Theta)
         Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
 
-        combined_args, positioners = _scan_frames_args(Hg_combined, frames_at_z)
+        combined_args, positioners = _scan_frames_args(Hg_combined, frames_at_z, config.scan)
         detectors: dict[str, list[tuple[int, np.ndarray, float, float, float]]] = {
             "dfxm_sim_detector": combined_args,
         }
@@ -1403,8 +1401,8 @@ def _iter_identification_multi(
                 Theta=fm.Theta,
             )
             Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
-            dis0_args, _ = _scan_frames_args(Hg_dis0, frames_at_z)
-            dis1_args, _ = _scan_frames_args(Hg_dis1, frames_at_z)
+            dis0_args, _ = _scan_frames_args(Hg_dis0, frames_at_z, config.scan)
+            dis1_args, _ = _scan_frames_args(Hg_dis1, frames_at_z, config.scan)
             detectors["dfxm_sim_detector_dis0"] = dis0_args
             detectors["dfxm_sim_detector_dis1"] = dis1_args
 
@@ -1608,7 +1606,7 @@ def _iter_identification_zscan(
                         )
 
                     Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
-                    args_list, positioners = _scan_frames_args(Hg, frames_at_z)
+                    args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan)
 
                     yield ScanSpec(
                         title=_identify_title(scan_mode, n_frames, config.scan),

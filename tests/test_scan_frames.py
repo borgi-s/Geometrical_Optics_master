@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from dfxm_geo.pipeline import (
     AxisScanConfig,
@@ -126,14 +125,14 @@ def test_build_scan_frames_at_z_ignores_z_scan_config():
 
 
 def test_scan_frames_args_returns_5_tuples():
-    """_scan_frames_args(Hg, frames) emits (idx, Hg, phi, chi, two_dtheta)."""
+    """_scan_frames_args(Hg, frames, cfg) emits (idx, Hg, phi, chi, two_dtheta)."""
     cfg = ScanConfig(
         phi=AxisScanConfig(range=1e-3, steps=2),
         two_dtheta=AxisScanConfig(range=3e-4, steps=2),
     )
     frames = _build_scan_frames_at_z(cfg, z_value=0.0)
     Hg = np.zeros((10, 3, 3))
-    args_list, positioners = _scan_frames_args(Hg, frames)
+    args_list, positioners = _scan_frames_args(Hg, frames, cfg)
     assert len(args_list) == 4
     for tup in args_list:
         assert len(tup) == 5  # idx, Hg, phi, chi, two_dtheta
@@ -144,7 +143,6 @@ def test_scan_frames_args_returns_5_tuples():
     np.testing.assert_allclose([tup[4] for tup in args_list], frames.two_dtheta_pf)
 
 
-@pytest.mark.xfail(reason="collapse logic lands in Task 4", strict=True)
 def test_scan_frames_args_positioners_contain_all_four_axes():
     """positioners dict has phi/chi/two_dtheta/z (per-frame arrays or scalars)."""
     cfg = ScanConfig(
@@ -153,7 +151,7 @@ def test_scan_frames_args_positioners_contain_all_four_axes():
     )
     frames = _build_scan_frames_at_z(cfg, z_value=5.0)
     Hg = np.zeros((10, 3, 3))
-    _, positioners = _scan_frames_args(Hg, frames)
+    _, positioners = _scan_frames_args(Hg, frames, cfg)
     assert set(positioners.keys()) == {"phi", "chi", "two_dtheta", "z"}
     # Scanned axes are arrays
     assert isinstance(positioners["phi"], np.ndarray)
