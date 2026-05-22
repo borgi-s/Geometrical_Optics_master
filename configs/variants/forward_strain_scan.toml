@@ -1,0 +1,61 @@
+# Demo: strain scan (no phi/chi rocking, just two_dtheta).
+# Run: dfxm-forward --config configs/variants/forward_strain_scan.toml --output <out>
+# Produces 5 frames per scan; positioners["two_dtheta"] is a length-5 array,
+# phi/chi/z collapse to scalars. scan_mode = "strain".
+
+[reciprocal]
+hkl        = [-1, 1, -1]   # Al 111 reflection (default)
+keV        = 17.0          # beam energy in keV
+Nrays      = 100_000_000   # 1e8
+npoints1   = 400
+npoints2   = 200
+npoints3   = 200
+qi1_range  = 5e-4
+qi2_range  = 7.5e-3
+qi3_range  = 7.5e-3
+zeta_v_fwhm = 5.3e-4
+zeta_h_fwhm = 0.0
+NA_rms      = 3.1106382978723403e-4
+eps_rms     = 6.0e-5
+D  = 0.000565685424949238
+d1 = 0.274
+beamstop   = true
+bs_height  = 25e-3
+aperture   = true
+knife_edge = false
+dphi_range = 0.0
+
+# Scan: phi and chi fixed at 0; only two_dtheta is scanned.
+# Derived scan-mode label: "strain".
+
+# [scan.phi]        # omitted -> fixed at 0 (no phi rocking)
+# [scan.chi]        # omitted -> fixed at 0 (no chi rolling)
+
+[scan.two_dtheta]
+range = 1e-4        # rad; half-range around value (default 0)
+steps = 5
+
+# [scan.z]          # omitted -> fixed at 0 (no z translation)
+
+[crystal]
+mode = "centered"
+
+[crystal.centered]
+b = [1, -1, 0]
+n = [1, 1, 1]
+t = [1, 1, -2]
+
+[io]
+fn_prefix = "/strain_scan_0000_"
+ftype = ".npy"
+dislocs_dirname = "images10"
+perfect_dirname = "images10_perf_crystal"
+include_perfect_crystal = true
+
+[postprocess]
+enabled = true
+chi_oversample = 20
+phi_oversample = 20
+chi_oversample_for_shift = 100
+figures_dirname = "figures"
+data_dirname = "analysis"
