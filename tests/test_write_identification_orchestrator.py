@@ -48,12 +48,13 @@ def test_write_identification_h5_basic(tmp_path: Path) -> None:
         Hg = fm.Hg
         out_dir = tmp_path / "out"
         out_dir.mkdir()
-        write_identification_h5(
+        n_scans = write_identification_h5(
             out_dir,
             scan_iter=_fake_scan_iter(Hg),
             cli="pytest test_write_identification_h5",
             config_toml='mode = "single"\n',
         )
+        assert n_scans == 2
         master = out_dir / MASTER_IDENTIFY
         assert master.is_file()
         assert (out_dir / "scan0001" / "dfxm_sim_detector_0000.h5").is_file()

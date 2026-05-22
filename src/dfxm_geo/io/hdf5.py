@@ -16,6 +16,7 @@ import os
 import socket as _socket
 import subprocess as _subprocess
 import sys as _sys
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib.metadata import version as _pkg_version
@@ -34,6 +35,9 @@ MASTER_IDENTIFY = "dfxm_identify.h5"
 SCAN_DIR_FMT = "scan{:04d}"
 DETECTOR_FILE_FMT = "{name}_0000.h5"
 DETECTOR_INTERNAL_PATH = "/entry_0000/dfxm_sim_detector/image"
+
+# (frame_idx, Hg, phi, chi) — one frame's worth of args for `_compute_frame`.
+_FrameArgs = tuple[int, np.ndarray, float, float]
 
 
 @dataclass(frozen=True)
@@ -63,7 +67,7 @@ class ScanSpec:
     sample: dict
     positioners: dict[str, np.ndarray | float]
     dfxm_geo: dict
-    detectors: dict[str, list[tuple]]
+    detectors: dict[str, list[_FrameArgs]]
     attrs: dict[str, str | list[str]]
 
 
@@ -129,10 +133,6 @@ def _auto_max_workers() -> int:
     usable_gb = max(1.0, avail_gb - 2.0)  # reserve 2 GiB for persistent state + OS
     mem_cap = max(1, int(usable_gb // 1))
     return min(cpu, mem_cap)
-
-
-# (frame_idx, Hg, phi, chi) — one frame's worth of args for `_compute_frame`.
-_FrameArgs = tuple[int, np.ndarray, float, float]
 
 
 def _compute_frame(args: _FrameArgs) -> tuple[int, np.ndarray]:
@@ -553,7 +553,7 @@ def _scan_title(phi_range: float, phi_steps: int, chi_range: float, chi_steps: i
 def write_identification_h5(
     output_dir: Path,
     *,
-    scan_iter,  # Iterable[ScanSpec]
+    scan_iter: Iterable[ScanSpec],
     cli: str,
     config_toml: str,
     kernel_npz: Path | None = None,
