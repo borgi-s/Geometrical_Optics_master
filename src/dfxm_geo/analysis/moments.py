@@ -1,109 +1,14 @@
-"""First- and second-moment analysis of DFXM rocking-curve image stacks.
+"""First- and second-moment analysis of a DFXM detector image.
 
-Two entry points:
+:func:`calc_moments` returns a scalar moment dictionary for a single image,
+intended for single-pixel orientation spreads. A direct port of the original
+MATLAB analysis used in ``init_forward.py``.
 
-- :func:`fastgrainplot`: per-pixel COM (1st moment) and FWHM (from 2nd moment)
-  over an image stack acquired on a (u, v) angular grid. Despite the legacy
-  name, this function does *not* plot — it returns four ``(H, W)`` arrays.
-- :func:`calc_moments`: scalar moment dictionary for a single image, intended
-  for single-pixel orientation spreads.
-
-A direct port of the original MATLAB analysis used in ``init_forward.py``.
+For per-pixel COM/FWHM maps over a rocking stack, see
+:mod:`dfxm_geo.analysis.mosaicity` (`compute_com_maps`).
 """
 
 import numpy as np
-
-
-def fastgrainplot(
-    imagestack: np.ndarray,
-    vlist: np.ndarray,
-    ulist: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Per-pixel center-of-mass and FWHM maps over a (u, v) rocking grid.
-
-    Iterates a flat ``imagestack`` of length ``len(ulist) * len(vlist)``,
-    treating ``vlist`` as the fast (inner) motor and ``ulist`` as the slow
-    (outer) motor — index ``j`` maps to ``v = vlist[j % len(vlist)]`` and
-    ``u = ulist[j // len(vlist)]``. The MATLAB original computed skewness
-    and kurtosis as well; those terms were dead and were removed during the
-    Phase 3.2 cleanup.
-
-    Note:
-        The legacy name is a misnomer — this returns arrays, not plots.
-        Renamed only at the import-shim level for now to avoid breaking
-        downstream callers.
-
-    Args:
-        imagestack: Shape ``(len(ulist) * len(vlist), H, W)`` flat stack of
-            detector images, ordered ``v``-major (fast motor inner).
-        vlist: Fast-motor angles (1D), length ``v_steps``.
-        ulist: Slow-motor angles (1D), length ``u_steps``.
-
-    Returns:
-        ``(unorm, vnorm, ufwhm, vfwhm)``, each of shape ``(H, W)``:
-
-        - ``unorm``, ``vnorm``: per-pixel center of mass in ``u`` / ``v``.
-        - ``ufwhm``, ``vfwhm``: per-pixel FWHM (``2.355 * sqrt(variance)``);
-          pixels with non-positive variance are returned as ``NaN``.
-    """
-    imglist = imagestack
-
-    oridist = np.zeros(len(vlist) * len(ulist))
-    inttot = np.zeros_like(imglist[0])
-    v1sum = np.zeros_like(inttot)
-    v2sum = np.zeros_like(inttot)
-    v3sum = np.zeros_like(inttot)
-    v4sum = np.zeros_like(inttot)
-    u1sum = np.zeros_like(inttot)
-    u2sum = np.zeros_like(inttot)
-    u3sum = np.zeros_like(inttot)
-    u4sum = np.zeros_like(inttot)
-
-    for j in range(len(imglist)):
-        img = imglist[j]
-        img[img < 0] = 0
-
-        # For grain shape
-        inttot += img
-
-        # For calculating moments.
-        # vlist is the fast motor (inner loop), ulist is the slow motor (outer loop).
-        vv = vlist[j % len(vlist)]  # fast motor: cycles through all v steps
-        uu = ulist[j // len(vlist)]  # slow motor: advances once per full v sweep
-
-        v1sum += vv * img
-        v2sum += vv**2 * img
-        v3sum += vv**3 * img
-        v4sum += vv**4 * img
-
-        u1sum += uu * img
-        u2sum += uu**2 * img
-        u3sum += uu**3 * img
-        u4sum += uu**4 * img
-
-        # For orientation distribution
-        oridist[j] = img.sum()
-
-    # Expectation value
-    vnorm = v1sum / (inttot * 2)
-    unorm = u1sum / (inttot * 2)
-
-    # Variance
-    vvar = v2sum / inttot * 2 - vnorm**2
-    uvar = u2sum / inttot * 2 - unorm**2
-
-    # Replace negative variances with NaN
-    vvar[vvar <= 0] = np.nan
-    uvar[uvar <= 0] = np.nan
-
-    # FWHM
-    vfwhm = 2.355 * np.sqrt(vvar)
-    ufwhm = 2.355 * np.sqrt(uvar)
-
-    # Skewness and kurtosis were computed here but never returned or used.
-    # Removed during cleanup; reinstate via git history if you need them
-    # and route through the return tuple.
-    return unorm, vnorm, ufwhm, vfwhm
 
 
 def calc_moments(
