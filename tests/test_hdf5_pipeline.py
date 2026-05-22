@@ -156,3 +156,54 @@ def test_run_postprocess_reads_h5(tmp_path: Path, _kernel_loaded: None) -> None:
     # And SVG figures still go on disk per F1 decision.
     assert (out / "figures" / "mosaicity_maps.svg").exists()
     assert (out / "figures" / "qi_cross_section.svg").exists()
+
+
+def test_write_simulation_h5_title_correct_for_asymmetric_grid(
+    tmp_path: Path, _kernel_loaded: None
+) -> None:
+    """Non-square phi*chi grid (3 phi x 2 chi) produces a title with phi_steps=3 chi_steps=2.
+
+    Regression test for the bug in _scan_title_from_frames where n_frames was
+    used for both phi_steps and chi_steps, giving wrong step counts on non-square
+    grids (e.g. 3x2=6 frames would write "6 chi ... 6" instead of "3 chi ... 2").
+    """
+    Hg, q_hkl = fm.Find_Hg(
+        4.0,
+        10,
+        fm.psize,
+        fm.zl_rms,
+        S=SAMPLE_REMOUNT_OPTIONS["S1"],
+        remount_name="S1",
+    )
+    phi = np.linspace(-1e-3, 1e-3, 3)
+    chi = np.linspace(-2e-3, 2e-3, 2)
+    n = 6  # 3 * 2
+    phi_pf = np.tile(phi, 2)
+    chi_pf = np.repeat(chi, 3)
+    frames = ScanFrames(
+        phi_pf=phi_pf,
+        chi_pf=chi_pf,
+        two_dtheta_pf=np.zeros(n),
+        z_pf=np.zeros(n),
+        n_frames=n,
+    )
+
+    out = tmp_path / "asym.h5"
+    write_simulation_h5(
+        out,
+        Hg=Hg,
+        q_hkl=q_hkl,
+        frames=frames,
+        sample_dis=4.0,
+        sample_ndis=10,
+        sample_remount="S1",
+        config_toml="",
+        cli="pytest",
+        include_perfect_crystal=False,
+    )
+    with h5py.File(out, "r") as f:
+        title = f["/1.1"].attrs["title"]
+    # Title must contain phi_steps=3 and chi_steps=2, NOT n_frames=6 for both.
+    assert " 3 chi " in title, f"phi_steps=3 not in title: {title!r}"
+    assert " 2 1.0" in title, f"chi_steps=2 not in title: {title!r}"
+    assert " 6 chi " not in title, f"n_frames=6 wrongly emitted as phi_steps: {title!r}"

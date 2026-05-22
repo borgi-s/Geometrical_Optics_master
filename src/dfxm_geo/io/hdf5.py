@@ -554,14 +554,20 @@ def _scan_title(phi_range: float, phi_steps: int, chi_range: float, chi_steps: i
     )
 
 
-def _scan_title_from_frames(frames: ScanFrames) -> str:
-    """fscan2d title string derived from a ScanFrames (radians, n_frames)."""
+def _scan_title_from_frames(frames: ScanFrames, phi_steps: int, chi_steps: int) -> str:
+    """fscan2d title string derived from a ScanFrames (radians, explicit step counts).
+
+    The darfix-parsed title encodes per-axis step counts separately; for non-
+    square grids, they cannot be inferred from n_frames alone.
+    """
     phi_min = float(frames.phi_pf.min())
     phi_max = float(frames.phi_pf.max())
     chi_min = float(frames.chi_pf.min())
     chi_max = float(frames.chi_pf.max())
-    n = frames.n_frames
-    return f"fscan2d phi {phi_min:.6f} {phi_max:.6f} {n} chi {chi_min:.6f} {chi_max:.6f} {n} 1.0"
+    return (
+        f"fscan2d phi {phi_min:.6f} {phi_max:.6f} {phi_steps} "
+        f"chi {chi_min:.6f} {chi_max:.6f} {chi_steps} 1.0"
+    )
 
 
 def write_identification_h5(
@@ -686,7 +692,9 @@ def write_simulation_h5(
     two_dtheta_per_frame = frames.two_dtheta_pf
     z_per_frame = frames.z_pf
 
-    title = _scan_title_from_frames(frames)
+    phi_steps = int(np.unique(frames.phi_pf).size)
+    chi_steps = int(np.unique(frames.chi_pf).size)
+    title = _scan_title_from_frames(frames, phi_steps=phi_steps, chi_steps=chi_steps)
 
     def _now() -> str:
         return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
