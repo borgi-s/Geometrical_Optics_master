@@ -17,6 +17,7 @@ import socket as _socket
 import subprocess as _subprocess
 import sys as _sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import cast
@@ -33,6 +34,37 @@ MASTER_IDENTIFY = "dfxm_identify.h5"
 SCAN_DIR_FMT = "scan{:04d}"
 DETECTOR_FILE_FMT = "{name}_0000.h5"
 DETECTOR_INTERNAL_PATH = "/entry_0000/dfxm_sim_detector/image"
+
+
+@dataclass(frozen=True)
+class ScanSpec:
+    """One BLISS scan worth of work, yielded by an identification runner.
+
+    Consumed by `write_identification_h5`: the orchestrator turns each
+    `ScanSpec` into one master `/N.1` entry plus one or more per-scan
+    detector files (one per key in `detectors`).
+
+    Attributes:
+        title: Scan title string written to `/N.1/title`.
+        sample: NXsample contents for this scan (see per-mode layouts in
+            the design spec).
+        positioners: motor-axis name → 1-D array (scanned) or scalar (fixed).
+            ASSUMES input is in radians.
+        dfxm_geo: sim-specific per-scan metadata (Hg, q_hkl, theta, psize,
+            zl_rms). Any subset may be supplied.
+        detectors: detector_name → list of frame args tuples
+            `(frame_idx, Hg, phi, chi)` for the parallel writer. Each
+            detector becomes its own LIMA-style file inside the scan dir.
+        attrs: per-`/N.1` attrs — at minimum `scan_mode`, `scanned_axes`,
+            `identify_mode`.
+    """
+
+    title: str
+    sample: dict
+    positioners: dict[str, np.ndarray | float]
+    dfxm_geo: dict
+    detectors: dict[str, list[tuple]]
+    attrs: dict[str, str | list[str]]
 
 
 def _set_nx_class(grp: h5py.Group, cls: str) -> None:
@@ -516,6 +548,78 @@ def _scan_title(phi_range: float, phi_steps: int, chi_range: float, chi_steps: i
         f"fscan2d phi {-phi_range:.6f} {phi_range:.6f} {phi_steps} "
         f"chi {-chi_range:.6f} {chi_range:.6f} {chi_steps} 1.0"
     )
+
+
+def write_identification_h5(
+    output_dir: Path,
+    *,
+    scan_iter,  # Iterable[ScanSpec]
+    cli: str,
+    config_toml: str,
+    kernel_npz: Path | None = None,
+    max_workers: int | None = None,
+) -> int:
+    """Drive an identification run: consume ScanSpecs, write master + per-scan dirs.
+
+    For each ScanSpec yielded:
+      1. Create `output_dir/scanNNNN/`.
+      2. For each `(detector_name, args_list)` in `spec.detectors`, write
+         `output_dir/scanNNNN/<name>_0000.h5` via the parallel writer.
+      3. Call `master.add_scan(scan_id=f"{N}.1", detector_links=..., ...)`.
+
+    Returns the count of scans written.
+    """
+    import datetime as _dt2
+
+    if kernel_npz is None:
+        kernel_npz = _fm._loaded_kernel_path
+        if kernel_npz is None:
+            raise RuntimeError(
+                "no kernel loaded — call _lookup_and_load_kernel(hkl, keV) "
+                "before writing identification HDF5 provenance."
+            )
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    master_path = output_dir / MASTER_IDENTIFY
+    n_scans = 0
+
+    def _now() -> str:
+        return _dt2.datetime.now(_dt2.UTC).isoformat(timespec="seconds")
+
+    with MasterWriter(
+        master_path, cli=cli, config_toml=config_toml, kernel_npz=kernel_npz
+    ) as master:
+        for idx, spec in enumerate(scan_iter):
+            scan_id = f"{idx + 1}.1"
+            scan_dir_rel = Path(SCAN_DIR_FMT.format(idx + 1))
+            scan_dir = output_dir / scan_dir_rel
+            scan_dir.mkdir(parents=True, exist_ok=True)
+            detector_links: dict[str, tuple[Path, str]] = {}
+            start_time = _now()
+            for det_name, args_list in spec.detectors.items():
+                det_file = scan_dir / DETECTOR_FILE_FMT.format(name=det_name)
+                _compute_and_write_detector_file_parallel(
+                    det_file, args_list, max_workers=max_workers
+                )
+                detector_links[det_name] = (
+                    scan_dir_rel / DETECTOR_FILE_FMT.format(name=det_name),
+                    DETECTOR_INTERNAL_PATH,
+                )
+            end_time = _now()
+            master.add_scan(
+                scan_id=scan_id,
+                title=spec.title,
+                start_time=start_time,
+                end_time=end_time,
+                sample=spec.sample,
+                positioners=spec.positioners,
+                detector_links=detector_links,
+                dfxm_geo=spec.dfxm_geo,
+                attrs=spec.attrs,
+            )
+            n_scans += 1
+    return n_scans
 
 
 def write_simulation_h5(
