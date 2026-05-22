@@ -202,7 +202,11 @@ def test_write_simulation_h5_title_correct_for_asymmetric_grid(
         include_perfect_crystal=False,
     )
     with h5py.File(out, "r") as f:
-        title = f["/1.1"].attrs["title"]
+        title = (
+            f["/1.1/title"][()].decode()
+            if isinstance(f["/1.1/title"][()], bytes)
+            else str(f["/1.1/title"][()])
+        )
     # Title must contain phi_steps=3 and chi_steps=2, NOT n_frames=6 for both.
     assert " 3 chi " in title, f"phi_steps=3 not in title: {title!r}"
     assert " 2 1.0" in title, f"chi_steps=2 not in title: {title!r}"

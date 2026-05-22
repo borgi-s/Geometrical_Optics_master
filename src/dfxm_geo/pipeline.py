@@ -608,18 +608,6 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
             "SimulationConfig.reciprocal is None — must specify [reciprocal] "
             "block in TOML or set it programmatically before calling run_simulation."
         )
-    # v1.2.0 scope: the forward kernel only consumes the phi + chi axes from
-    # ScanConfig. ScanGrid/build_scan_grid is implemented and tested but not
-    # yet wired into write_simulation_h5. Raise eagerly so users don't get
-    # silently-wrong output from scanning two_dtheta or z. Lifting this guard
-    # is tracked as a v1.3.0 follow-up.
-    unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
-    if unwired:
-        raise ValueError(
-            f"scan axes {unwired} are configured but not yet wired into the "
-            f"forward kernel (v1.2.0 scope). For now, set range+steps only on "
-            f"[scan.phi] and/or [scan.chi]."
-        )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -653,48 +641,62 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
 
     # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
     # Centered + random_dislocations use Find_Hg_from_population.
+    # Hg_provider(z) returns (Hg, q_hkl) for a given z offset in micrometers.
+    # For non-z scans z is always 0.0 — this preserves v1.2.0 behavior exactly.
     if config.crystal.mode == "wall":
         w = config.crystal.wall
         assert w is not None
         S = SAMPLE_REMOUNT_OPTIONS[w.sample_remount]
-        Hg, q_hkl = fm.Find_Hg(
-            w.dis,
-            w.ndis,
-            fm.psize,
-            fm.zl_rms,
-            h=config.reciprocal.hkl[0],
-            k=config.reciprocal.hkl[1],
-            l=config.reciprocal.hkl[2],
-            S=S,
-            remount_name=w.sample_remount,
-        )
+
+        def Hg_provider(z: float) -> tuple[np.ndarray, np.ndarray]:
+            return fm.Find_Hg(
+                w.dis,
+                w.ndis,
+                fm.psize,
+                fm.zl_rms,
+                h=config.reciprocal.hkl[0],  # type: ignore[union-attr]
+                k=config.reciprocal.hkl[1],  # type: ignore[union-attr]
+                l=config.reciprocal.hkl[2],  # type: ignore[union-attr]
+                S=S,
+                remount_name=w.sample_remount,
+                z_offset_um=z,
+            )
+
         sample_dis = w.dis
         sample_ndis = w.ndis
         sample_remount = w.sample_remount
     else:
-        Hg, q_hkl = fm.Find_Hg_from_population(
-            population,
-            h=config.reciprocal.hkl[0],
-            k=config.reciprocal.hkl[1],
-            l=config.reciprocal.hkl[2],
-        )
+
+        def Hg_provider(z: float) -> tuple[np.ndarray, np.ndarray]:
+            rl_eff = fm.Z_shift(z) if z != 0.0 else None
+            return fm.Find_Hg_from_population(
+                population,
+                h=config.reciprocal.hkl[0],  # type: ignore[union-attr]
+                k=config.reciprocal.hkl[1],  # type: ignore[union-attr]
+                l=config.reciprocal.hkl[2],  # type: ignore[union-attr]
+                rl=rl_eff,
+            )
+
         sample_dis = None  # not applicable for centered/random_dislocations
         sample_ndis = len(population.positions_um)
         sample_remount = "N/A"
 
-    fm.Hg = Hg
+    # Use Hg at z=0 as the "base" provenance Hg stored in /dfxm_geo/Hg.
+    # Per-frame variation is captured in the detector stack + positioners[z].
+    Hg_base, q_hkl = Hg_provider(0.0)
+    fm.Hg = Hg_base
     fm.q_hkl = q_hkl
 
     config_toml = _dataclass_to_toml_str(config)
 
     h5_path = output_dir / "dfxm_geo.h5"
-    frames_at_z = _build_scan_frames_at_z(config.scan, z_value=0.0)
-    positioners = _positioners_for_scan_frames(frames_at_z, config.scan)
+    frames = _build_scan_frames(config.scan)
+    positioners = _positioners_for_scan_frames(frames, config.scan)
     write_simulation_h5(
         h5_path,
-        Hg=Hg,
+        Hg=Hg_base,
         q_hkl=q_hkl,
-        frames=frames_at_z,
+        frames=frames,
         include_perfect_crystal=config.io.include_perfect_crystal,
         sample_dis=sample_dis,
         sample_ndis=sample_ndis,
@@ -706,10 +708,11 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         scan_mode=config.scan.derived_mode_name(),
         scanned_axes=list(config.scan.scanned_axes()),
         positioners=positioners,
+        Hg_provider=Hg_provider,
     )
     return {
         "h5_path": h5_path,
-        "Hg": Hg,
+        "Hg": Hg_base,
         "q_hkl": q_hkl,
         "include_perfect_crystal": config.io.include_perfect_crystal,
     }

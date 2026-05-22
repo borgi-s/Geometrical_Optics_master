@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from dfxm_geo.pipeline import ScanFrames
 
 import h5py
@@ -659,6 +661,7 @@ def write_simulation_h5(
     scan_mode: str | None = None,
     scanned_axes: list[str] | None = None,
     positioners: dict[str, np.ndarray | float] | None = None,
+    Hg_provider: Callable[[float], tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> None:
     """One-call entry point for forward mode, v1.2.0 layout.
 
@@ -748,8 +751,33 @@ def write_simulation_h5(
             scan_dir = out_dir / SCAN_DIR_FMT.format(scan_idx)
             det_path = scan_dir / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
             start = _now()
+            if Hg_provider is not None and scan_idx == 1:
+                # Dislocation scan: use Hg_provider for z-aware per-frame Hg.
+                # z-outermost frame order (from _build_scan_frames) means all frames
+                # at a given z are contiguous; we drop each Hg after its last frame.
+                z_to_Hg: dict[float, np.ndarray] = {}
+                provider_args_list: list[_FrameArgs] = []
+                for k in range(n):
+                    z = float(z_per_frame[k])
+                    if z not in z_to_Hg:
+                        z_to_Hg[z] = Hg_provider(z)[0]  # discard q_hkl on per-z calls
+                    provider_args_list.append(
+                        (
+                            k,
+                            z_to_Hg[z],
+                            float(phi_per_frame[k]),
+                            float(chi_per_frame[k]),
+                            float(two_dtheta_per_frame[k]),
+                        )
+                    )
+                    if k == n - 1 or float(z_per_frame[k + 1]) != z:
+                        del z_to_Hg[z]
+                args_list_for_scan = provider_args_list
+            else:
+                # Perfect crystal /2.1, or back-compat single-Hg case.
+                args_list_for_scan = _build_args(Hg_for_scan)
             _compute_and_write_detector_file_parallel(
-                det_path, _build_args(Hg_for_scan), max_workers=max_workers
+                det_path, args_list_for_scan, max_workers=max_workers
             )
             end = _now()
             sample = {

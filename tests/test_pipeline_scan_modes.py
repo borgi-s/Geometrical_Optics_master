@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from dfxm_geo.pipeline import AxisScanConfig, ScanConfig
@@ -188,3 +190,54 @@ class TestScannedAxesAndIsScanned:
     def test_is_scanned_unknown_axis_raises(self) -> None:
         with pytest.raises(ValueError, match="unknown axis 'omega'"):
             ScanConfig().is_scanned("omega")
+
+
+# ---------------------------------------------------------------------------
+# Integration test: run_simulation with two_dtheta scan no longer raises
+# ---------------------------------------------------------------------------
+
+
+def test_run_simulation_two_dtheta_scan_lifts_value_error(tmp_path: Path) -> None:
+    """Setting [scan.two_dtheta] no longer raises; produces a 4D scan."""
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        CenteredCrystalConfig,
+        CrystalConfig,
+        IOConfig,
+        PostprocessConfig,
+        ReciprocalConfig,
+        ScanConfig,
+        SimulationConfig,
+        run_simulation,
+    )
+
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+    cfg = SimulationConfig(
+        crystal=CrystalConfig(
+            mode="centered",
+            centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=6e-4, steps=2),
+            chi=AxisScanConfig(range=2e-3, steps=2),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=2),
+        ),
+        io=IOConfig(include_perfect_crystal=False),
+        postprocess=PostprocessConfig(enabled=False),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_simulation(cfg, tmp_path)
+
+    import h5py
+
+    with h5py.File(tmp_path / "dfxm_geo.h5", "r") as f:
+        # 2 phi * 2 chi * 2 two_dtheta = 8 frames
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape[0] == 8
+        assert f["/1.1"].attrs["scan_mode"] == "mosa_strain"
+        assert sorted(f["/1.1"].attrs["scanned_axes"]) == ["chi", "phi", "two_dtheta"]
+        # two_dtheta is a per-frame positioner array
+        assert f["/1.1/instrument/positioners/two_dtheta"].shape == (8,)
