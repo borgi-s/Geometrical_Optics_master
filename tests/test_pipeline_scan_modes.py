@@ -298,3 +298,57 @@ def test_run_simulation_z_scan_recomputes_hg_per_z(
         assert f["/1.1/instrument/dfxm_sim_detector/data"].shape[0] == 6
         # z is a per-frame positioner
         assert f["/1.1/instrument/positioners/z"].shape == (6,)
+
+
+def test_phi_chi_only_scan_remains_v120_compatible(tmp_path: Path) -> None:
+    """Phi/chi scan with both two_dtheta/z fixed at 0 produces output with the
+    same flat ordering and frame count as v1.2.0. No two_dtheta/z positioners
+    are present (they collapse to scalars when fixed)."""
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        CenteredCrystalConfig,
+        CrystalConfig,
+        IOConfig,
+        PostprocessConfig,
+        ReciprocalConfig,
+        ScanConfig,
+        SimulationConfig,
+        run_simulation,
+    )
+
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+    cfg = SimulationConfig(
+        crystal=CrystalConfig(
+            mode="centered",
+            centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=6e-4, steps=3),
+            chi=AxisScanConfig(range=2e-3, steps=3),
+        ),
+        io=IOConfig(include_perfect_crystal=False),
+        postprocess=PostprocessConfig(enabled=False),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_simulation(cfg, tmp_path)
+
+    import h5py
+
+    with h5py.File(tmp_path / "dfxm_geo.h5", "r") as f:
+        # 3 phi * 3 chi = 9 frames; detector image is (NN2//Nsub, NN1//Nsub) = (510, 170)
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape == (9, 510, 170)
+        positioners = f["/1.1/instrument/positioners"]
+        assert positioners["phi"].shape == (9,)
+        assert positioners["chi"].shape == (9,)
+        # Fixed axes collapsed to scalars
+        assert positioners["two_dtheta"].shape == ()
+        assert positioners["z"].shape == ()
+        # Frame ordering: phi-innermost
+        phi_pf = positioners["phi"][...]
+        # First 3 frames cycle through phi values, then chi steps.
+        unique_phi = sorted(set(phi_pf[:3].tolist()))
+        assert len(unique_phi) == 3
