@@ -10,6 +10,7 @@ from dfxm_geo.pipeline import (
     AxisScanConfig,
     IdentificationConfig,
     IdentificationCrystalConfig,
+    IdentificationMonteCarloConfig,
     IdentificationNoiseConfig,
     IOConfig,
     ReciprocalConfig,
@@ -74,3 +75,37 @@ def test_single_mode_drops_legacy_sidecars(tmp_path: Path) -> None:
     # No per-plane subdirs left over from the old .npy layout
     for plane_dirname in ("n_1_1_1", "n_1_m1_1", "n_1_1_m1", "n_m1_1_1"):
         assert not (tmp_path / plane_dirname).exists()
+
+
+def test_multi_mode_writes_master_plus_scan_dirs(tmp_path: Path) -> None:
+    cfg = IdentificationConfig(
+        mode="multi",
+        crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
+        scan=ScanConfig(phi=AxisScanConfig(value=1e-4)),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        multi=IdentificationMonteCarloConfig(n_samples=3, pos_std_um=5.0),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+    assert (tmp_path / "dfxm_identify.h5").is_file()
+    for k in range(1, 4):
+        assert (tmp_path / f"scan{k:04d}" / "dfxm_sim_detector_0000.h5").is_file()
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        scan_keys = [k for k in f if k != "dfxm_geo"]
+        assert sorted(scan_keys) == ["1.1", "2.1", "3.1"]
+        for sid in scan_keys:
+            scan = f[sid]
+            assert scan.attrs["identify_mode"] == "multi"
+            samp = scan["sample"]
+            assert "dislocations" in samp
+            disl = samp["dislocations"]
+            assert disl.attrs["NX_class"] == "NXcollection"
+            assert sorted(disl) == ["0", "1"]
+            for idx in ("0", "1"):
+                d = disl[idx]
+                assert d.attrs["NX_class"] == "NXsample"
+                assert "slip_plane_normal" in d
+                assert "burgers" in d
+                assert "rotation_deg" in d
+                assert "position_um" in d

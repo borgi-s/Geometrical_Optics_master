@@ -43,6 +43,9 @@ from dfxm_geo.crystal.dislocations import (
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.hdf5 import (
+    DETECTOR_FILE_FMT,
+    DETECTOR_INTERNAL_PATH,
+    SCAN_DIR_FMT,
     ScanSpec,
     load_h5_scan,
     write_identification_h5,
@@ -1092,21 +1095,6 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _save_preview_png(arr: np.ndarray, png_path: Path) -> None:
-    """Quick matplotlib heatmap snapshot for spot-checking."""
-    import matplotlib
-
-    matplotlib.use("Agg", force=True)
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(4, 2))
-    ax.imshow(arr.T, aspect="auto", origin="lower", cmap="viridis")
-    ax.set_axis_off()
-    fig.tight_layout(pad=0)
-    fig.savefig(png_path, dpi=72, bbox_inches="tight", pad_inches=0)
-    plt.close(fig)
-
-
 def _passes_invisibility(
     q_hkl: np.ndarray,
     b_vec: np.ndarray,
@@ -1132,9 +1120,9 @@ def _iter_identification_single(
     stack with frame ordering phi-inner, chi-outer.
     """
     crystal_cfg = config.crystal
-    # Noise hook lives one phase out: Phase 8.3 of the v1.2.0 plan restores
-    # Poisson + intensity_scale by applying them after write_identification_h5
-    # returns. Phase 7 leaves single-mode noise-free on purpose.
+    # Noiseless frames are emitted here; intensity scaling and optional
+    # Poisson noise are applied to the combined detector file post-write
+    # by `_maybe_apply_poisson_noise` (called from the dispatcher).
 
     planes = (
         _ALL_111_PLANES if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
@@ -1179,12 +1167,6 @@ def _iter_identification_single(
                     Theta=fm.Theta,
                 )
                 Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
-                # Mutating module state (fm.Hg / fm.q_hkl) is safe across the
-                # ThreadPoolExecutor inside write_identification_h5 because the
-                # orchestrator drains all workers for one ScanSpec before
-                # consuming the next yield (see io/hdf5.py:593-621).
-                fm.Hg = Hg
-                fm.q_hkl = q_hkl
 
                 args_list, phi_pf, chi_pf = _scan_frames_args(Hg, Phi, Chi)
 
@@ -1237,6 +1219,7 @@ def _run_identification_single(
         config_toml=config_toml,
         max_workers=config.io.max_workers,
     )
+    _maybe_apply_poisson_noise(config, output_dir, n_scans)
     return {
         "n_images": n_scans,
         "output_dir": output_dir,
@@ -1276,89 +1259,187 @@ def _draw_dislocation(rng: np.random.Generator, pos_std_um: float) -> dict[str, 
     }
 
 
+def _build_dislocation_sample_entry(d: dict[str, Any]) -> dict[str, Any]:
+    """Convert a `_draw_dislocation` output to an NXsample-shaped dict.
+
+    Used to populate `/N.1/sample/dislocations/<idx>` inside the master
+    identification HDF5. The Burgers vector is rounded to integer
+    components (matches the `[h, k, l]` convention used for single mode).
+    """
+    return {
+        "slip_plane_normal": np.asarray(d["plane"], dtype=np.int32),
+        "burgers": np.asarray([int(round(c)) for c in d["b_vec"]], dtype=np.int32),
+        "rotation_deg": float(d["alpha_deg"]),
+        "position_um": np.asarray(d["pos_um"], dtype=float),
+    }
+
+
+def _iter_identification_multi(
+    config: IdentificationConfig,
+) -> Iterator[ScanSpec]:
+    """Yield one ScanSpec per Monte Carlo sample (2 random mixed dislocations).
+
+    `render_per_dislocation=False` (default): a single detector
+    (`dfxm_sim_detector`) holds the combined-scene frames. `=True`: two
+    additional detectors (`dfxm_sim_detector_dis0`, `_dis1`) hold each
+    dislocation rendered in isolation; these per-dislocation files are
+    NOISELESS by construction (they bypass the post-write Poisson pass).
+
+    All frames yielded here are NOISELESS; intensity scaling and
+    optional Poisson noise are applied to the combined detector file
+    post-write by `_maybe_apply_poisson_noise`.
+    """
+    assert config.multi is not None  # validated in __post_init__
+    mc = config.multi
+    noise_cfg = config.noise
+    q_hkl = np.asarray(fm.q_hkl, dtype=float)
+    fm.q_hkl = q_hkl
+
+    # Split master rng → child streams. [0] = param draws (consumed here);
+    # [1] = Poisson noise (consumed by _maybe_apply_poisson_noise, which
+    # re-spawns with the same seed to get the same noise stream).
+    param_rng, _noise_rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)
+
+    scan_mode = config.scan.derived_mode_name()
+    scanned_axes = list(config.scan.scanned_axes())
+    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
+
+    for _ in range(mc.n_samples):
+        d1 = _draw_dislocation(param_rng, mc.pos_std_um)
+        d2 = _draw_dislocation(param_rng, mc.pos_std_um)
+
+        # Combined-scene Hg (sum of both dislocations)
+        specs = [
+            MixedDislocSpec(
+                Ud_mix=d1["Ud"],
+                rotation_deg=d1["alpha_deg"],
+                position_lab_um=d1["pos_um"],
+            ),
+            MixedDislocSpec(
+                Ud_mix=d2["Ud"],
+                rotation_deg=d2["alpha_deg"],
+                position_lab_um=d2["pos_um"],
+            ),
+        ]
+        Fg_combined = Fd_find_multi_dislocs_mixed(fm.rl, fm.Us, specs, fm.Theta)
+        Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
+
+        combined_args, phi_pf, chi_pf = _scan_frames_args(Hg_combined, Phi, Chi)
+        detectors: dict[str, list[tuple[int, np.ndarray, float, float]]] = {
+            "dfxm_sim_detector": combined_args,
+        }
+
+        if mc.render_per_dislocation:
+            # Per-dislocation Hg: each rendered alone (other one absent).
+            # Noiseless by design — these are ground-truth instance labels.
+            Fg_dis0 = Fd_find_mixed(
+                fm.rl,
+                fm.Us,
+                Ud_mix=d1["Ud"],
+                rotation_deg=d1["alpha_deg"],
+                Theta=fm.Theta,
+            )
+            Hg_dis0 = np.transpose(fast_inverse2(Fg_dis0), [0, 2, 1]) - np.identity(3)
+            Fg_dis1 = Fd_find_mixed(
+                fm.rl,
+                fm.Us,
+                Ud_mix=d2["Ud"],
+                rotation_deg=d2["alpha_deg"],
+                Theta=fm.Theta,
+            )
+            Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
+            dis0_args, _, _ = _scan_frames_args(Hg_dis0, Phi, Chi)
+            dis1_args, _, _ = _scan_frames_args(Hg_dis1, Phi, Chi)
+            detectors["dfxm_sim_detector_dis0"] = dis0_args
+            detectors["dfxm_sim_detector_dis1"] = dis1_args
+
+        sample: dict[str, Any] = {
+            "name": "simulated, dislocation identification (multi)",
+            "dislocations": {
+                "0": _build_dislocation_sample_entry(d1),
+                "1": _build_dislocation_sample_entry(d2),
+            },
+        }
+
+        yield ScanSpec(
+            title=_identify_title(scan_mode, n_frames, config.scan),
+            sample=sample,
+            positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
+            dfxm_geo={
+                "Hg": Hg_combined,
+                "q_hkl": q_hkl,
+                "theta": float(fm.theta),
+                "psize": float(fm.psize),
+                "zl_rms": float(fm.zl_rms),
+            },
+            detectors=detectors,
+            attrs={
+                "scan_mode": scan_mode,
+                "scanned_axes": scanned_axes,
+                "identify_mode": "multi",
+            },
+        )
+
+
 def _run_identification_multi(
     config: IdentificationConfig,
     output_dir: Path,
 ) -> dict[str, Any]:
-    """Monte Carlo over n_samples; each sample is 2 random mixed dislocations summed."""
+    """Dispatcher: feed `_iter_identification_multi` into write_identification_h5.
+
+    After the master + per-scan detector files are written, applies a
+    post-write Poisson noise pass (and intensity scaling) to combined
+    detector files only — per-dislocation files stay noiseless.
+    """
     assert config.multi is not None  # validated in __post_init__
-    mc = config.multi
-    noise_cfg = config.noise
-
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "im_data").mkdir(exist_ok=True)
-    (output_dir / "images").mkdir(exist_ok=True)
+    n_scans = write_identification_h5(
+        output_dir,
+        scan_iter=_iter_identification_multi(config),
+        cli=" ".join(sys.argv),
+        config_toml=_identification_config_to_toml_str(config),
+        max_workers=config.io.max_workers,
+    )
+    _maybe_apply_poisson_noise(config, output_dir, n_scans)
+    return {
+        "n_samples": config.multi.n_samples,
+        "output_dir": output_dir,
+        "master_path": output_dir / "dfxm_identify.h5",
+    }
 
-    # Split master rng → child streams (param draws, Poisson noise).
-    master = np.random.default_rng(noise_cfg.rng_seed)
-    param_rng, noise_rng = master.spawn(2)
 
-    manifest_rows: list[dict[str, Any]] = []
-    q_hkl = np.asarray(fm.q_hkl, dtype=float)
-    fm.q_hkl = q_hkl
+def _maybe_apply_poisson_noise(
+    config: IdentificationConfig, output_dir: Path, n_scans: int
+) -> None:
+    """Apply intensity scaling (always) and Poisson noise (if enabled) to
+    combined-detector files post-write.
 
-    pad = max(5, len(str(mc.n_samples - 1)))
-    for k in range(mc.n_samples):
-        d1 = _draw_dislocation(param_rng, mc.pos_std_um)
-        d2 = _draw_dislocation(param_rng, mc.pos_std_um)
-        specs = [
-            MixedDislocSpec(
-                Ud_mix=d1["Ud"], rotation_deg=d1["alpha_deg"], position_lab_um=d1["pos_um"]
-            ),
-            MixedDislocSpec(
-                Ud_mix=d2["Ud"], rotation_deg=d2["alpha_deg"], position_lab_um=d2["pos_um"]
-            ),
-        ]
-        Fg = Fd_find_multi_dislocs_mixed(fm.rl, fm.Us, specs, fm.Theta)
-        Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
-        fm.Hg = Hg
+    Only modifies `dfxm_sim_detector_0000.h5` files; per-dislocation
+    detector files (`*_dis0_0000.h5`, `*_dis1_0000.h5`) are intentionally
+    left untouched so they remain deterministic ground-truth labels.
 
-        image_arr = fm.forward(Hg, phi=config.scan.phi.value)
-        assert isinstance(image_arr, np.ndarray)
-        image = image_arr * noise_cfg.intensity_scale
-        if noise_cfg.poisson_noise:
-            image = noise_rng.poisson(np.clip(image, a_min=0.0, a_max=None)).astype(float)
-
-        stem = f"{k:0{pad}d}"
-        np.save(output_dir / "im_data" / f"{stem}.npy", image)
-        if k < mc.n_png_previews:  # type: ignore[attr-defined]  # removed in v1.2.0; runner rewritten in Phase 8
-            _save_preview_png(image, output_dir / "images" / f"{stem}.png")
-
-        manifest_rows.append(
-            {
-                "sample_id": stem,
-                "n1_h": d1["plane"][0],
-                "n1_k": d1["plane"][1],
-                "n1_l": d1["plane"][2],
-                "b1_idx": d1["b_idx"],
-                "b1_h": int(round(d1["b_vec"][0])),
-                "b1_k": int(round(d1["b_vec"][1])),
-                "b1_l": int(round(d1["b_vec"][2])),
-                "alpha1_deg": d1["alpha_deg"],
-                "x1_um": d1["pos_um"][0],
-                "y1_um": d1["pos_um"][1],
-                "n2_h": d2["plane"][0],
-                "n2_k": d2["plane"][1],
-                "n2_l": d2["plane"][2],
-                "b2_idx": d2["b_idx"],
-                "b2_h": int(round(d2["b_vec"][0])),
-                "b2_k": int(round(d2["b_vec"][1])),
-                "b2_l": int(round(d2["b_vec"][2])),
-                "alpha2_deg": d2["alpha_deg"],
-                "x2_um": d2["pos_um"][0],
-                "y2_um": d2["pos_um"][1],
-                "image_path": f"im_data/{stem}.npy",
-            }
+    Determinism contract: two runs at the same `noise.rng_seed` produce
+    identical combined detector files. The noise stream is the second
+    spawn of `np.random.default_rng(rng_seed).spawn(2)` — the same split
+    used by `_iter_identification_*` for parameter draws (first stream).
+    """
+    noise_cfg = config.noise
+    scale = noise_cfg.intensity_scale
+    if scale == 1.0 and not noise_cfg.poisson_noise:
+        return  # nothing to do; skip the per-scan file open
+    rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)[1] if noise_cfg.poisson_noise else None
+    for k in range(1, n_scans + 1):
+        det_file = (
+            output_dir / SCAN_DIR_FMT.format(k) / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
         )
-
-    manifest_path = output_dir / "manifest.csv"
-    with open(manifest_path, "w", newline="") as fh:
-        if manifest_rows:
-            writer = csv.DictWriter(fh, fieldnames=list(manifest_rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(manifest_rows)
-
-    return {"n_samples": mc.n_samples, "output_dir": output_dir, "manifest_path": manifest_path}
+        if not det_file.is_file():
+            continue
+        with h5py.File(det_file, "a") as f:
+            img = f[DETECTOR_INTERNAL_PATH]
+            arr = img[...] * scale
+            if rng is not None:
+                arr = rng.poisson(np.clip(arr, a_min=0.0, a_max=None)).astype(float)
+            img[...] = arr
 
 
 def _run_identification_zscan(

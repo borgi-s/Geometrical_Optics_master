@@ -47,7 +47,7 @@ def test_identification_montecarlo_config_defaults():
     cfg = IdentificationMonteCarloConfig()
     assert cfg.n_samples == 1000
     assert cfg.pos_std_um == 5.0
-    assert cfg.n_png_previews == 50
+    assert cfg.render_per_dislocation is False
 
 
 def test_identification_crystal_config_is_frozen():
@@ -199,7 +199,7 @@ rng_seed = 42
 [multi]
 n_samples = 100
 pos_std_um = 3.0
-n_png_previews = 10
+render_per_dislocation = false
 
 [io]
 fn_prefix = "/mosa_test_0000_"
@@ -295,14 +295,35 @@ def _tiny_multi_config():
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
         scan=scan,
         noise=noise,
-        multi=IdentificationMonteCarloConfig(n_samples=3, pos_std_um=2.0, n_png_previews=2),
+        multi=IdentificationMonteCarloConfig(n_samples=3, pos_std_um=2.0),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         io=_make_io_config(),
     )
 
 
-def test_run_identification_multi_writes_samples_and_manifest(tmp_path, monkeypatch):
-    """n_samples=3 writes 3 .npy + 2 PNGs (n_png_previews=2) + manifest with 3 rows."""
+def _collect_dislocations(master_path: Path, scan_id: str) -> list[tuple]:
+    """Pull (plane, burgers, rotation_deg, position_um) tuples from a scan."""
+    import h5py
+
+    out: list[tuple] = []
+    with h5py.File(master_path, "r") as f:
+        disl = f[f"/{scan_id}/sample/dislocations"]
+        for idx in sorted(disl):
+            d = disl[idx]
+            out.append(
+                (
+                    tuple(d["slip_plane_normal"][...].tolist()),
+                    tuple(d["burgers"][...].tolist()),
+                    float(d["rotation_deg"][()]),
+                    tuple(d["position_um"][...].tolist()),
+                )
+            )
+    return out
+
+
+def test_run_identification_multi_writes_master_plus_scan_dirs(tmp_path, monkeypatch):
+    """n_samples=3 writes master + 3 scan dirs (v1.2.0 layout), no legacy sidecars."""
+    import h5py
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
@@ -311,50 +332,56 @@ def test_run_identification_multi_writes_samples_and_manifest(tmp_path, monkeypa
     monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: expected_image)
+    # Writer falls back to fm._loaded_kernel_path for provenance when
+    # kernel_npz is None. Point it at a dummy file; no real kernel IO.
+    fake_kernel = tmp_path / "fake_kernel.npz"
+    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
 
     output_dir = tmp_path / "out"
     cfg = _tiny_multi_config()
 
     result = _run_identification_multi(cfg, output_dir)
 
-    npys = sorted((output_dir / "im_data").glob("*.npy"))
-    pngs = sorted((output_dir / "images").glob("*.png"))
-    assert len(npys) == 3
-    assert len(pngs) == 2
-    manifest = output_dir / "manifest.csv"
-    assert manifest.is_file()
-    lines = manifest.read_text(encoding="utf-8").strip().splitlines()
-    assert len(lines) == 4  # header + 3 rows
+    master = output_dir / "dfxm_identify.h5"
+    assert master.is_file()
+    for k in range(1, 4):
+        det = output_dir / f"scan{k:04d}" / "dfxm_sim_detector_0000.h5"
+        assert det.is_file(), f"missing {det}"
+    # No legacy sidecars
+    assert not (output_dir / "manifest.csv").exists()
+    assert not (output_dir / "im_data").exists()
+    assert not (output_dir / "images").exists()
+    with h5py.File(master, "r") as f:
+        scan_ids = sorted(k for k in f if k != "dfxm_geo")
+        assert scan_ids == ["1.1", "2.1", "3.1"]
     assert result["n_samples"] == 3
 
 
 def test_run_identification_multi_is_deterministic_for_seed(tmp_path, monkeypatch):
-    """Two runs at the same seed produce identical manifests."""
+    """Two runs at the same seed produce identical dislocation draws."""
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
 
     monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    counter = {"n": 0}
-
-    def fake_forward(*args, **kwargs):
-        counter["n"] += 1
-        return np.full((170, 510), float(counter["n"]))
-
-    monkeypatch.setattr(fm, "forward", fake_forward)
+    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+    fake_kernel = tmp_path / "fake_kernel.npz"
+    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
 
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
     cfg = _tiny_multi_config()
 
     _run_identification_multi(cfg, out1)
-    counter["n"] = 0
     _run_identification_multi(cfg, out2)
 
-    m1 = (out1 / "manifest.csv").read_text(encoding="utf-8")
-    m2 = (out2 / "manifest.csv").read_text(encoding="utf-8")
-    assert m1 == m2
+    for scan_id in ("1.1", "2.1", "3.1"):
+        d1 = _collect_dislocations(out1 / "dfxm_identify.h5", scan_id)
+        d2 = _collect_dislocations(out2 / "dfxm_identify.h5", scan_id)
+        assert d1 == d2, f"scan {scan_id}: dislocation draws differ"
 
 
 def test_run_identification_dispatches_to_single(tmp_path, monkeypatch):
@@ -387,6 +414,9 @@ def test_run_identification_dispatches_to_multi(tmp_path, monkeypatch):
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
     monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
+    fake_kernel = tmp_path / "fake_kernel.npz"
+    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
 
     cfg = _tiny_multi_config()
     result = run_identification(cfg, tmp_path / "out")
