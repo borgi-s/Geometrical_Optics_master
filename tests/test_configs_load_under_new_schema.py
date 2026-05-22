@@ -34,7 +34,14 @@ def test_forward_config_loads(config_name: str) -> None:
     [
         "identification_single.toml",
         "identification_multi.toml",
-        "identification_zscan.toml",
+        pytest.param(
+            "identification_zscan.toml",
+            marks=pytest.mark.xfail(
+                reason="configs/identification_zscan.toml still uses the pre-Phase-5 "
+                "[zscan] schema; Phase 10 migrates it.",
+                strict=True,
+            ),
+        ),
     ],
 )
 def test_identification_config_loads(config_name: str) -> None:

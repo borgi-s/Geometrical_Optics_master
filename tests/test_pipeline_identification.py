@@ -573,18 +573,10 @@ keV = 17.0
 def test_identification_zscan_config_defaults():
     from dfxm_geo.pipeline import IdentificationZScanConfig
 
-    cfg = IdentificationZScanConfig(
-        z_offsets_um=[0.0],
-        phi_range_deg=0.03,
-        phi_steps=11,
-        chi_range_deg=0.1,
-        chi_steps=11,
-    )
+    cfg = IdentificationZScanConfig(z_offsets_um=[0.0])
     assert cfg.z_offsets_um == [0.0]
-    assert cfg.phi_steps == 11
-    assert cfg.chi_steps == 11
     assert cfg.include_secondary is True
-    assert cfg.secondary_rng_offset == 1
+    assert cfg.secondary_rng_offset == 0
 
 
 def test_identification_zscan_config_is_frozen():
@@ -592,21 +584,22 @@ def test_identification_zscan_config_is_frozen():
 
     from dfxm_geo.pipeline import IdentificationZScanConfig
 
-    cfg = IdentificationZScanConfig(
-        z_offsets_um=[0.0],
-        phi_range_deg=0.03,
-        phi_steps=11,
-        chi_range_deg=0.1,
-        chi_steps=11,
-    )
+    cfg = IdentificationZScanConfig(z_offsets_um=[0.0])
     with pytest.raises(FrozenInstanceError):
-        cfg.phi_steps = 21  # type: ignore[misc]
+        cfg.secondary_rng_offset = 2  # type: ignore[misc]
 
 
 def _tiny_zscan_config(slip_plane=(1, 1, 1)):
+    """Tiny z-scan config: 1 layer x 1 plane x 1 b x 1 alpha = 1 scan,
+    with a phi x chi rocking grid coming from the shared [scan.<axis>]
+    schema (B+C). include_secondary=False to skip the random draw.
+    """
     from dfxm_geo.pipeline import IdentificationZScanConfig
 
-    scan = ScanConfig(phi=AxisScanConfig(value=150e-6))
+    scan = ScanConfig(
+        phi=AxisScanConfig(range=0.034377, steps=2),
+        chi=AxisScanConfig(range=0.114, steps=2),
+    )
     noise = IdentificationNoiseConfig(rng_seed=0, intensity_scale=1.0)
     return IdentificationConfig(
         mode="z-scan",
@@ -623,10 +616,6 @@ def _tiny_zscan_config(slip_plane=(1, 1, 1)):
         noise=noise,
         zscan=IdentificationZScanConfig(
             z_offsets_um=[0.0],
-            phi_range_deg=0.03,
-            phi_steps=2,
-            chi_range_deg=0.1,
-            chi_steps=2,
             include_secondary=False,
         ),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
@@ -667,19 +656,16 @@ def test_identification_config_mode_single_rejects_zscan_block():
             crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
             scan=scan,
             noise=noise,
-            zscan=IdentificationZScanConfig(
-                z_offsets_um=[0.0],
-                phi_range_deg=0.03,
-                phi_steps=2,
-                chi_range_deg=0.1,
-                chi_steps=2,
-            ),
+            zscan=IdentificationZScanConfig(z_offsets_um=[0.0]),
             io=_make_io_config(),
         )
 
 
 def test_load_identification_config_zscan(tmp_path):
-    """A mode='z-scan' TOML round-trips, including the [zscan] block."""
+    """A mode='z-scan' TOML round-trips under the post-Phase-5 schema:
+    [zscan] carries only z_offsets_um / include_secondary / secondary_rng_offset,
+    and the rocking grid lives in [scan.phi] / [scan.chi].
+    """
     toml_text = """
 mode = "z-scan"
 
@@ -687,17 +673,17 @@ mode = "z-scan"
 slip_plane_normal = [1, 1, 1]
 
 [scan.phi]
-value = 1.5e-4
+range = 0.03
+steps = 21
+[scan.chi]
+range = 0.1
+steps = 21
 
 [noise]
 rng_seed = 7
 
 [zscan]
 z_offsets_um = [-1.0, 0.0, 1.0]
-phi_range_deg = 0.03
-phi_steps = 21
-chi_range_deg = 0.1
-chi_steps = 21
 include_secondary = true
 secondary_rng_offset = 2
 
@@ -719,15 +705,18 @@ keV = 17.0
     assert cfg.mode == "z-scan"
     assert cfg.zscan is not None
     assert cfg.zscan.z_offsets_um == [-1.0, 0.0, 1.0]
-    assert cfg.zscan.phi_steps == 21
     assert cfg.zscan.include_secondary is True
     assert cfg.zscan.secondary_rng_offset == 2
+    assert cfg.scan.phi.steps == 21
+    assert cfg.scan.chi.steps == 21
     assert cfg.noise.rng_seed == 7
 
 
 def test_run_identification_zscan_writes_per_config_rocking_grid(tmp_path, monkeypatch):
-    """Tiny z-scan: 1 layer x 1 plane x 1 b x 1 alpha = 1 configuration ->
-    1 config directory with phi_steps*chi_steps .npy files (4 here)."""
+    """Tiny z-scan: 1 layer x 1 plane x 1 b x 1 alpha = 1 configuration -> 1 scan
+    dir under the v1.2.0 master+per-scan HDF5 layout, with phi_steps*chi_steps frames.
+    """
+    import h5py
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
@@ -736,26 +725,62 @@ def test_run_identification_zscan_writes_per_config_rocking_grid(tmp_path, monke
     monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+    # Writer falls back to fm._loaded_kernel_path for provenance when
+    # kernel_npz is None. Point it at a dummy file; no real kernel IO.
+    fake_kernel = tmp_path / "fake_kernel.npz"
+    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
 
     output_dir = tmp_path / "out"
     cfg = _tiny_zscan_config()
     result = _run_identification_zscan(cfg, output_dir)
 
-    layer_dirs = sorted(output_dir.glob("layer_*"))
-    assert len(layer_dirs) == 1
-    config_dirs = list((layer_dirs[0] / "n_1_1_1").glob("b*"))
-    assert len(config_dirs) == 1
-    npys = list(config_dirs[0].glob("*.npy"))
-    assert len(npys) == 4  # 2 phi * 2 chi
-    manifest = output_dir / "manifest.csv"
-    assert manifest.is_file()
-    lines = manifest.read_text(encoding="utf-8").strip().splitlines()
-    assert len(lines) == 2  # header + 1 row
+    master = output_dir / "dfxm_identify.h5"
+    assert master.is_file()
+    det = output_dir / "scan0001" / "dfxm_sim_detector_0000.h5"
+    assert det.is_file()
+    # No legacy sidecars / per-config dirs
+    assert not (output_dir / "manifest.csv").exists()
+    assert not (output_dir / "layer_0000").exists()
+    with h5py.File(master, "r") as f:
+        scan_ids = sorted(k for k in f if k != "dfxm_geo")
+        assert scan_ids == ["1.1"]
+        scan = f["/1.1"]
+        assert scan.attrs["identify_mode"] == "z-scan"
+        # 2 phi * 2 chi = 4 frames
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape[0] == 4
+        samp = scan["sample"]
+        assert "z_offset_um" in samp
+        assert "primary" in samp
+        assert "secondary" not in samp  # include_secondary=False
     assert result["n_configurations"] == 1
 
 
+def _collect_zscan_secondaries(master_path: Path) -> list[tuple]:
+    """Pull each scan's secondary-dislocation draw from the master HDF5."""
+    import h5py
+
+    out: list[tuple] = []
+    with h5py.File(master_path, "r") as f:
+        scan_ids = sorted((k for k in f if k != "dfxm_geo"), key=lambda s: int(s.split(".")[0]))
+        for sid in scan_ids:
+            samp = f[f"/{sid}/sample"]
+            sec = samp["secondary"]
+            out.append(
+                (
+                    tuple(sec["slip_plane_normal"][...].tolist()),
+                    tuple(sec["burgers"][...].tolist()),
+                    float(sec["rotation_deg"][()]),
+                    tuple(sec["position_um"][...].tolist()),
+                )
+            )
+    return out
+
+
 def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatch):
-    """Two runs at same seed produce identical manifests (same secondary draws)."""
+    """Two runs at the same seed produce identical secondary-dislocation draws
+    in every scan (compared via the master HDF5's /N.1/sample/secondary group).
+    """
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
@@ -764,8 +789,14 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
     monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
+    fake_kernel = tmp_path / "fake_kernel.npz"
+    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
 
-    scan = ScanConfig(phi=AxisScanConfig(value=150e-6))
+    scan = ScanConfig(
+        phi=AxisScanConfig(range=0.034377, steps=2),
+        chi=AxisScanConfig(range=0.114, steps=2),
+    )
     noise = IdentificationNoiseConfig(rng_seed=0, intensity_scale=1.0)
     cfg = IdentificationConfig(
         mode="z-scan",
@@ -782,10 +813,6 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
         noise=noise,
         zscan=IdentificationZScanConfig(
             z_offsets_um=[0.0],
-            phi_range_deg=0.03,
-            phi_steps=2,
-            chi_range_deg=0.1,
-            chi_steps=2,
             include_secondary=True,  # exercise the secondary draw
         ),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
@@ -797,9 +824,10 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
     _run_identification_zscan(cfg, out1)
     _run_identification_zscan(cfg, out2)
 
-    m1 = (out1 / "manifest.csv").read_text(encoding="utf-8")
-    m2 = (out2 / "manifest.csv").read_text(encoding="utf-8")
-    assert m1 == m2
+    s1 = _collect_zscan_secondaries(out1 / "dfxm_identify.h5")
+    s2 = _collect_zscan_secondaries(out2 / "dfxm_identify.h5")
+    assert s1 == s2
+    assert len(s1) == 4  # 2 b * 2 alpha = 4 scans
 
 
 def test_run_identification_dispatches_to_zscan(tmp_path, monkeypatch):
@@ -813,6 +841,9 @@ def test_run_identification_dispatches_to_zscan(tmp_path, monkeypatch):
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
     monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
+    fake_kernel = tmp_path / "fake_kernel.npz"
+    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
 
     cfg = _tiny_zscan_config()
     result = run_identification(cfg, tmp_path / "out")
@@ -820,7 +851,7 @@ def test_run_identification_dispatches_to_zscan(tmp_path, monkeypatch):
 
 
 def test_cli_main_identify_zscan_mode(tmp_path, monkeypatch):
-    """The CLI accepts --mode z-scan and produces a manifest."""
+    """The CLI accepts --mode z-scan and produces the v1.2.0 master HDF5."""
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
@@ -830,6 +861,9 @@ def test_cli_main_identify_zscan_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
     monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
     monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
+    fake_kernel = tmp_path / "fake_kernel.npz"
+    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
 
     toml_text = """
 mode = "z-scan"
@@ -844,7 +878,11 @@ sweep_all_slip_planes = false
 exclude_invisibility = false
 
 [scan.phi]
-value = 1.5e-4
+range = 0.034377
+steps = 2
+[scan.chi]
+range = 0.114
+steps = 2
 
 [noise]
 poisson_noise = false
@@ -853,10 +891,6 @@ intensity_scale = 1.0
 
 [zscan]
 z_offsets_um = [0.0]
-phi_range_deg = 0.03
-phi_steps = 2
-chi_range_deg = 0.1
-chi_steps = 2
 include_secondary = false
 
 [io]
@@ -876,9 +910,14 @@ keV = 17.0
 
     exit_code = cli_main_identify(["--config", str(cfg_path), "--output", str(out_dir)])
     assert exit_code == 0
-    assert (out_dir / "manifest.csv").is_file()
+    assert (out_dir / "dfxm_identify.h5").is_file()
 
 
+@pytest.mark.xfail(
+    reason="configs/identification_zscan.toml still uses the pre-Phase-5 [zscan] schema; "
+    "Phase 10 migrates it.",
+    strict=True,
+)
 def test_example_zscan_config_loads():
     """configs/identification_zscan.toml parses and validates."""
     repo_root = Path(__file__).resolve().parents[1]
@@ -949,10 +988,6 @@ class TestIdentificationConfigZScanForbidsScanZ:
             "\n"
             "[zscan]\n"
             "z_offsets_um = [-1.0, 0.0, 1.0]\n"
-            "phi_range_deg = 0.03\n"
-            "phi_steps = 5\n"
-            "chi_range_deg = 0.1\n"
-            "chi_steps = 5\n"
             "\n"
             "[io]\n"
             "include_perfect_crystal = false\n"

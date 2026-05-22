@@ -41,7 +41,7 @@ phi_steps = 21                                 # downscaled example; bump to 61 
 chi_range_deg = 0.11459155902616465
 chi_steps = 21
 include_secondary = true
-secondary_rng_offset = 1
+secondary_rng_offset = 0   # independent from Poisson-noise stream (child[1])
 
 [io]
 fn_prefix = "/mosa_test_0000_"

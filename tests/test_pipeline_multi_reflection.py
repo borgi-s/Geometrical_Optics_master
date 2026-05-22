@@ -80,9 +80,10 @@ class TestForwardMultiReflection:
         )
         monkeypatch.setattr(fm, "pkl_fpath", str(tmp_path / "pkl_files") + os.sep)
 
-        # Monkey-patch the heavy pieces.
+        # Monkey-patch the heavy pieces. (save_images_parallel is no longer
+        # called directly from pipeline.py post-Phase-9; the only remaining
+        # heavy call site is write_simulation_h5.)
         monkeypatch.setattr(fm, "Find_Hg", lambda *a, **k: (np.zeros((4, 4, 4)), np.zeros(3)))
-        monkeypatch.setattr(p, "save_images_parallel", lambda *a, **k: [])
         monkeypatch.setattr(
             p,
             "write_simulation_h5",
