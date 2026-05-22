@@ -1198,11 +1198,16 @@ def _passes_invisibility(
 def _iter_identification_single(
     config: IdentificationConfig,
 ) -> Iterator[ScanSpec]:
-    """Yield one ScanSpec per (plane, b_idx, alpha) configuration.
+    """Yield one ScanSpec per (z, plane, b_idx, alpha) configuration.
 
     Supports `[scan.phi]` / `[scan.chi]` from the shared ScanConfig: when
     either axis is scanned, each scan dir contains a (N_frames, H, W)
     stack with frame ordering phi-inner, chi-outer.
+
+    When `[scan.z]` is configured, the iterator loops z outermost: each
+    unique z value produces its own set of (plane × b × alpha) ScanSpecs,
+    with `rl_eff = fm.Z_shift(z)` substituted into `Fd_find_mixed`.
+    When z is fixed, z_samples has length 1 (no extra scans emitted).
     """
     crystal_cfg = config.crystal
     # Noiseless frames are emitted here; intensity scaling and optional
@@ -1222,68 +1227,77 @@ def _iter_identification_single(
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
-    frames_at_z = _build_scan_frames_at_z(config.scan, z_value=0.0)
-    n_frames = frames_at_z.n_frames
 
-    for plane in planes:
-        b_table = _burgers_vectors(plane)
-        b_indices = (
-            crystal_cfg.b_vector_indices
-            if crystal_cfg.b_vector_indices is not None
-            else list(range(len(b_table)))
-        )
-        b_subset = b_table[b_indices]
-        n_arr_unnorm = np.asarray(plane, dtype=float)
-        n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
-        rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
-        Ud_all = _ud_matrices(n_arr, rotated)
+    # Outer z loop. When z is fixed, z_samples is a length-1 array so the
+    # loop body executes once — identical to the pre-z-aware behaviour.
+    from dfxm_geo.direct_space.forward_model import build_scan_grid
 
-        for j, b_idx in enumerate(b_indices):
-            if crystal_cfg.exclude_invisibility and not _passes_invisibility(
-                q_hkl, b_table[b_idx], crystal_cfg.invisibility_threshold_deg
-            ):
-                continue
-            for i, alpha in enumerate(angles_deg):
-                Ud_mix = Ud_all[i, j]
-                Fg = Fd_find_mixed(
-                    fm.rl,
-                    fm.Us,
-                    Ud_mix=Ud_mix,
-                    rotation_deg=float(alpha),
-                    Theta=fm.Theta,
-                )
-                Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
+    z_samples = build_scan_grid(config.scan).samples[3]
 
-                args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan)
+    for z in z_samples:
+        z_float = float(z)
+        rl_eff = fm.Z_shift(z_float) if z_float != 0.0 else fm.rl
+        frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
-                burgers_int = (
-                    int(round(b_table[b_idx, 0] * np.sqrt(2))),
-                    int(round(b_table[b_idx, 1] * np.sqrt(2))),
-                    int(round(b_table[b_idx, 2] * np.sqrt(2))),
-                )
-                yield ScanSpec(
-                    title=_identify_title(scan_mode, n_frames, config.scan),
-                    sample={
-                        "name": "simulated, dislocation identification (single)",
-                        "slip_plane_normal": np.asarray(plane, dtype=np.int32),
-                        "burgers": np.asarray(burgers_int, dtype=np.int32),
-                        "rotation_deg": float(alpha),
-                    },
-                    positioners=positioners,
-                    dfxm_geo={
-                        "Hg": Hg,
-                        "q_hkl": q_hkl,
-                        "theta": float(fm.theta),
-                        "psize": float(fm.psize),
-                        "zl_rms": float(fm.zl_rms),
-                    },
-                    detectors={"dfxm_sim_detector": args_list},
-                    attrs={
-                        "scan_mode": scan_mode,
-                        "scanned_axes": scanned_axes,
-                        "identify_mode": "single",
-                    },
-                )
+        for plane in planes:
+            b_table = _burgers_vectors(plane)
+            b_indices = (
+                crystal_cfg.b_vector_indices
+                if crystal_cfg.b_vector_indices is not None
+                else list(range(len(b_table)))
+            )
+            b_subset = b_table[b_indices]
+            n_arr_unnorm = np.asarray(plane, dtype=float)
+            n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
+            rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
+            Ud_all = _ud_matrices(n_arr, rotated)
+
+            for j, b_idx in enumerate(b_indices):
+                if crystal_cfg.exclude_invisibility and not _passes_invisibility(
+                    q_hkl, b_table[b_idx], crystal_cfg.invisibility_threshold_deg
+                ):
+                    continue
+                for i, alpha in enumerate(angles_deg):
+                    Ud_mix = Ud_all[i, j]
+                    Fg = Fd_find_mixed(
+                        rl_eff,
+                        fm.Us,
+                        Ud_mix=Ud_mix,
+                        rotation_deg=float(alpha),
+                        Theta=fm.Theta,
+                    )
+                    Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
+
+                    args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan)
+
+                    burgers_int = (
+                        int(round(b_table[b_idx, 0] * np.sqrt(2))),
+                        int(round(b_table[b_idx, 1] * np.sqrt(2))),
+                        int(round(b_table[b_idx, 2] * np.sqrt(2))),
+                    )
+                    yield ScanSpec(
+                        title=_identify_title(scan_mode, frames_at_z.n_frames, config.scan),
+                        sample={
+                            "name": "simulated, dislocation identification (single)",
+                            "slip_plane_normal": np.asarray(plane, dtype=np.int32),
+                            "burgers": np.asarray(burgers_int, dtype=np.int32),
+                            "rotation_deg": float(alpha),
+                        },
+                        positioners=positioners,
+                        dfxm_geo={
+                            "Hg": Hg,
+                            "q_hkl": q_hkl,
+                            "theta": float(fm.theta),
+                            "psize": float(fm.psize),
+                            "zl_rms": float(fm.zl_rms),
+                        },
+                        detectors={"dfxm_sim_detector": args_list},
+                        attrs={
+                            "scan_mode": scan_mode,
+                            "scanned_axes": scanned_axes,
+                            "identify_mode": "single",
+                        },
+                    )
 
 
 def _run_identification_single(
@@ -1699,16 +1713,14 @@ def run_identification(
             "IdentificationConfig.reciprocal is None — must specify [reciprocal] "
             "block in TOML or set it programmatically before calling run_identification."
         )
-    # v1.2.0 scope: identify kernels only consume phi + chi. ScanGrid for
-    # two_dtheta / z is implemented but not wired into the identify forward
-    # path. Raise eagerly so users don't get silently-wrong output. Lifting
-    # this guard is tracked as a v1.3.0 follow-up.
-    unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
-    if unwired:
+    # two_dtheta is not yet wired into the identify forward path. Raise eagerly
+    # so users don't get silently-wrong output. z is now wired for single + multi
+    # (v1.3.0-A); two_dtheta lifting is tracked as a future follow-up.
+    if config.scan.is_scanned("two_dtheta"):
         raise ValueError(
-            f"scan axes {unwired} are configured but not yet wired into "
-            f"identification (v1.2.0 scope). For now, set range+steps only on "
-            f"[scan.phi] and/or [scan.chi]."
+            "scan axis two_dtheta is configured but not yet wired into "
+            "identification. For now, set range+steps only on "
+            "[scan.phi], [scan.chi], and/or [scan.z]."
         )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
