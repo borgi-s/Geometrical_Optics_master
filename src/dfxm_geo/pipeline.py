@@ -688,14 +688,13 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     config_toml = _dataclass_to_toml_str(config)
 
     h5_path = output_dir / "dfxm_geo.h5"
+    frames_at_z = _build_scan_frames_at_z(config.scan, z_value=0.0)
+    positioners = _positioners_for_scan_frames(frames_at_z, config.scan)
     write_simulation_h5(
         h5_path,
         Hg=Hg,
         q_hkl=q_hkl,
-        phi_range=config.scan.phi.range or 0.0,
-        phi_steps=config.scan.phi.steps or 1,
-        chi_range=config.scan.chi.range or 0.0,
-        chi_steps=config.scan.chi.steps or 1,
+        frames=frames_at_z,
         include_perfect_crystal=config.io.include_perfect_crystal,
         sample_dis=sample_dis,
         sample_ndis=sample_ndis,
@@ -706,6 +705,7 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         crystal_mode=config.crystal.mode,
         scan_mode=config.scan.derived_mode_name(),
         scanned_axes=list(config.scan.scanned_axes()),
+        positioners=positioners,
     )
     return {
         "h5_path": h5_path,

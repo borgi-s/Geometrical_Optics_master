@@ -11,6 +11,7 @@ import pytest
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.io.hdf5 import write_simulation_h5
+from dfxm_geo.pipeline import ScanFrames
 
 
 @pytest.fixture
@@ -28,15 +29,25 @@ def test_write_simulation_h5_creates_both_scans(tmp_path: Path, _kernel_loaded: 
         S=SAMPLE_REMOUNT_OPTIONS["S1"],
         remount_name="S1",
     )
+    # 3 phi steps × 1 chi step = 3 frames; phi/chi in radians.
+    _phi = np.linspace(-0.0006, 0.0006, 3)
+    _chi = np.zeros(1)
+    _phi_pf = np.tile(_phi, len(_chi))
+    _chi_pf = np.repeat(_chi, len(_phi))
+    _n = len(_phi_pf)
+    _frames = ScanFrames(
+        phi_pf=_phi_pf,
+        chi_pf=_chi_pf,
+        two_dtheta_pf=np.zeros(_n),
+        z_pf=np.zeros(_n),
+        n_frames=_n,
+    )
     out = tmp_path / "dfxm_geo.h5"
     write_simulation_h5(
         out,
         Hg=Hg,
         q_hkl=q_hkl,
-        phi_range=0.0006 * 180 / np.pi,
-        phi_steps=3,
-        chi_range=0.002 * 180 / np.pi,
-        chi_steps=1,
+        frames=_frames,
         include_perfect_crystal=True,
         sample_dis=4.0,
         sample_ndis=151,
@@ -67,15 +78,25 @@ def test_write_simulation_h5_skips_perfect_when_disabled(
         S=SAMPLE_REMOUNT_OPTIONS["S1"],
         remount_name="S1",
     )
+    # 3 phi steps × 1 chi step = 3 frames; phi/chi in radians.
+    _phi = np.linspace(-0.0006, 0.0006, 3)
+    _chi = np.zeros(1)
+    _phi_pf = np.tile(_phi, len(_chi))
+    _chi_pf = np.repeat(_chi, len(_phi))
+    _n = len(_phi_pf)
+    _frames = ScanFrames(
+        phi_pf=_phi_pf,
+        chi_pf=_chi_pf,
+        two_dtheta_pf=np.zeros(_n),
+        z_pf=np.zeros(_n),
+        n_frames=_n,
+    )
     out = tmp_path / "dfxm_geo.h5"
     write_simulation_h5(
         out,
         Hg=Hg,
         q_hkl=q_hkl,
-        phi_range=0.0006 * 180 / np.pi,
-        phi_steps=3,
-        chi_range=0.002 * 180 / np.pi,
-        chi_steps=1,
+        frames=_frames,
         include_perfect_crystal=False,
         sample_dis=4.0,
         sample_ndis=151,

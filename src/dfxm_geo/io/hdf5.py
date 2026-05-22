@@ -21,7 +21,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from dfxm_geo.pipeline import ScanFrames
 
 import h5py
 import numpy as np
@@ -551,6 +554,16 @@ def _scan_title(phi_range: float, phi_steps: int, chi_range: float, chi_steps: i
     )
 
 
+def _scan_title_from_frames(frames: ScanFrames) -> str:
+    """fscan2d title string derived from a ScanFrames (radians, n_frames)."""
+    phi_min = float(frames.phi_pf.min())
+    phi_max = float(frames.phi_pf.max())
+    chi_min = float(frames.chi_pf.min())
+    chi_max = float(frames.chi_pf.max())
+    n = frames.n_frames
+    return f"fscan2d phi {phi_min:.6f} {phi_max:.6f} {n} chi {chi_min:.6f} {chi_max:.6f} {n} 1.0"
+
+
 def write_identification_h5(
     output_dir: Path,
     *,
@@ -627,10 +640,7 @@ def write_simulation_h5(
     *,
     Hg: np.ndarray,
     q_hkl: np.ndarray,
-    phi_range: float,
-    phi_steps: int,
-    chi_range: float,
-    chi_steps: int,
+    frames: ScanFrames,
     include_perfect_crystal: bool = True,
     sample_dis: float | None,
     sample_ndis: int,
@@ -642,12 +652,21 @@ def write_simulation_h5(
     crystal_mode: str | None = None,
     scan_mode: str | None = None,
     scanned_axes: list[str] | None = None,
+    positioners: dict[str, np.ndarray | float] | None = None,
 ) -> None:
     """One-call entry point for forward mode, v1.2.0 layout.
 
     `path` is the master file (`<out_dir>/dfxm_geo.h5`); detector pixels live
     in sibling `scan0001/` / `scan0002/` directories alongside it, linked
-    via ExternalLink. External signature unchanged from v1.1.0.
+    via ExternalLink.
+
+    `frames` replaces the legacy `phi_range/phi_steps/chi_range/chi_steps` kwargs
+    (removed in v1.3.0-A).  All per-frame arrays in `frames` are in radians /
+    micrometers — no degree conversion is applied here.
+
+    `positioners`, if provided, is passed verbatim to `master.add_scan`.
+    If None, it is derived from `frames` + `scanned_axes`: scanned axes
+    receive the full per-frame array, fixed axes default to 0.0.
     """
 
     if kernel_npz is None:
@@ -661,29 +680,28 @@ def write_simulation_h5(
     out_dir = path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    Phi = np.linspace(-np.deg2rad(phi_range), np.deg2rad(phi_range), phi_steps)
-    Chi = np.linspace(-np.deg2rad(chi_range), np.deg2rad(chi_range), chi_steps)
-    n = phi_steps * chi_steps
-    phi_per_frame = np.empty(n, dtype=np.float64)
-    chi_per_frame = np.empty(n, dtype=np.float64)
-    for chi_idx in range(chi_steps):
-        for phi_idx in range(phi_steps):
-            k = chi_idx * phi_steps + phi_idx
-            phi_per_frame[k] = Phi[phi_idx]
-            chi_per_frame[k] = Chi[chi_idx]
+    n = frames.n_frames
+    phi_per_frame = frames.phi_pf
+    chi_per_frame = frames.chi_pf
+    two_dtheta_per_frame = frames.two_dtheta_pf
+    z_per_frame = frames.z_pf
 
-    title = _scan_title(phi_range, phi_steps, chi_range, chi_steps)
+    title = _scan_title_from_frames(frames)
 
     def _now() -> str:
         return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
 
     def _build_args(Hg_in: np.ndarray) -> list[_FrameArgs]:
-        out: list[_FrameArgs] = []
-        for chi_idx in range(chi_steps):
-            for phi_idx in range(phi_steps):
-                k = chi_idx * phi_steps + phi_idx
-                out.append((k, Hg_in, float(Phi[phi_idx]), float(Chi[chi_idx]), 0.0))
-        return out
+        return [
+            (
+                i,
+                Hg_in,
+                float(phi_per_frame[i]),
+                float(chi_per_frame[i]),
+                float(two_dtheta_per_frame[i]),
+            )
+            for i in range(n)
+        ]
 
     attrs_1_1: dict[str, str | list[str]] = {}
     if scan_mode is not None:
@@ -692,6 +710,23 @@ def write_simulation_h5(
         attrs_1_1["scanned_axes"] = list(scanned_axes)
     if crystal_mode is not None:
         attrs_1_1["crystal_mode"] = crystal_mode
+
+    # Build positioners dict once; reused for both /1.1 and /2.1 add_scan calls.
+    if positioners is None:
+        pos_dict: dict[str, np.ndarray | float] = {
+            "phi": phi_per_frame,
+            "chi": chi_per_frame,
+        }
+        if scan_mode and "two_dtheta" in (scanned_axes or []):
+            pos_dict["two_dtheta"] = two_dtheta_per_frame
+        else:
+            pos_dict["two_dtheta"] = 0.0
+        if scan_mode and "z" in (scanned_axes or []):
+            pos_dict["z"] = z_per_frame
+        else:
+            pos_dict["z"] = 0.0
+    else:
+        pos_dict = positioners
 
     # Build the per-scan plan: /1.1 dislocations always, /2.1 perfect crystal
     # only if requested. Both scans share positioners, attrs, sample metadata
@@ -724,7 +759,7 @@ def write_simulation_h5(
                 start_time=start,
                 end_time=end,
                 sample=sample,
-                positioners={"phi": phi_per_frame, "chi": chi_per_frame},
+                positioners=pos_dict,
                 detector_links={
                     "dfxm_sim_detector": (
                         Path(SCAN_DIR_FMT.format(scan_idx))
