@@ -913,11 +913,6 @@ keV = 17.0
     assert (out_dir / "dfxm_identify.h5").is_file()
 
 
-@pytest.mark.xfail(
-    reason="configs/identification_zscan.toml still uses the pre-Phase-5 [zscan] schema; "
-    "Phase 10 migrates it.",
-    strict=True,
-)
 def test_example_zscan_config_loads():
     """configs/identification_zscan.toml parses and validates."""
     repo_root = Path(__file__).resolve().parents[1]
