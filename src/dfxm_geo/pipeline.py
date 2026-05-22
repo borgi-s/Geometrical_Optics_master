@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import sys
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -1019,6 +1019,37 @@ def _build_scan_frames_at_z(scan: ScanConfig, z_value: float) -> ScanFrames:
         z_pf=np.full(n, float(z_value), dtype=np.float64),
         n_frames=n,
     )
+
+
+def _iterate_simulation_frames(
+    frames: ScanFrames,
+    Hg_provider: Callable[[float], np.ndarray],
+) -> Iterator[tuple[int, np.ndarray, float, float, float]]:
+    """Yield (idx, Hg, phi, chi, two_dtheta) per frame; Hg_provider called once per unique z.
+
+    Memory mitigation: because z is the outermost loop in `_build_scan_frames`
+    (z-outermost frame order), all frames sharing a z value are contiguous in
+    `frames.z_pf`. After the last frame at a given z is yielded, the cached
+    Hg is dropped — only one Hg lives in memory at any time during the walk.
+    """
+    z_to_Hg: dict[float, np.ndarray] = {}
+    z_pf = frames.z_pf
+    n = frames.n_frames
+    for k in range(n):
+        z = float(z_pf[k])
+        if z not in z_to_Hg:
+            z_to_Hg[z] = Hg_provider(z)
+        yield (
+            k,
+            z_to_Hg[z],
+            float(frames.phi_pf[k]),
+            float(frames.chi_pf[k]),
+            float(frames.two_dtheta_pf[k]),
+        )
+        # If this is the last frame at this z (either we're at the end,
+        # or the next frame has a different z), free the Hg array.
+        if k == n - 1 or float(z_pf[k + 1]) != z:
+            del z_to_Hg[z]
 
 
 def _scan_frames_args(

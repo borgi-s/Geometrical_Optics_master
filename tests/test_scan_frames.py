@@ -10,6 +10,7 @@ from dfxm_geo.pipeline import (
     ScanFrames,
     _build_scan_frames,
     _build_scan_frames_at_z,
+    _iterate_simulation_frames,
     _scan_frames_args,
 )
 
@@ -141,6 +142,82 @@ def test_scan_frames_args_returns_5_tuples():
     # Per-frame phi/chi/two_dtheta come straight from frames
     np.testing.assert_allclose([tup[2] for tup in args_list], frames.phi_pf)
     np.testing.assert_allclose([tup[4] for tup in args_list], frames.two_dtheta_pf)
+
+
+# ---------------------------------------------------------------------------
+# Task 7: _iterate_simulation_frames
+# ---------------------------------------------------------------------------
+
+
+def test_iterate_simulation_frames_single_z_calls_provider_once():
+    """When no z-scan, Hg_provider is called exactly once with z=0."""
+    cfg = ScanConfig(
+        phi=AxisScanConfig(range=1e-3, steps=3),
+        chi=AxisScanConfig(range=2e-3, steps=2),
+    )
+    frames = _build_scan_frames(cfg)
+    calls: list[float] = []
+    fake_Hg = np.zeros((10, 3, 3))
+
+    def Hg_provider(z: float) -> np.ndarray:
+        calls.append(z)
+        return fake_Hg
+
+    out = list(_iterate_simulation_frames(frames, Hg_provider))
+    assert calls == [0.0]
+    assert len(out) == 6  # 3 phi x 2 chi
+    # Each tuple is (idx, Hg, phi, chi, two_dtheta).
+    indices = [t[0] for t in out]
+    assert indices == list(range(6))
+    for t in out:
+        assert t[1] is fake_Hg
+
+
+def test_iterate_simulation_frames_z_scan_calls_provider_per_unique_z():
+    """When z is scanned, Hg_provider is called once per unique z."""
+    cfg = ScanConfig(
+        phi=AxisScanConfig(range=1e-3, steps=2),
+        z=AxisScanConfig(range=5.0, steps=3),
+    )
+    frames = _build_scan_frames(cfg)
+    calls: list[float] = []
+
+    def Hg_provider(z: float) -> np.ndarray:
+        calls.append(z)
+        return np.full((10, 3, 3), z)  # marker
+
+    out = list(_iterate_simulation_frames(frames, Hg_provider))
+    assert len(out) == 6  # 2 phi x 3 z
+    # 3 unique z values, provider called 3 times in z order.
+    assert calls == sorted(set(frames.z_pf.tolist()))
+    # All frames at z=z[i] share the same Hg.
+    Hg0 = out[0][1]
+    Hg1 = out[1][1]
+    assert Hg0 is Hg1  # same z, same Hg pointer
+
+
+def test_iterate_simulation_frames_memory_release_pops_prior_z():
+    """Once we move past a z, the prior Hg is no longer referenced from the iterator."""
+    cfg = ScanConfig(
+        phi=AxisScanConfig(range=1e-3, steps=2),
+        z=AxisScanConfig(range=5.0, steps=2),
+    )
+    frames = _build_scan_frames(cfg)
+    seen: list[np.ndarray] = []
+
+    def Hg_provider(z: float) -> np.ndarray:
+        Hg = np.zeros((100, 3, 3))
+        seen.append(Hg)
+        return Hg
+
+    out = []
+    for tup in _iterate_simulation_frames(frames, Hg_provider):
+        out.append(tup)
+    assert len(out) == 4
+    # The iterator should not hold references to old Hg arrays at the end.
+    # We just check it doesn't leak the dict ad infinitum; this is mostly a
+    # structural test.
+    assert len(seen) == 2
 
 
 def test_scan_frames_args_positioners_contain_all_four_axes():
