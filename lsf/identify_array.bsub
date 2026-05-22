@@ -30,12 +30,22 @@ TASK_OUTPUT="${OUTPUT_BASE}/task_$(printf '%04d' "${LSB_JOBINDEX}")"
 
 mkdir -p "${OUTPUT_BASE}" logs
 
-# Activate conda. Edit CONDA_BASE if your conda install lives elsewhere.
-# Common locations on DTU:
+# Activate conda. CONDA_BASE auto-detects from PATH if `conda` is found;
+# override it explicitly here if your install is not on PATH. Falls back to
+# common DTU locations:
 #   $HOME/miniforge3                                         (personal install)
 #   $HOME/miniconda3                                         (personal install)
-#   /dtu/3d-imaging-center/projects/<project>/.../miniconda3 (shared project install)
-CONDA_BASE="${HOME}/miniforge3"
+#   /dtu/3d-imaging-center/projects/<project>/.../miniconda3 (shared; set CONDA_BASE)
+CONDA_BASE="${CONDA_BASE:-$(dirname "$(dirname "$(command -v conda 2>/dev/null || true)")")}"
+if [ ! -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]; then
+    for cand in "${HOME}/miniforge3" "${HOME}/miniconda3"; do
+        [ -f "${cand}/etc/profile.d/conda.sh" ] && CONDA_BASE="${cand}" && break
+    done
+fi
+if [ ! -f "${CONDA_BASE:-}/etc/profile.d/conda.sh" ]; then
+    echo "ERROR: could not locate a conda install. Set CONDA_BASE explicitly above." >&2
+    exit 1
+fi
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate dfxm-geo
 

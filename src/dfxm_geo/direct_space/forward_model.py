@@ -756,8 +756,6 @@ def build_dislocation_population(
 
 def Find_Hg_from_population(
     population: DislocationPopulation,
-    psize: float,
-    zl_rms: float,
     h: int = -1,
     k: int = 1,
     l: int = -1,
@@ -776,9 +774,6 @@ def Find_Hg_from_population(
 
     Args:
         population: DislocationPopulation from `build_dislocation_population`.
-        psize: Detector pixel size (m) — unused currently, reserved for future
-            grid-dependent caching.
-        zl_rms: RMS of the beam profile in zl (m) — unused currently.
         h, k, l: Miller indices of the active reflection.
         S: 3x3 sample-remount rotation (default identity).
 

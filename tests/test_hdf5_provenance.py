@@ -55,6 +55,18 @@ def test_write_provenance_kernel_subgroup(tmp_path: Path) -> None:
         assert len(sha) == 64  # hex digest
         assert float(k["qi1_range"][()]) == 1.0
         assert int(k["Nrays"][()]) == int(1e6)
+        # Kernel disk shape (npoints1, npoints2, npoints3) must match the
+        # Resq_i array — provenance is the only on-disk record of the kernel
+        # grid since Resq_i itself is excluded from provenance.
+        assert int(k["npoints1"][()]) == 4
+        assert int(k["npoints2"][()]) == 4
+        assert int(k["npoints3"][()]) == 4
+        with np.load(npz_path) as arch:
+            assert arch["Resq_i"].shape == (
+                int(k["npoints1"][()]),
+                int(k["npoints2"][()]),
+                int(k["npoints3"][()]),
+            )
 
 
 def test_write_provenance_config_toml(tmp_path: Path) -> None:

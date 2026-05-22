@@ -569,7 +569,6 @@ def write_identification_h5(
 
     Returns the count of scans written.
     """
-    import datetime as _dt2
 
     if kernel_npz is None:
         kernel_npz = _fm._loaded_kernel_path
@@ -585,7 +584,7 @@ def write_identification_h5(
     n_scans = 0
 
     def _now() -> str:
-        return _dt2.datetime.now(_dt2.UTC).isoformat(timespec="seconds")
+        return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
 
     with MasterWriter(
         master_path, cli=cli, config_toml=config_toml, kernel_npz=kernel_npz
@@ -632,7 +631,7 @@ def write_simulation_h5(
     chi_range: float,
     chi_steps: int,
     include_perfect_crystal: bool = True,
-    sample_dis: float,
+    sample_dis: float | None,
     sample_ndis: int,
     sample_remount: str,
     config_toml: str,
@@ -649,7 +648,6 @@ def write_simulation_h5(
     in sibling `scan0001/` / `scan0002/` directories alongside it, linked
     via ExternalLink. External signature unchanged from v1.1.0.
     """
-    import datetime as _dt2
 
     if kernel_npz is None:
         kernel_npz = _fm._loaded_kernel_path
@@ -676,7 +674,7 @@ def write_simulation_h5(
     title = _scan_title(phi_range, phi_steps, chi_range, chi_steps)
 
     def _now() -> str:
-        return _dt2.datetime.now(_dt2.UTC).isoformat(timespec="seconds")
+        return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
 
     def _build_args(Hg_in: np.ndarray) -> list[_FrameArgs]:
         out: list[_FrameArgs] = []
@@ -694,78 +692,51 @@ def write_simulation_h5(
     if crystal_mode is not None:
         attrs_1_1["crystal_mode"] = crystal_mode
 
+    # Build the per-scan plan: /1.1 dislocations always, /2.1 perfect crystal
+    # only if requested. Both scans share positioners, attrs, sample metadata
+    # (apart from name), and physical params; only Hg + scan index differ.
+    scans: list[tuple[int, str, np.ndarray]] = [(1, "simulated, dislocations", Hg)]
+    if include_perfect_crystal:
+        scans.append((2, "simulated, perfect crystal", np.zeros_like(Hg)))
+
     with MasterWriter(path, cli=cli, config_toml=config_toml, kernel_npz=kernel_npz) as master:
-        # /1.1 dislocations
-        scan1_dir = out_dir / SCAN_DIR_FMT.format(1)
-        det1_path = scan1_dir / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
-        start1 = _now()
-        _compute_and_write_detector_file_parallel(
-            det1_path, _build_args(Hg), max_workers=max_workers
-        )
-        end1 = _now()
-        master.add_scan(
-            scan_id="1.1",
-            title=title,
-            start_time=start1,
-            end_time=end1,
-            sample={
-                "name": "simulated, dislocations",
-                "dis": float(sample_dis),
+        for scan_idx, sample_name, Hg_for_scan in scans:
+            scan_dir = out_dir / SCAN_DIR_FMT.format(scan_idx)
+            det_path = scan_dir / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
+            start = _now()
+            _compute_and_write_detector_file_parallel(
+                det_path, _build_args(Hg_for_scan), max_workers=max_workers
+            )
+            end = _now()
+            sample = {
+                "name": sample_name,
                 "ndis": int(sample_ndis),
                 "sample_remount": sample_remount,
-            },
-            positioners={"phi": phi_per_frame, "chi": chi_per_frame},
-            detector_links={
-                "dfxm_sim_detector": (
-                    Path(SCAN_DIR_FMT.format(1))
-                    / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector"),
-                    DETECTOR_INTERNAL_PATH,
-                )
-            },
-            dfxm_geo={
-                "Hg": Hg,
-                "q_hkl": q_hkl,
-                "theta": float(_fm.theta),
-                "psize": float(_fm.psize),
-                "zl_rms": float(_fm.zl_rms),
-            },
-            attrs=attrs_1_1,
-        )
-
-        if include_perfect_crystal:
-            scan2_dir = out_dir / SCAN_DIR_FMT.format(2)
-            det2_path = scan2_dir / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
-            Hg_zero = np.zeros_like(Hg)
-            start2 = _now()
-            _compute_and_write_detector_file_parallel(
-                det2_path, _build_args(Hg_zero), max_workers=max_workers
-            )
-            end2 = _now()
+            }
+            # `dis` (wall-mode width) is only meaningful for `wall` crystal
+            # mode; centered/random_dislocations pass None and omit the key.
+            if sample_dis is not None:
+                sample["dis"] = float(sample_dis)
             master.add_scan(
-                scan_id="2.1",
+                scan_id=f"{scan_idx}.1",
                 title=title,
-                start_time=start2,
-                end_time=end2,
-                sample={
-                    "name": "simulated, perfect crystal",
-                    "dis": float(sample_dis),
-                    "ndis": int(sample_ndis),
-                    "sample_remount": sample_remount,
-                },
+                start_time=start,
+                end_time=end,
+                sample=sample,
                 positioners={"phi": phi_per_frame, "chi": chi_per_frame},
                 detector_links={
                     "dfxm_sim_detector": (
-                        Path(SCAN_DIR_FMT.format(2))
+                        Path(SCAN_DIR_FMT.format(scan_idx))
                         / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector"),
                         DETECTOR_INTERNAL_PATH,
                     )
                 },
                 dfxm_geo={
-                    "Hg": Hg_zero,
+                    "Hg": Hg_for_scan,
                     "q_hkl": q_hkl,
                     "theta": float(_fm.theta),
                     "psize": float(_fm.psize),
                     "zl_rms": float(_fm.zl_rms),
                 },
-                attrs=attrs_1_1,  # B+C followup: /2.1 also carries mode attrs
+                attrs=attrs_1_1,
             )

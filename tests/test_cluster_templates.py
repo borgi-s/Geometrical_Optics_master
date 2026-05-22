@@ -193,6 +193,36 @@ class TestLsfNoModuleLoadPython:
             text = _read(rel)
             assert "CONDA_BASE=" in text, f"{rel} should expose CONDA_BASE as an editable variable"
 
+    def test_lsf_templates_auto_detect_conda_from_path(self) -> None:
+        """v1.3.0 polish: LSF templates auto-detect CONDA_BASE from `command -v conda`
+        before falling back to ${HOME}/miniforge3."""
+        for rel in ["lsf/forward_single.bsub", "lsf/identify_array.bsub"]:
+            text = _read(rel)
+            assert "command -v conda" in text, (
+                f"{rel} should auto-detect CONDA_BASE via `command -v conda`"
+            )
+
+
+class TestSlurmPythonModuleGuard:
+    """v1.3.0 polish: SLURM templates must defend against a `python3/...` module
+    being loaded before conda activation. The same `Fatal Python error:
+    init_fs_encoding` crash that hits DTU LSF can hit any HPC site that ships
+    a site-wide `python3/...` module.
+    """
+
+    def test_forward_single_guards_against_python_module(self) -> None:
+        text = _read("slurm/forward_single.sbatch")
+        # The runtime check uses `module list ... | grep -Eqi 'python3?/'`.
+        assert "module list" in text and "python3" in text, (
+            "SLURM forward template should runtime-check for a loaded python3 module"
+        )
+
+    def test_identify_array_guards_against_python_module(self) -> None:
+        text = _read("slurm/identify_array.sbatch")
+        assert "module list" in text and "python3" in text, (
+            "SLURM identify-array template should runtime-check for a loaded python3 module"
+        )
+
 
 class TestNoHardcodedKernelPickleFilename:
     """No cluster template should hardcode a specific `Resq_i_<date>.pkl` or

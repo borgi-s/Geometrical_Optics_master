@@ -26,6 +26,15 @@ TASK_OUTPUT="${OUTPUT_BASE}/task_$(printf '%04d' "${SLURM_ARRAY_TASK_ID}")"
 
 mkdir -p "${OUTPUT_BASE}" logs
 
+# Guard: a loaded `python3/...` module shadows conda's Python interpreter and
+# produces a "Fatal Python error: init_fs_encoding" crash. Same conflict as
+# DTU LSF; defend against it here too.
+if command -v module >/dev/null 2>&1 && module list 2>&1 | grep -Eqi '(^|[[:space:]])python3?/'; then
+    echo "ERROR: a python3 module is loaded; this shadows conda's Python." >&2
+    echo "Run 'module unload python3' (or 'module purge') before submitting." >&2
+    exit 1
+fi
+
 module load conda 2>/dev/null || source ~/miniforge3/etc/profile.d/conda.sh
 conda activate dfxm-geo
 

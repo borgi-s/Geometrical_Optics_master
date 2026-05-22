@@ -674,13 +674,11 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     else:
         Hg, q_hkl = fm.Find_Hg_from_population(
             population,
-            fm.psize,
-            fm.zl_rms,
             h=config.reciprocal.hkl[0],
             k=config.reciprocal.hkl[1],
             l=config.reciprocal.hkl[2],
         )
-        sample_dis = -1.0  # sentinel: not applicable for centered/random
+        sample_dis = None  # not applicable for centered/random_dislocations
         sample_ndis = len(population.positions_um)
         sample_remount = "N/A"
 
