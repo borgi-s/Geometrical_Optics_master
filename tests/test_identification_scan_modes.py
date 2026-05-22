@@ -204,3 +204,29 @@ def test_single_with_two_dtheta_scanned_keeps_one_scan_per_plane(tmp_path: Path)
         assert f["/1.1/instrument/positioners/two_dtheta"].shape == (3,)
         # Angular axis stored in degrees
         assert f["/1.1/instrument/positioners/two_dtheta"].attrs["units"] == "degree"
+
+
+def test_multi_with_two_dtheta_scanned_keeps_one_scan_per_mc_sample(tmp_path: Path) -> None:
+    """`[scan.two_dtheta]` in identification multi mode multiplies n_frames, not scan count."""
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="multi",
+        crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
+        scan=ScanConfig(
+            phi=AxisScanConfig(value=1e-4),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=2),  # 2 two_dtheta values
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        multi=IdentificationMonteCarloConfig(n_samples=2, pos_std_um=5.0),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        scan_keys = sorted(k for k in f if k != "dfxm_geo")
+        # 1 z * 2 n_samples = 2 scans (two_dtheta is within-scan)
+        assert scan_keys == ["1.1", "2.1"]
+        # n_frames = 2 (n_two_dtheta) per scan
+        for sid in scan_keys:
+            assert f[f"/{sid}/instrument/dfxm_sim_detector/data"].shape[0] == 2
+            assert f[f"/{sid}/instrument/positioners/two_dtheta"].shape == (2,)
