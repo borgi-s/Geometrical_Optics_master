@@ -120,6 +120,11 @@ def test_run_postprocess_reads_h5(tmp_path: Path, _kernel_loaded: None) -> None:
     )
     out = tmp_path / "run"
     run_simulation(cfg, out)
+    # v1.2.0 layout: master + per-scan detector files written by run_simulation.
+    assert (out / "dfxm_geo.h5").is_file()
+    assert (out / "scan0001" / "dfxm_sim_detector_0000.h5").is_file()
+    if cfg.io.include_perfect_crystal:
+        assert (out / "scan0002" / "dfxm_sim_detector_0000.h5").is_file()
     run_postprocess(out, cfg)
     # Outputs land inside the existing .h5
     with h5py.File(out / "dfxm_geo.h5", "r") as f:

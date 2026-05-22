@@ -1,8 +1,8 @@
 """High-level orchestration of a DFXM forward-simulation run.
 
 Provides a config-driven entry point (`run_simulation`) and a CLI (`cli_main`)
-that wrap `Find_Hg` + `save_images_parallel`. The pipeline produces a directory
-of `.npy` images covering a (phi, chi) rocking grid.
+that wrap `Find_Hg` + `write_simulation_h5`. The pipeline produces a master
+HDF5 file plus per-scan detector files covering a (phi, chi) rocking grid.
 
 Scope note: v1 honors crystal `dis`/`ndis` and scan grid params from config.
 `psize`, `zl_rms`, and the (h, k, l) reflection are bound to the module-level
@@ -15,9 +15,9 @@ today. Deferred.
 from __future__ import annotations
 
 import argparse
-import csv
 import sys
 import tomllib
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -41,9 +41,14 @@ from dfxm_geo.crystal.dislocations import (
 )
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
-from dfxm_geo.io.hdf5 import load_h5_scan, write_simulation_h5
-from dfxm_geo.io.images import (  # save_images_parallel: zscan runner
-    save_images_parallel,
+from dfxm_geo.io.hdf5 import (
+    DETECTOR_FILE_FMT,
+    DETECTOR_INTERNAL_PATH,
+    SCAN_DIR_FMT,
+    ScanSpec,
+    load_h5_scan,
+    write_identification_h5,
+    write_simulation_h5,
 )
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
@@ -437,11 +442,16 @@ class IdentificationNoiseConfig:
 
 @dataclass(frozen=True, kw_only=True)
 class IdentificationMonteCarloConfig:
-    """Multi-disloc Monte Carlo parameters (mode='multi' only)."""
+    """Multi-disloc Monte Carlo parameters (mode='multi' only).
+
+    v1.2.0: `n_png_previews` removed (PNG sidecars dropped). New opt-in
+    `render_per_dislocation`: when True, each scan dir also writes
+    per-dislocation detector files for unambiguous instance labels.
+    """
 
     n_samples: int = 1000
     pos_std_um: float = 5.0
-    n_png_previews: int = 50
+    render_per_dislocation: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -449,18 +459,22 @@ class IdentificationZScanConfig:
     """z-scan mode parameters (mode='z-scan' only).
 
     Each (z_layer, b, α) configuration produces a (phi_steps × chi_steps)
-    rocking-curve stack on disk, with a randomly-drawn secondary
+    rocking-curve stack on disk (driven by `config.scan.phi` / `config.scan.chi`
+    from the shared B+C ScanConfig), with a randomly-drawn secondary
     dislocation if `include_secondary` is True. The secondary is drawn
     once per (z, b, α) and shared across the rocking grid.
+
+    v1.2.0: the duplicate `phi_range_deg / phi_steps / chi_range_deg /
+    chi_steps` fields have been removed; the scan grid is now read from
+    `[scan.phi]` / `[scan.chi]` via the shared ScanConfig.
     """
 
     z_offsets_um: list[float]
-    phi_range_deg: float
-    phi_steps: int
-    chi_range_deg: float
-    chi_steps: int
     include_secondary: bool = True
-    secondary_rng_offset: int = 1
+    # 0 = independent of the Poisson-noise stream (which uses
+    # `default_rng(seed).spawn(2)[1]` in `_maybe_apply_poisson_noise`).
+    # Bump to a different value only if a future RNG split needs slot 0.
+    secondary_rng_offset: int = 0
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -596,11 +610,11 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         )
     # v1.2.0 scope: the forward kernel only consumes the phi + chi axes from
     # ScanConfig. ScanGrid/build_scan_grid is implemented and tested but not
-    # yet wired into save_images_parallel. Raise eagerly so users don't get
+    # yet wired into write_simulation_h5. Raise eagerly so users don't get
     # silently-wrong output from scanning two_dtheta or z. Lifting this guard
     # is tracked as a v1.3.0 follow-up.
-    if config.scan.two_dtheta.is_scanned or config.scan.z.is_scanned:
-        unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
+    unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
+    if unwired:
         raise ValueError(
             f"scan axes {unwired} are configured but not yet wired into the "
             f"forward kernel (v1.2.0 scope). For now, set range+steps only on "
@@ -942,24 +956,137 @@ def cli_main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _slip_plane_slug(n: tuple[int, int, int]) -> str:
-    """Convert (1, -1, 1) -> '1_m1_1' for directory names."""
-    return "_".join("m" + str(abs(c)) if c < 0 else str(c) for c in n)
+def _frame_grid_from_scan(
+    scan: ScanConfig,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Return (Phi_rad, Chi_rad, n_frames) for a single-scan rocking grid.
+
+    Both arrays are 1-D of length n_frames, in phi-inner / chi-outer order.
+    Fixed axes contribute a single repeated value (the axis ``value`` in
+    radians).
+    """
+    if scan.phi.is_scanned:
+        assert scan.phi.range is not None and scan.phi.steps is not None
+        Phi = np.linspace(-np.deg2rad(scan.phi.range), np.deg2rad(scan.phi.range), scan.phi.steps)
+    else:
+        Phi = np.asarray([scan.phi.value], dtype=float)
+    if scan.chi.is_scanned:
+        assert scan.chi.range is not None and scan.chi.steps is not None
+        Chi = np.linspace(-np.deg2rad(scan.chi.range), np.deg2rad(scan.chi.range), scan.chi.steps)
+    else:
+        Chi = np.asarray([scan.chi.value], dtype=float)
+    return Phi, Chi, Phi.size * Chi.size
 
 
-def _save_preview_png(arr: np.ndarray, png_path: Path) -> None:
-    """Quick matplotlib heatmap snapshot for spot-checking."""
-    import matplotlib
+def _scan_frames_args(
+    Hg: np.ndarray, Phi: np.ndarray, Chi: np.ndarray
+) -> tuple[list[tuple[int, np.ndarray, float, float]], np.ndarray, np.ndarray]:
+    """Build (args_list, phi_per_frame, chi_per_frame) for one ScanSpec.
 
-    matplotlib.use("Agg", force=True)
-    import matplotlib.pyplot as plt
+    Frame order: phi-inner, chi-outer (matches forward fscan2d convention).
+    Each args tuple is (frame_idx, Hg, phi_rad, chi_rad).
+    """
+    n = Phi.size * Chi.size
+    args_list: list[tuple[int, np.ndarray, float, float]] = []
+    phi_pf = np.empty(n, dtype=np.float64)
+    chi_pf = np.empty(n, dtype=np.float64)
+    for chi_idx in range(Chi.size):
+        for phi_idx in range(Phi.size):
+            k = chi_idx * Phi.size + phi_idx
+            phi_pf[k] = float(Phi[phi_idx])
+            chi_pf[k] = float(Chi[chi_idx])
+            args_list.append((k, Hg, float(Phi[phi_idx]), float(Chi[chi_idx])))
+    return args_list, phi_pf, chi_pf
 
-    fig, ax = plt.subplots(figsize=(4, 2))
-    ax.imshow(arr.T, aspect="auto", origin="lower", cmap="viridis")
-    ax.set_axis_off()
-    fig.tight_layout(pad=0)
-    fig.savefig(png_path, dpi=72, bbox_inches="tight", pad_inches=0)
-    plt.close(fig)
+
+def _positioners_for_scan(
+    phi_pf: np.ndarray, chi_pf: np.ndarray, scan: ScanConfig
+) -> dict[str, np.ndarray | float]:
+    """Return phi/chi entries for ScanSpec.positioners.
+
+    Fixed axes collapse to a scalar in radians; scanned axes are the
+    full (N_frames,) array (also in radians, per ScanSpec convention).
+    """
+    out: dict[str, np.ndarray | float] = {}
+    out["phi"] = phi_pf if scan.phi.is_scanned else float(scan.phi.value)
+    out["chi"] = chi_pf if scan.chi.is_scanned else float(scan.chi.value)
+    return out
+
+
+def _identify_title(scan_mode: str, n_frames: int, scan: ScanConfig) -> str:
+    """Compact human title for /N.1/title in identification masters."""
+    return f"identify-{scan_mode} N_frames={n_frames}"
+
+
+def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
+    """Best-effort TOML render of an IdentificationConfig (for /dfxm_geo/config_toml).
+
+    Not round-trip-perfect; the goal is provenance, not reconstruction.
+    Captures mode, reciprocal, scan, crystal (identification), noise, multi, zscan.
+    """
+    lines: list[str] = [f'mode = "{cfg.mode}"']
+    if cfg.reciprocal is not None:
+        h, k, l = cfg.reciprocal.hkl
+        lines += [
+            "",
+            "[reciprocal]",
+            f"hkl = [{h}, {k}, {l}]",
+            f"keV = {cfg.reciprocal.keV}",
+        ]
+    # [crystal] (identification flavor; not the SimulationConfig crystal)
+    c = cfg.crystal
+    lines += [
+        "",
+        "[crystal]",
+        f"slip_plane_normal = [{c.slip_plane_normal[0]}, "
+        f"{c.slip_plane_normal[1]}, {c.slip_plane_normal[2]}]",
+        f"angle_start_deg = {c.angle_start_deg}",
+        f"angle_stop_deg = {c.angle_stop_deg}",
+        f"angle_step_deg = {c.angle_step_deg}",
+        f"sweep_all_slip_planes = {str(c.sweep_all_slip_planes).lower()}",
+        f"exclude_invisibility = {str(c.exclude_invisibility).lower()}",
+        f"invisibility_threshold_deg = {c.invisibility_threshold_deg}",
+    ]
+    if c.b_vector_indices is not None:
+        lines.append(f"b_vector_indices = {list(c.b_vector_indices)}")
+    # [scan.<axis>]
+    for axis_name in _CANONICAL_AXES:
+        axis = getattr(cfg.scan, axis_name)
+        if axis.value == 0.0 and not axis.is_scanned:
+            continue
+        lines += ["", f"[scan.{axis_name}]"]
+        if axis.value != 0.0:
+            lines.append(f"value = {axis.value}")
+        if axis.is_scanned:
+            lines.append(f"range = {axis.range}")
+            lines.append(f"steps = {axis.steps}")
+    # [noise]
+    lines += [
+        "",
+        "[noise]",
+        f"poisson_noise = {str(cfg.noise.poisson_noise).lower()}",
+        f"rng_seed = {cfg.noise.rng_seed}",
+        f"intensity_scale = {cfg.noise.intensity_scale}",
+    ]
+    # [multi]
+    if cfg.multi is not None:
+        lines += [
+            "",
+            "[multi]",
+            f"n_samples = {cfg.multi.n_samples}",
+            f"pos_std_um = {cfg.multi.pos_std_um}",
+            f"render_per_dislocation = {str(cfg.multi.render_per_dislocation).lower()}",
+        ]
+    # [zscan]
+    if cfg.zscan is not None:
+        lines += [
+            "",
+            "[zscan]",
+            f"z_offsets_um = {list(cfg.zscan.z_offsets_um)}",
+            f"include_secondary = {str(cfg.zscan.include_secondary).lower()}",
+            f"secondary_rng_offset = {cfg.zscan.secondary_rng_offset}",
+        ]
+    return "\n".join(lines) + "\n"
 
 
 def _passes_invisibility(
@@ -977,22 +1104,23 @@ def _passes_invisibility(
     return bool(cos_angle >= np.cos(np.deg2rad(90.0 - threshold_deg)))
 
 
-def _run_identification_single(
+def _iter_identification_single(
     config: IdentificationConfig,
-    output_dir: Path,
-) -> dict[str, Any]:
-    """Deterministic Cartesian sweep: slip planes × Burgers vectors × angles."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    crystal_cfg = config.crystal
-    noise_cfg = config.noise
+) -> Iterator[ScanSpec]:
+    """Yield one ScanSpec per (plane, b_idx, alpha) configuration.
 
-    all_planes: list[tuple[int, int, int]] = [
-        (1, 1, 1),
-        (1, -1, 1),
-        (1, 1, -1),
-        (-1, 1, 1),
-    ]
-    planes = all_planes if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
+    Supports `[scan.phi]` / `[scan.chi]` from the shared ScanConfig: when
+    either axis is scanned, each scan dir contains a (N_frames, H, W)
+    stack with frame ordering phi-inner, chi-outer.
+    """
+    crystal_cfg = config.crystal
+    # Noiseless frames are emitted here; intensity scaling and optional
+    # Poisson noise are applied to the combined detector file post-write
+    # by `_maybe_apply_poisson_noise` (called from the dispatcher).
+
+    planes = (
+        _ALL_111_PLANES if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
+    )
 
     angles_deg = np.arange(
         crystal_cfg.angle_start_deg,
@@ -1000,19 +1128,12 @@ def _run_identification_single(
         crystal_cfg.angle_step_deg,
     )
 
-    rng = np.random.default_rng(noise_cfg.rng_seed) if noise_cfg.poisson_noise else None
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
-
-    manifest_rows: list[dict[str, Any]] = []
-    n_written = 0
+    scan_mode = config.scan.derived_mode_name()
+    scanned_axes = list(config.scan.scanned_axes())
+    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
 
     for plane in planes:
-        plane_slug = _slip_plane_slug(plane)
-        im_dir = output_dir / f"n_{plane_slug}" / "im_data"
-        png_dir = output_dir / f"n_{plane_slug}" / "images"
-        im_dir.mkdir(parents=True, exist_ok=True)
-        png_dir.mkdir(parents=True, exist_ok=True)
-
         b_table = _burgers_vectors(plane)
         b_indices = (
             crystal_cfg.b_vector_indices
@@ -1022,9 +1143,8 @@ def _run_identification_single(
         b_subset = b_table[b_indices]
         n_arr_unnorm = np.asarray(plane, dtype=float)
         n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
-
         rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
-        Ud_all = _ud_matrices(n_arr, rotated)  # (n_angles, n_b, 3, 3)
+        Ud_all = _ud_matrices(n_arr, rotated)
 
         for j, b_idx in enumerate(b_indices):
             if crystal_cfg.exclude_invisibility and not _passes_invisibility(
@@ -1041,50 +1161,64 @@ def _run_identification_single(
                     Theta=fm.Theta,
                 )
                 Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
-                fm.Hg = Hg
-                fm.q_hkl = q_hkl
 
-                image_arr = fm.forward(Hg, phi=config.scan.phi.value)
-                # forward() can return either an ndarray or a (image, qi) tuple
-                # depending on qi_return. We don't pass qi_return so it's always
-                # an ndarray here; assert for the type-checker.
-                assert isinstance(image_arr, np.ndarray)
-                image = image_arr * noise_cfg.intensity_scale
-                if noise_cfg.poisson_noise:
-                    assert rng is not None
-                    image = rng.poisson(np.clip(image, a_min=0.0, a_max=None)).astype(float)
+                args_list, phi_pf, chi_pf = _scan_frames_args(Hg, Phi, Chi)
 
-                stem = f"b{b_idx}_alpha{int(round(alpha)):03d}"
-                npy_path = im_dir / f"{stem}.npy"
-                png_path = png_dir / f"{stem}.png"
-                np.save(npy_path, image)
-                _save_preview_png(image, png_path)
-
-                manifest_rows.append(
-                    {
-                        "image_path": str(npy_path.relative_to(output_dir)),
-                        "n_h": plane[0],
-                        "n_k": plane[1],
-                        "n_l": plane[2],
-                        "b_idx": b_idx,
-                        "b_h": int(round(b_table[b_idx, 0] * np.sqrt(2))),
-                        "b_k": int(round(b_table[b_idx, 1] * np.sqrt(2))),
-                        "b_l": int(round(b_table[b_idx, 2] * np.sqrt(2))),
-                        "rotation_deg": float(alpha),
-                    }
+                burgers_int = (
+                    int(round(b_table[b_idx, 0] * np.sqrt(2))),
+                    int(round(b_table[b_idx, 1] * np.sqrt(2))),
+                    int(round(b_table[b_idx, 2] * np.sqrt(2))),
                 )
-                n_written += 1
+                yield ScanSpec(
+                    title=_identify_title(scan_mode, n_frames, config.scan),
+                    sample={
+                        "name": "simulated, dislocation identification (single)",
+                        "slip_plane_normal": np.asarray(plane, dtype=np.int32),
+                        "burgers": np.asarray(burgers_int, dtype=np.int32),
+                        "rotation_deg": float(alpha),
+                    },
+                    positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
+                    dfxm_geo={
+                        "Hg": Hg,
+                        "q_hkl": q_hkl,
+                        "theta": float(fm.theta),
+                        "psize": float(fm.psize),
+                        "zl_rms": float(fm.zl_rms),
+                    },
+                    detectors={"dfxm_sim_detector": args_list},
+                    attrs={
+                        "scan_mode": scan_mode,
+                        "scanned_axes": scanned_axes,
+                        "identify_mode": "single",
+                    },
+                )
 
-    manifest_path = output_dir / "manifest.csv"
-    with open(manifest_path, "w", newline="") as fh:
-        if manifest_rows:
-            writer = csv.DictWriter(fh, fieldnames=list(manifest_rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(manifest_rows)
-        else:
-            fh.write("")
 
-    return {"n_images": n_written, "output_dir": output_dir, "manifest_path": manifest_path}
+def _run_identification_single(
+    config: IdentificationConfig,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Dispatcher: feed `_iter_identification_single` into write_identification_h5.
+
+    Empty sweep (e.g. exclude_invisibility filters out everything) is
+    allowed: the orchestrator writes an empty master with `n_images=0`.
+    Mirrors the old behavior which also emitted an empty manifest.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    config_toml = _identification_config_to_toml_str(config)
+    n_scans = write_identification_h5(
+        output_dir,
+        scan_iter=_iter_identification_single(config),
+        cli=" ".join(sys.argv),
+        config_toml=config_toml,
+        max_workers=config.io.max_workers,
+    )
+    _maybe_apply_poisson_noise(config, output_dir, n_scans)
+    return {
+        "n_images": n_scans,
+        "output_dir": output_dir,
+        "master_path": output_dir / "dfxm_identify.h5",
+    }
 
 
 _ALL_111_PLANES: list[tuple[int, int, int]] = [
@@ -1119,153 +1253,231 @@ def _draw_dislocation(rng: np.random.Generator, pos_std_um: float) -> dict[str, 
     }
 
 
+def _build_dislocation_sample_entry(d: dict[str, Any]) -> dict[str, Any]:
+    """Convert a `_draw_dislocation` output to an NXsample-shaped dict.
+
+    Used to populate `/N.1/sample/dislocations/<idx>` inside the master
+    identification HDF5. The Burgers vector is rounded to integer
+    components (matches the `[h, k, l]` convention used for single mode).
+    """
+    return {
+        "slip_plane_normal": np.asarray(d["plane"], dtype=np.int32),
+        "burgers": np.asarray([int(round(c)) for c in d["b_vec"]], dtype=np.int32),
+        "rotation_deg": float(d["alpha_deg"]),
+        "position_um": np.asarray(d["pos_um"], dtype=float),
+    }
+
+
+def _iter_identification_multi(
+    config: IdentificationConfig,
+) -> Iterator[ScanSpec]:
+    """Yield one ScanSpec per Monte Carlo sample (2 random mixed dislocations).
+
+    `render_per_dislocation=False` (default): a single detector
+    (`dfxm_sim_detector`) holds the combined-scene frames. `=True`: two
+    additional detectors (`dfxm_sim_detector_dis0`, `_dis1`) hold each
+    dislocation rendered in isolation; these per-dislocation files are
+    NOISELESS by construction (they bypass the post-write Poisson pass).
+
+    All frames yielded here are NOISELESS; intensity scaling and
+    optional Poisson noise are applied to the combined detector file
+    post-write by `_maybe_apply_poisson_noise`.
+    """
+    assert config.multi is not None  # validated in __post_init__
+    mc = config.multi
+    noise_cfg = config.noise
+    q_hkl = np.asarray(fm.q_hkl, dtype=float)
+    fm.q_hkl = q_hkl
+
+    # Split master rng → child streams. [0] = param draws (consumed here);
+    # [1] = Poisson noise (consumed by _maybe_apply_poisson_noise, which
+    # re-spawns with the same seed to get the same noise stream).
+    param_rng, _noise_rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)
+
+    scan_mode = config.scan.derived_mode_name()
+    scanned_axes = list(config.scan.scanned_axes())
+    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
+
+    for _ in range(mc.n_samples):
+        d1 = _draw_dislocation(param_rng, mc.pos_std_um)
+        d2 = _draw_dislocation(param_rng, mc.pos_std_um)
+
+        # Combined-scene Hg (sum of both dislocations)
+        specs = [
+            MixedDislocSpec(
+                Ud_mix=d1["Ud"],
+                rotation_deg=d1["alpha_deg"],
+                position_lab_um=d1["pos_um"],
+            ),
+            MixedDislocSpec(
+                Ud_mix=d2["Ud"],
+                rotation_deg=d2["alpha_deg"],
+                position_lab_um=d2["pos_um"],
+            ),
+        ]
+        Fg_combined = Fd_find_multi_dislocs_mixed(fm.rl, fm.Us, specs, fm.Theta)
+        Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
+
+        combined_args, phi_pf, chi_pf = _scan_frames_args(Hg_combined, Phi, Chi)
+        detectors: dict[str, list[tuple[int, np.ndarray, float, float]]] = {
+            "dfxm_sim_detector": combined_args,
+        }
+
+        if mc.render_per_dislocation:
+            # Per-dislocation Hg: each rendered alone (other one absent).
+            # Noiseless by design — these are ground-truth instance labels.
+            Fg_dis0 = Fd_find_mixed(
+                fm.rl,
+                fm.Us,
+                Ud_mix=d1["Ud"],
+                rotation_deg=d1["alpha_deg"],
+                Theta=fm.Theta,
+            )
+            Hg_dis0 = np.transpose(fast_inverse2(Fg_dis0), [0, 2, 1]) - np.identity(3)
+            Fg_dis1 = Fd_find_mixed(
+                fm.rl,
+                fm.Us,
+                Ud_mix=d2["Ud"],
+                rotation_deg=d2["alpha_deg"],
+                Theta=fm.Theta,
+            )
+            Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
+            dis0_args, _, _ = _scan_frames_args(Hg_dis0, Phi, Chi)
+            dis1_args, _, _ = _scan_frames_args(Hg_dis1, Phi, Chi)
+            detectors["dfxm_sim_detector_dis0"] = dis0_args
+            detectors["dfxm_sim_detector_dis1"] = dis1_args
+
+        sample: dict[str, Any] = {
+            "name": "simulated, dislocation identification (multi)",
+            "dislocations": {
+                "0": _build_dislocation_sample_entry(d1),
+                "1": _build_dislocation_sample_entry(d2),
+            },
+        }
+
+        yield ScanSpec(
+            title=_identify_title(scan_mode, n_frames, config.scan),
+            sample=sample,
+            positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
+            dfxm_geo={
+                "Hg": Hg_combined,
+                "q_hkl": q_hkl,
+                "theta": float(fm.theta),
+                "psize": float(fm.psize),
+                "zl_rms": float(fm.zl_rms),
+            },
+            detectors=detectors,
+            attrs={
+                "scan_mode": scan_mode,
+                "scanned_axes": scanned_axes,
+                "identify_mode": "multi",
+            },
+        )
+
+
 def _run_identification_multi(
     config: IdentificationConfig,
     output_dir: Path,
 ) -> dict[str, Any]:
-    """Monte Carlo over n_samples; each sample is 2 random mixed dislocations summed."""
+    """Dispatcher: feed `_iter_identification_multi` into write_identification_h5.
+
+    After the master + per-scan detector files are written, applies a
+    post-write Poisson noise pass (and intensity scaling) to combined
+    detector files only — per-dislocation files stay noiseless.
+    """
     assert config.multi is not None  # validated in __post_init__
-    mc = config.multi
-    noise_cfg = config.noise
-
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "im_data").mkdir(exist_ok=True)
-    (output_dir / "images").mkdir(exist_ok=True)
+    n_scans = write_identification_h5(
+        output_dir,
+        scan_iter=_iter_identification_multi(config),
+        cli=" ".join(sys.argv),
+        config_toml=_identification_config_to_toml_str(config),
+        max_workers=config.io.max_workers,
+    )
+    _maybe_apply_poisson_noise(config, output_dir, n_scans)
+    return {
+        "n_samples": config.multi.n_samples,
+        "output_dir": output_dir,
+        "master_path": output_dir / "dfxm_identify.h5",
+    }
 
-    # Split master rng → child streams (param draws, Poisson noise).
-    master = np.random.default_rng(noise_cfg.rng_seed)
-    param_rng, noise_rng = master.spawn(2)
 
-    manifest_rows: list[dict[str, Any]] = []
-    q_hkl = np.asarray(fm.q_hkl, dtype=float)
-    fm.q_hkl = q_hkl
+def _maybe_apply_poisson_noise(
+    config: IdentificationConfig, output_dir: Path, n_scans: int
+) -> None:
+    """Apply intensity scaling (always) and Poisson noise (if enabled) to
+    combined-detector files post-write.
 
-    pad = max(5, len(str(mc.n_samples - 1)))
-    for k in range(mc.n_samples):
-        d1 = _draw_dislocation(param_rng, mc.pos_std_um)
-        d2 = _draw_dislocation(param_rng, mc.pos_std_um)
-        specs = [
-            MixedDislocSpec(
-                Ud_mix=d1["Ud"], rotation_deg=d1["alpha_deg"], position_lab_um=d1["pos_um"]
-            ),
-            MixedDislocSpec(
-                Ud_mix=d2["Ud"], rotation_deg=d2["alpha_deg"], position_lab_um=d2["pos_um"]
-            ),
-        ]
-        Fg = Fd_find_multi_dislocs_mixed(fm.rl, fm.Us, specs, fm.Theta)
-        Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
-        fm.Hg = Hg
+    Only modifies `dfxm_sim_detector_0000.h5` files; per-dislocation
+    detector files (`*_dis0_0000.h5`, `*_dis1_0000.h5`) are intentionally
+    left untouched so they remain deterministic ground-truth labels.
 
-        image_arr = fm.forward(Hg, phi=config.scan.phi.value)
-        assert isinstance(image_arr, np.ndarray)
-        image = image_arr * noise_cfg.intensity_scale
-        if noise_cfg.poisson_noise:
-            image = noise_rng.poisson(np.clip(image, a_min=0.0, a_max=None)).astype(float)
-
-        stem = f"{k:0{pad}d}"
-        np.save(output_dir / "im_data" / f"{stem}.npy", image)
-        if k < mc.n_png_previews:
-            _save_preview_png(image, output_dir / "images" / f"{stem}.png")
-
-        manifest_rows.append(
-            {
-                "sample_id": stem,
-                "n1_h": d1["plane"][0],
-                "n1_k": d1["plane"][1],
-                "n1_l": d1["plane"][2],
-                "b1_idx": d1["b_idx"],
-                "b1_h": int(round(d1["b_vec"][0])),
-                "b1_k": int(round(d1["b_vec"][1])),
-                "b1_l": int(round(d1["b_vec"][2])),
-                "alpha1_deg": d1["alpha_deg"],
-                "x1_um": d1["pos_um"][0],
-                "y1_um": d1["pos_um"][1],
-                "n2_h": d2["plane"][0],
-                "n2_k": d2["plane"][1],
-                "n2_l": d2["plane"][2],
-                "b2_idx": d2["b_idx"],
-                "b2_h": int(round(d2["b_vec"][0])),
-                "b2_k": int(round(d2["b_vec"][1])),
-                "b2_l": int(round(d2["b_vec"][2])),
-                "alpha2_deg": d2["alpha_deg"],
-                "x2_um": d2["pos_um"][0],
-                "y2_um": d2["pos_um"][1],
-                "image_path": f"im_data/{stem}.npy",
-            }
+    Determinism contract: two runs at the same `noise.rng_seed` produce
+    identical combined detector files. The noise stream is the second
+    spawn of `np.random.default_rng(rng_seed).spawn(2)` — the same split
+    used by `_iter_identification_*` for parameter draws (first stream).
+    """
+    noise_cfg = config.noise
+    scale = noise_cfg.intensity_scale
+    if scale == 1.0 and not noise_cfg.poisson_noise:
+        return  # nothing to do; skip the per-scan file open
+    rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)[1] if noise_cfg.poisson_noise else None
+    for k in range(1, n_scans + 1):
+        det_file = (
+            output_dir / SCAN_DIR_FMT.format(k) / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
         )
+        if not det_file.is_file():
+            continue
+        with h5py.File(det_file, "a") as f:
+            img = f[DETECTOR_INTERNAL_PATH]
+            arr = img[...] * scale
+            if rng is not None:
+                arr = rng.poisson(np.clip(arr, a_min=0.0, a_max=None)).astype(float)
+            img[...] = arr
 
-    manifest_path = output_dir / "manifest.csv"
-    with open(manifest_path, "w", newline="") as fh:
-        if manifest_rows:
-            writer = csv.DictWriter(fh, fieldnames=list(manifest_rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(manifest_rows)
 
-    return {"n_samples": mc.n_samples, "output_dir": output_dir, "manifest_path": manifest_path}
-
-
-def _run_identification_zscan(
+def _iter_identification_zscan(
     config: IdentificationConfig,
-    output_dir: Path,
-) -> dict[str, Any]:
-    """z-scan mode: depth layers x Burgers x angle sweep x rocking-curve grid.
+) -> Iterator[ScanSpec]:
+    """Yield one ScanSpec per (z_offset, plane, b_idx, alpha) configuration.
 
-    For each (z_offset, slip_plane, b_idx, alpha), optionally pairs a random
-    secondary dislocation drawn once per configuration, computes Hg, and
-    writes the phi/chi rocking-curve grid via `save_images_parallel`.
+    Each ScanSpec carries the primary (deterministic, on-axis) dislocation
+    in ``sample["primary"]`` and, when ``zscan.include_secondary`` is True,
+    a randomly-drawn ``sample["secondary"]`` (one draw per configuration,
+    shared across the rocking grid). The (phi, chi) rocking grid comes
+    from ``config.scan.phi`` / ``config.scan.chi`` (shared B+C schema).
+
+    All frames are noiseless; intensity scaling / Poisson noise are
+    applied post-write by ``_maybe_apply_poisson_noise``.
     """
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
     crystal_cfg = config.crystal
     noise_cfg = config.noise
-    io_cfg = config.io
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    all_planes: list[tuple[int, int, int]] = [
-        (1, 1, 1),
-        (1, -1, 1),
-        (1, 1, -1),
-        (-1, 1, 1),
-    ]
-    planes = all_planes if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
-
+    planes = (
+        _ALL_111_PLANES if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
+    )
     angles_deg = np.arange(
         crystal_cfg.angle_start_deg,
         crystal_cfg.angle_stop_deg + crystal_cfg.angle_step_deg * 0.5,
         crystal_cfg.angle_step_deg,
     )
 
-    # Reuse Round 16's RNG-spawn pattern. The secondary stream is at
-    # `secondary_rng_offset` in the spawn list so a noise stream could be
-    # added later without breaking determinism.
-    master = np.random.default_rng(noise_cfg.rng_seed)
-    spawned = master.spawn(zscan.secondary_rng_offset + 1)
+    # Secondary stream uses SeedSequence child [secondary_rng_offset]. Default
+    # is 0; _maybe_apply_poisson_noise uses child [1] from a spawn(2), so the
+    # two streams are independent SeedSequence siblings.
+    spawned = np.random.default_rng(noise_cfg.rng_seed).spawn(zscan.secondary_rng_offset + 1)
     secondary_rng = spawned[zscan.secondary_rng_offset]
 
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
-    manifest_rows: list[dict[str, Any]] = []
-    n_configs = 0
+    scan_mode = config.scan.derived_mode_name()
+    scanned_axes = list(config.scan.scanned_axes())
+    Phi, Chi, n_frames = _frame_grid_from_scan(config.scan)
 
-    projected_configs = (
-        len(zscan.z_offsets_um)
-        * len(planes)
-        * (len(crystal_cfg.b_vector_indices) if crystal_cfg.b_vector_indices else 6)
-        * len(angles_deg)
-    )
-    projected_images = projected_configs * zscan.phi_steps * zscan.chi_steps
-    print(
-        f"z-scan projection (pre-invisibility filter): "
-        f"{projected_configs} configs x {zscan.phi_steps * zscan.chi_steps} rocking images "
-        f"= {projected_images} .npy files to {output_dir}"
-    )
-
-    for k, z_off in enumerate(zscan.z_offsets_um):
+    for z_off in zscan.z_offsets_um:
         rl_shifted = fm.Z_shift(z_off)
-        layer_dir = output_dir / f"layer_{k:04d}"
-
         for plane in planes:
-            plane_slug = _slip_plane_slug(plane)
             b_table = _burgers_vectors(plane)
             b_indices = (
                 crystal_cfg.b_vector_indices
@@ -1275,7 +1487,6 @@ def _run_identification_zscan(
             b_subset = b_table[b_indices]
             n_arr_unnorm = np.asarray(plane, dtype=float)
             n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
-
             rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
             Ud_all = _ud_matrices(n_arr, rotated)
 
@@ -1292,6 +1503,25 @@ def _run_identification_zscan(
                         position_lab_um=(0.0, 0.0, 0.0),
                     )
 
+                    burgers_int = np.asarray(
+                        [
+                            int(round(b_table[b_idx, 0] * np.sqrt(2))),
+                            int(round(b_table[b_idx, 1] * np.sqrt(2))),
+                            int(round(b_table[b_idx, 2] * np.sqrt(2))),
+                        ],
+                        dtype=np.int32,
+                    )
+                    sample: dict[str, Any] = {
+                        "name": "simulated, dislocation identification (z-scan)",
+                        "z_offset_um": float(z_off),
+                        "primary": {
+                            "slip_plane_normal": np.asarray(plane, dtype=np.int32),
+                            "burgers": burgers_int,
+                            "rotation_deg": float(alpha),
+                            "position_um": np.asarray([0.0, 0.0, 0.0]),
+                        },
+                    }
+
                     if zscan.include_secondary:
                         sec = _draw_dislocation(secondary_rng, pos_std_um=0.0)
                         secondary_spec = MixedDislocSpec(
@@ -1300,19 +1530,12 @@ def _run_identification_zscan(
                             position_lab_um=sec["pos_um"],
                         )
                         Fg = Fd_find_multi_dislocs_mixed(
-                            rl_shifted, fm.Us, [primary_spec, secondary_spec], fm.Theta
+                            rl_shifted,
+                            fm.Us,
+                            [primary_spec, secondary_spec],
+                            fm.Theta,
                         )
-                        secondary_meta: dict[str, Any] = {
-                            "secondary_present": True,
-                            "secondary_n_h": sec["plane"][0],
-                            "secondary_n_k": sec["plane"][1],
-                            "secondary_n_l": sec["plane"][2],
-                            "secondary_b_idx": sec["b_idx"],
-                            "secondary_b_h": int(round(sec["b_vec"][0])),
-                            "secondary_b_k": int(round(sec["b_vec"][1])),
-                            "secondary_b_l": int(round(sec["b_vec"][2])),
-                            "secondary_alpha_deg": sec["alpha_deg"],
-                        }
+                        sample["secondary"] = _build_dislocation_sample_entry(sec)
                     else:
                         Fg = Fd_find_mixed(
                             rl_shifted,
@@ -1321,62 +1544,55 @@ def _run_identification_zscan(
                             rotation_deg=float(alpha),
                             Theta=fm.Theta,
                         )
-                        secondary_meta = {
-                            "secondary_present": False,
-                            "secondary_n_h": float("nan"),
-                            "secondary_n_k": float("nan"),
-                            "secondary_n_l": float("nan"),
-                            "secondary_b_idx": -1,
-                            "secondary_b_h": float("nan"),
-                            "secondary_b_k": float("nan"),
-                            "secondary_b_l": float("nan"),
-                            "secondary_alpha_deg": float("nan"),
-                        }
 
                     Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
-                    fm.Hg = Hg
+                    args_list, phi_pf, chi_pf = _scan_frames_args(Hg, Phi, Chi)
 
-                    config_dir = (
-                        layer_dir / f"n_{plane_slug}" / f"b{b_idx}_alpha{int(round(alpha)):03d}"
+                    yield ScanSpec(
+                        title=_identify_title(scan_mode, n_frames, config.scan),
+                        sample=sample,
+                        positioners=_positioners_for_scan(phi_pf, chi_pf, config.scan),
+                        dfxm_geo={
+                            "Hg": Hg,
+                            "q_hkl": q_hkl,
+                            "theta": float(fm.theta),
+                            "psize": float(fm.psize),
+                            "zl_rms": float(fm.zl_rms),
+                        },
+                        detectors={"dfxm_sim_detector": args_list},
+                        attrs={
+                            "scan_mode": scan_mode,
+                            "scanned_axes": scanned_axes,
+                            "identify_mode": "z-scan",
+                        },
                     )
-                    config_dir.mkdir(parents=True, exist_ok=True)
-                    save_images_parallel(
-                        Hg,
-                        zscan.phi_range_deg,
-                        zscan.phi_steps,
-                        zscan.chi_range_deg,
-                        zscan.chi_steps,
-                        str(config_dir),
-                        io_cfg.fn_prefix,
-                        io_cfg.ftype,
-                    )
 
-                    manifest_rows.append(
-                        {
-                            "layer": f"{k:04d}",
-                            "z_offset_um": z_off,
-                            "n_h": plane[0],
-                            "n_k": plane[1],
-                            "n_l": plane[2],
-                            "b_idx": b_idx,
-                            "b_h": int(round(b_table[b_idx, 0] * np.sqrt(2))),
-                            "b_k": int(round(b_table[b_idx, 1] * np.sqrt(2))),
-                            "b_l": int(round(b_table[b_idx, 2] * np.sqrt(2))),
-                            "alpha_deg": float(alpha),
-                            **secondary_meta,
-                            "path": str(config_dir.relative_to(output_dir)),
-                        }
-                    )
-                    n_configs += 1
 
-    manifest_path = output_dir / "manifest.csv"
-    with open(manifest_path, "w", newline="") as fh:
-        if manifest_rows:
-            writer = csv.DictWriter(fh, fieldnames=list(manifest_rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(manifest_rows)
+def _run_identification_zscan(
+    config: IdentificationConfig,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Dispatcher: feed ``_iter_identification_zscan`` into write_identification_h5.
 
-    return {"n_configurations": n_configs, "output_dir": output_dir, "manifest_path": manifest_path}
+    After the master + per-scan detector files are written, applies the
+    post-write Poisson / intensity-scale pass (combined detector only;
+    no per-dislocation files are produced in z-scan mode).
+    """
+    assert config.zscan is not None  # validated in __post_init__
+    output_dir.mkdir(parents=True, exist_ok=True)
+    n_scans = write_identification_h5(
+        output_dir,
+        scan_iter=_iter_identification_zscan(config),
+        cli=" ".join(sys.argv),
+        config_toml=_identification_config_to_toml_str(config),
+        max_workers=config.io.max_workers,
+    )
+    _maybe_apply_poisson_noise(config, output_dir, n_scans)
+    return {
+        "n_configurations": n_scans,
+        "output_dir": output_dir,
+        "master_path": output_dir / "dfxm_identify.h5",
+    }
 
 
 def run_identification(
@@ -1388,6 +1604,17 @@ def run_identification(
         raise ValueError(
             "IdentificationConfig.reciprocal is None — must specify [reciprocal] "
             "block in TOML or set it programmatically before calling run_identification."
+        )
+    # v1.2.0 scope: identify kernels only consume phi + chi. ScanGrid for
+    # two_dtheta / z is implemented but not wired into the identify forward
+    # path. Raise eagerly so users don't get silently-wrong output. Lifting
+    # this guard is tracked as a v1.3.0 follow-up.
+    unwired = [axis for axis in ("two_dtheta", "z") if config.scan.is_scanned(axis)]
+    if unwired:
+        raise ValueError(
+            f"scan axes {unwired} are configured but not yet wired into "
+            f"identification (v1.2.0 scope). For now, set range+steps only on "
+            f"[scan.phi] and/or [scan.chi]."
         )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 

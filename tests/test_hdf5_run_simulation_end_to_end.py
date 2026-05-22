@@ -49,6 +49,11 @@ def test_run_simulation_writes_hdf5(tmp_path: Path) -> None:
     run_simulation(cfg, out)
     h5 = out / "dfxm_geo.h5"
     assert h5.exists()
+    # v1.2.0 layout: master + per-scan detector files.
+    assert (out / "dfxm_geo.h5").is_file()
+    assert (out / "scan0001" / "dfxm_sim_detector_0000.h5").is_file()
+    if cfg.io.include_perfect_crystal:
+        assert (out / "scan0002" / "dfxm_sim_detector_0000.h5").is_file()
     # And the old .npy directories are NOT created.
     assert not (out / "images10").exists()
     assert not (out / "images10_perf_crystal").exists()

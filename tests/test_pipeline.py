@@ -216,12 +216,19 @@ class TestPostprocessConfigFromToml:
 
 @pytest.fixture
 def tiny_h5_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
-    """Write a tiny synthetic dfxm_geo.h5 with /1.1 and /2.1 scans.
+    """Write a tiny synthetic dfxm_geo run dir with /1.1 and /2.1 scans.
 
-    Frames are (H, W) = (4, 4). Both scans have the same shape so
-    run_postprocess can read and process them with mocked forward().
+    Emits the v1.2.0 layout: a master `dfxm_geo.h5` plus per-scan
+    `scan0001/dfxm_sim_detector_0000.h5` and `scan0002/dfxm_sim_detector_0000.h5`
+    detector files, linked from the master via ExternalLink. Frames are
+    (H, W) = (4, 4). Both scans have the same shape so run_postprocess
+    can read and process them with mocked forward().
     """
-    import h5py as _h5py
+    from dfxm_geo.io.hdf5 import (
+        DETECTOR_INTERNAL_PATH,
+        MasterWriter,
+        _write_detector_file,
+    )
 
     chi_steps, phi_steps = 5, 5
     H, W = 4, 4
@@ -235,26 +242,43 @@ def tiny_h5_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
     )
     output_dir = tmp_path / "out"
     output_dir.mkdir(parents=True)
-    h5_path = output_dir / "dfxm_geo.h5"
 
     rng = np.random.default_rng(42)
     n_frames = phi_steps * chi_steps
     dis_stack = rng.normal(1.0, 0.01, size=(n_frames, H, W))
     perf_stack = rng.normal(1.0, 0.01, size=(n_frames, H, W))
 
-    with _h5py.File(h5_path, "w") as f:
-        for scan_id, stack in [("1.1", dis_stack), ("2.1", perf_stack)]:
-            det = f.require_group(f"/{scan_id}/instrument/dfxm_sim_detector")
-            det.create_dataset("data", data=stack)
-        # Embed a minimal config_toml so load_h5_scan can parse step counts.
-        g = f.require_group("/dfxm_geo")
-        g.create_dataset(
-            "config_toml",
-            data=(
-                f"[scan.phi]\nrange = 0.05\nsteps = {phi_steps}\n"
-                f"[scan.chi]\nrange = 0.05\nsteps = {chi_steps}\n"
-            ),
-        )
+    # 1) Per-scan detector files.
+    _write_detector_file(output_dir / "scan0001" / "dfxm_sim_detector_0000.h5", dis_stack)
+    _write_detector_file(output_dir / "scan0002" / "dfxm_sim_detector_0000.h5", perf_stack)
+
+    # 2) Master file linking to the per-scan detector files.
+    master_path = output_dir / "dfxm_geo.h5"
+    cfg_toml = (
+        f"[scan.phi]\nrange = 0.05\nsteps = {phi_steps}\n"
+        f"[scan.chi]\nrange = 0.05\nsteps = {chi_steps}\n"
+    )
+    with MasterWriter(master_path, cli="test", config_toml=cfg_toml, kernel_npz=None) as m:
+        for scan_id, scan_dir in [("1.1", "scan0001"), ("2.1", "scan0002")]:
+            m.add_scan(
+                scan_id=scan_id,
+                title="test",
+                start_time="test",
+                end_time="test",
+                sample={"name": f"test {scan_id}"},
+                positioners={
+                    "phi": np.zeros(n_frames),
+                    "chi": np.zeros(n_frames),
+                },
+                detector_links={
+                    "dfxm_sim_detector": (
+                        Path(scan_dir) / "dfxm_sim_detector_0000.h5",
+                        DETECTOR_INTERNAL_PATH,
+                    )
+                },
+                dfxm_geo={},
+                attrs={},
+            )
     return output_dir, config
 
 
