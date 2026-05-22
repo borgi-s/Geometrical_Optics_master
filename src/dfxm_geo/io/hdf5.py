@@ -452,11 +452,20 @@ class MasterWriter:
         for axis_name, val in positioners.items():
             if axis_name in pos:
                 del pos[axis_name]
-            if isinstance(val, np.ndarray):
-                ds = pos.create_dataset(axis_name, data=np.degrees(val))
+            # z is a translation in micrometers; the other axes are angular
+            # (radians upstream → degrees on disk).
+            if axis_name == "z":
+                if isinstance(val, np.ndarray):
+                    ds = pos.create_dataset(axis_name, data=val)
+                else:
+                    ds = pos.create_dataset(axis_name, data=float(val))
+                ds.attrs["units"] = "micrometer"
             else:
-                ds = pos.create_dataset(axis_name, data=float(np.degrees(val)))
-            ds.attrs["units"] = "degree"
+                if isinstance(val, np.ndarray):
+                    ds = pos.create_dataset(axis_name, data=np.degrees(val))
+                else:
+                    ds = pos.create_dataset(axis_name, data=float(np.degrees(val)))
+                ds.attrs["units"] = "degree"
             if axis_name in meas:
                 del meas[axis_name]
             meas[axis_name] = h5py.SoftLink(f"/{scan_id}/instrument/positioners/{axis_name}")

@@ -407,3 +407,11 @@ def test_run_simulation_mosa_strain_layer_2x2x2x2(tmp_path: Path) -> None:
         assert len(set(z_pf[:8].tolist())) == 1
         assert len(set(z_pf[8:].tolist())) == 1
         assert z_pf[0] != z_pf[8]
+        # z is stored in micrometers (raw value, NOT np.degrees-converted).
+        # With range=1.0 and steps=2, z_samples == linspace(-1, +1, 2) == [-1, +1].
+        assert positioners["z"].attrs["units"] == "micrometer"
+        assert z_pf[0] == pytest.approx(-1.0)
+        assert z_pf[8] == pytest.approx(1.0)
+        # Angular axes still in degrees.
+        assert positioners["phi"].attrs["units"] == "degree"
+        assert positioners["two_dtheta"].attrs["units"] == "degree"
