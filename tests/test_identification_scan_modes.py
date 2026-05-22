@@ -92,6 +92,28 @@ def test_single_with_z_scanned_emits_one_scanspec_per_z(tmp_path: Path) -> None:
             assert "z" in f[f"/{sid}/instrument/positioners"]
 
 
+def test_multi_with_z_scanned_emits_one_scanspec_per_z(tmp_path: Path) -> None:
+    """[scan.z] in identification multi mode multiplies the scan count by n_z."""
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="multi",
+        crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
+        scan=ScanConfig(
+            phi=AxisScanConfig(value=1e-4),
+            z=AxisScanConfig(range=2.0, steps=2),  # 2 z values
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        multi=IdentificationMonteCarloConfig(n_samples=2, pos_std_um=5.0),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        scan_keys = sorted(k for k in f if k != "dfxm_geo")
+        # 2 z * 2 n_samples = 4 scans
+        assert scan_keys == ["1.1", "2.1", "3.1", "4.1"]
+
+
 def test_multi_with_phi_and_chi_scanned_produces_phi_x_chi_frames(
     tmp_path: Path,
 ) -> None:

@@ -1377,7 +1377,7 @@ def _build_dislocation_sample_entry(d: dict[str, Any]) -> dict[str, Any]:
 def _iter_identification_multi(
     config: IdentificationConfig,
 ) -> Iterator[ScanSpec]:
-    """Yield one ScanSpec per Monte Carlo sample (2 random mixed dislocations).
+    """Yield one ScanSpec per (z, Monte Carlo sample) pair.
 
     `render_per_dislocation=False` (default): a single detector
     (`dfxm_sim_detector`) holds the combined-scene frames. `=True`: two
@@ -1388,6 +1388,12 @@ def _iter_identification_multi(
     All frames yielded here are NOISELESS; intensity scaling and
     optional Poisson noise are applied to the combined detector file
     post-write by `_maybe_apply_poisson_noise`.
+
+    When `[scan.z]` is configured, the iterator loops z outermost: each
+    unique z value produces its own set of n_samples ScanSpecs, with
+    `rl_eff = fm.Z_shift(z)` substituted into all Fd_find calls.
+    When z is fixed, z_samples has length 1 — identical to pre-z-aware
+    behaviour.
     """
     assert config.multi is not None  # validated in __post_init__
     mc = config.multi
@@ -1402,84 +1408,93 @@ def _iter_identification_multi(
 
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
-    frames_at_z = _build_scan_frames_at_z(config.scan, z_value=0.0)
-    n_frames = frames_at_z.n_frames
 
-    for _ in range(mc.n_samples):
-        d1 = _draw_dislocation(param_rng, mc.pos_std_um)
-        d2 = _draw_dislocation(param_rng, mc.pos_std_um)
+    # Outer z loop. When z is fixed, z_samples is a length-1 array so the
+    # loop body executes once — identical to the pre-z-aware behaviour.
+    from dfxm_geo.direct_space.forward_model import build_scan_grid
 
-        # Combined-scene Hg (sum of both dislocations)
-        specs = [
-            MixedDislocSpec(
-                Ud_mix=d1["Ud"],
-                rotation_deg=d1["alpha_deg"],
-                position_lab_um=d1["pos_um"],
-            ),
-            MixedDislocSpec(
-                Ud_mix=d2["Ud"],
-                rotation_deg=d2["alpha_deg"],
-                position_lab_um=d2["pos_um"],
-            ),
-        ]
-        Fg_combined = Fd_find_multi_dislocs_mixed(fm.rl, fm.Us, specs, fm.Theta)
-        Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
+    z_samples = build_scan_grid(config.scan).samples[3]
 
-        combined_args, positioners = _scan_frames_args(Hg_combined, frames_at_z, config.scan)
-        detectors: dict[str, list[tuple[int, np.ndarray, float, float, float]]] = {
-            "dfxm_sim_detector": combined_args,
-        }
+    for z in z_samples:
+        z_float = float(z)
+        rl_eff = fm.Z_shift(z_float) if z_float != 0.0 else fm.rl
+        frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
-        if mc.render_per_dislocation:
-            # Per-dislocation Hg: each rendered alone (other one absent).
-            # Noiseless by design — these are ground-truth instance labels.
-            Fg_dis0 = Fd_find_mixed(
-                fm.rl,
-                fm.Us,
-                Ud_mix=d1["Ud"],
-                rotation_deg=d1["alpha_deg"],
-                Theta=fm.Theta,
+        for _ in range(mc.n_samples):
+            d1 = _draw_dislocation(param_rng, mc.pos_std_um)
+            d2 = _draw_dislocation(param_rng, mc.pos_std_um)
+
+            # Combined-scene Hg (sum of both dislocations)
+            specs = [
+                MixedDislocSpec(
+                    Ud_mix=d1["Ud"],
+                    rotation_deg=d1["alpha_deg"],
+                    position_lab_um=d1["pos_um"],
+                ),
+                MixedDislocSpec(
+                    Ud_mix=d2["Ud"],
+                    rotation_deg=d2["alpha_deg"],
+                    position_lab_um=d2["pos_um"],
+                ),
+            ]
+            Fg_combined = Fd_find_multi_dislocs_mixed(rl_eff, fm.Us, specs, fm.Theta)
+            Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
+
+            combined_args, positioners = _scan_frames_args(Hg_combined, frames_at_z, config.scan)
+            detectors: dict[str, list[tuple[int, np.ndarray, float, float, float]]] = {
+                "dfxm_sim_detector": combined_args,
+            }
+
+            if mc.render_per_dislocation:
+                # Per-dislocation Hg: each rendered alone (other one absent).
+                # Noiseless by design — these are ground-truth instance labels.
+                Fg_dis0 = Fd_find_mixed(
+                    rl_eff,
+                    fm.Us,
+                    Ud_mix=d1["Ud"],
+                    rotation_deg=d1["alpha_deg"],
+                    Theta=fm.Theta,
+                )
+                Hg_dis0 = np.transpose(fast_inverse2(Fg_dis0), [0, 2, 1]) - np.identity(3)
+                Fg_dis1 = Fd_find_mixed(
+                    rl_eff,
+                    fm.Us,
+                    Ud_mix=d2["Ud"],
+                    rotation_deg=d2["alpha_deg"],
+                    Theta=fm.Theta,
+                )
+                Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
+                dis0_args, _ = _scan_frames_args(Hg_dis0, frames_at_z, config.scan)
+                dis1_args, _ = _scan_frames_args(Hg_dis1, frames_at_z, config.scan)
+                detectors["dfxm_sim_detector_dis0"] = dis0_args
+                detectors["dfxm_sim_detector_dis1"] = dis1_args
+
+            sample: dict[str, Any] = {
+                "name": "simulated, dislocation identification (multi)",
+                "dislocations": {
+                    "0": _build_dislocation_sample_entry(d1),
+                    "1": _build_dislocation_sample_entry(d2),
+                },
+            }
+
+            yield ScanSpec(
+                title=_identify_title(scan_mode, frames_at_z.n_frames, config.scan),
+                sample=sample,
+                positioners=positioners,
+                dfxm_geo={
+                    "Hg": Hg_combined,
+                    "q_hkl": q_hkl,
+                    "theta": float(fm.theta),
+                    "psize": float(fm.psize),
+                    "zl_rms": float(fm.zl_rms),
+                },
+                detectors=detectors,
+                attrs={
+                    "scan_mode": scan_mode,
+                    "scanned_axes": scanned_axes,
+                    "identify_mode": "multi",
+                },
             )
-            Hg_dis0 = np.transpose(fast_inverse2(Fg_dis0), [0, 2, 1]) - np.identity(3)
-            Fg_dis1 = Fd_find_mixed(
-                fm.rl,
-                fm.Us,
-                Ud_mix=d2["Ud"],
-                rotation_deg=d2["alpha_deg"],
-                Theta=fm.Theta,
-            )
-            Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
-            dis0_args, _ = _scan_frames_args(Hg_dis0, frames_at_z, config.scan)
-            dis1_args, _ = _scan_frames_args(Hg_dis1, frames_at_z, config.scan)
-            detectors["dfxm_sim_detector_dis0"] = dis0_args
-            detectors["dfxm_sim_detector_dis1"] = dis1_args
-
-        sample: dict[str, Any] = {
-            "name": "simulated, dislocation identification (multi)",
-            "dislocations": {
-                "0": _build_dislocation_sample_entry(d1),
-                "1": _build_dislocation_sample_entry(d2),
-            },
-        }
-
-        yield ScanSpec(
-            title=_identify_title(scan_mode, n_frames, config.scan),
-            sample=sample,
-            positioners=positioners,
-            dfxm_geo={
-                "Hg": Hg_combined,
-                "q_hkl": q_hkl,
-                "theta": float(fm.theta),
-                "psize": float(fm.psize),
-                "zl_rms": float(fm.zl_rms),
-            },
-            detectors=detectors,
-            attrs={
-                "scan_mode": scan_mode,
-                "scanned_axes": scanned_axes,
-                "identify_mode": "multi",
-            },
-        )
 
 
 def _run_identification_multi(
