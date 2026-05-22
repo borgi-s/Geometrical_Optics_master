@@ -954,6 +954,49 @@ def cli_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+@dataclass(frozen=True)
+class ScanFrames:
+    """Per-frame trajectory for one scan, all parallel arrays of length n_frames.
+
+    Frame ordering: phi-innermost, chi, two_dtheta, z-outermost.
+    Units: phi/chi/two_dtheta in radians; z in micrometers.
+    """
+
+    phi_pf: np.ndarray
+    chi_pf: np.ndarray
+    two_dtheta_pf: np.ndarray
+    z_pf: np.ndarray
+    n_frames: int
+
+
+def _build_scan_frames(scan: ScanConfig) -> ScanFrames:
+    """Flatten the 4-axis Cartesian product of `build_scan_grid` into per-frame arrays.
+
+    Order: phi-innermost (stride 1), then chi, then two_dtheta,
+    then z-outermost (largest stride). Fixed axes contribute a
+    singleton sample, so they degenerate to a constant column.
+    """
+    from dfxm_geo.direct_space.forward_model import build_scan_grid
+
+    grid = build_scan_grid(scan)
+    phi, chi, two_dtheta, z = grid.samples
+    # `np.meshgrid(..., indexing="ij")` returns arrays ordered (phi, chi, two_dtheta, z).
+    # Ravel in Fortran order so the FIRST index (phi) varies fastest -- giving
+    # phi-innermost, z-outermost flat layout.
+    phi_g, chi_g, twodt_g, z_g = np.meshgrid(phi, chi, two_dtheta, z, indexing="ij")
+    phi_pf = phi_g.ravel(order="F")
+    chi_pf = chi_g.ravel(order="F")
+    two_dtheta_pf = twodt_g.ravel(order="F")
+    z_pf = z_g.ravel(order="F")
+    return ScanFrames(
+        phi_pf=phi_pf,
+        chi_pf=chi_pf,
+        two_dtheta_pf=two_dtheta_pf,
+        z_pf=z_pf,
+        n_frames=int(phi_pf.size),
+    )
+
+
 def _frame_grid_from_scan(
     scan: ScanConfig,
 ) -> tuple[np.ndarray, np.ndarray, int]:
