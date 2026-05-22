@@ -954,7 +954,7 @@ def cli_main(argv: list[str] | None = None) -> int:
     return 0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ScanFrames:
     """Per-frame trajectory for one scan, all parallel arrays of length n_frames.
 

@@ -81,4 +81,6 @@ def test_n_frames_matches_array_length():
     frames = _build_scan_frames(cfg)
     assert frames.n_frames == 12
     assert frames.phi_pf.size == 12
+    assert frames.chi_pf.size == 12
     assert frames.two_dtheta_pf.size == 12
+    assert frames.z_pf.size == 12
