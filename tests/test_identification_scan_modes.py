@@ -165,3 +165,42 @@ def test_single_with_two_dtheta_scanned_does_not_raise(tmp_path: Path) -> None:
     # Must not raise. (Pre-v1.3.0-B this raised ValueError eagerly.)
     run_identification(cfg, tmp_path)
     assert (tmp_path / "dfxm_identify.h5").is_file()
+
+
+def test_single_with_two_dtheta_scanned_keeps_one_scan_per_plane(tmp_path: Path) -> None:
+    """`[scan.two_dtheta]` is a within-scan axis in identification single mode.
+
+    Scan count is unchanged (1 plane * 1 b * 1 alpha = 1 scan); the n_frames
+    per scan is multiplied by n_two_dtheta.
+    """
+    _require_kernel()
+    cfg = IdentificationConfig(
+        mode="single",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=(1, 1, 1),
+            angle_start_deg=0.0,
+            angle_stop_deg=0.0,
+            angle_step_deg=10.0,
+            b_vector_indices=[0],
+            sweep_all_slip_planes=False,
+            exclude_invisibility=False,
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(value=1.5e-4),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=3),  # 3 two_dtheta values
+        ),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        scan_keys = sorted(k for k in f if k != "dfxm_geo")
+        # 1 z * 1 plane * 1 b * 1 alpha = 1 scan (two_dtheta is within-scan)
+        assert scan_keys == ["1.1"]
+        # n_frames = 3 (n_two_dtheta)
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape[0] == 3
+        # two_dtheta is a per-frame positioner array of length 3
+        assert f["/1.1/instrument/positioners/two_dtheta"].shape == (3,)
+        # Angular axis stored in degrees
+        assert f["/1.1/instrument/positioners/two_dtheta"].attrs["units"] == "degree"
