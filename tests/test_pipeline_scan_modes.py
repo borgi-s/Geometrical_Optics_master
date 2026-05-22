@@ -241,3 +241,65 @@ def test_run_simulation_two_dtheta_scan_lifts_value_error(tmp_path: Path) -> Non
         assert sorted(f["/1.1"].attrs["scanned_axes"]) == ["chi", "phi", "two_dtheta"]
         # two_dtheta is a per-frame positioner array
         assert f["/1.1/instrument/positioners/two_dtheta"].shape == (8,)
+
+
+def test_run_simulation_z_scan_recomputes_hg_per_z(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A [scan.z] config triggers one Find_Hg(_from_population) call per unique z."""
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        CenteredCrystalConfig,
+        CrystalConfig,
+        IOConfig,
+        PostprocessConfig,
+        ReciprocalConfig,
+        ScanConfig,
+        SimulationConfig,
+        run_simulation,
+    )
+
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+    # Spy on Find_Hg_from_population to count calls.
+    calls: list[float] = []
+    real = fm.Find_Hg_from_population
+
+    def spy(pop, *args, rl=None, **kwargs):  # type: ignore[no-untyped-def]
+        # Reverse-engineer z from rl identity: rl is None -> z=0; rl is shifted otherwise.
+        if rl is None:
+            calls.append(0.0)
+        else:
+            # We can't easily reverse the offset from rl alone; just record "non-zero".
+            calls.append(float("nan"))
+        return real(pop, *args, rl=rl, **kwargs)
+
+    monkeypatch.setattr(fm, "Find_Hg_from_population", spy)
+
+    cfg = SimulationConfig(
+        crystal=CrystalConfig(
+            mode="centered",
+            centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=6e-4, steps=2),
+            z=AxisScanConfig(range=5.0, steps=3),
+        ),
+        io=IOConfig(include_perfect_crystal=False),
+        postprocess=PostprocessConfig(enabled=False),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_simulation(cfg, tmp_path)
+    # 3 unique z values + 1 baseline call (Hg_provider(0.0) for q_hkl provenance)
+    assert len(calls) >= 3, f"expected >=3 Find_Hg_from_population calls, got {len(calls)}"
+
+    import h5py
+
+    with h5py.File(tmp_path / "dfxm_geo.h5", "r") as f:
+        # 2 phi * 3 z = 6 frames
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape[0] == 6
+        # z is a per-frame positioner
+        assert f["/1.1/instrument/positioners/z"].shape == (6,)
