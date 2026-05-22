@@ -352,3 +352,58 @@ def test_phi_chi_only_scan_remains_v120_compatible(tmp_path: Path) -> None:
         # First 3 frames cycle through phi values, then chi steps.
         unique_phi = sorted(set(phi_pf[:3].tolist()))
         assert len(unique_phi) == 3
+
+
+def test_run_simulation_mosa_strain_layer_2x2x2x2(tmp_path: Path) -> None:
+    """All 4 axes scanned at 2 steps each = 16 frames, scan_mode='mosa_strain_layer'."""
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        CenteredCrystalConfig,
+        CrystalConfig,
+        IOConfig,
+        PostprocessConfig,
+        ReciprocalConfig,
+        ScanConfig,
+        SimulationConfig,
+        run_simulation,
+    )
+
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+    cfg = SimulationConfig(
+        crystal=CrystalConfig(
+            mode="centered",
+            centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+        ),
+        scan=ScanConfig(
+            phi=AxisScanConfig(range=6e-4, steps=2),
+            chi=AxisScanConfig(range=2e-3, steps=2),
+            two_dtheta=AxisScanConfig(range=1e-4, steps=2),
+            z=AxisScanConfig(range=1.0, steps=2),
+        ),
+        io=IOConfig(include_perfect_crystal=False),
+        postprocess=PostprocessConfig(enabled=False),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_simulation(cfg, tmp_path)
+
+    import h5py
+
+    with h5py.File(tmp_path / "dfxm_geo.h5", "r") as f:
+        assert f["/1.1/instrument/dfxm_sim_detector/data"].shape[0] == 16  # 2^4
+        assert f["/1.1"].attrs["scan_mode"] == "mosa_strain_layer"
+        assert sorted(f["/1.1"].attrs["scanned_axes"]) == ["chi", "phi", "two_dtheta", "z"]
+        positioners = f["/1.1/instrument/positioners"]
+        # All 4 axes are per-frame arrays.
+        for axis in ("phi", "chi", "two_dtheta", "z"):
+            assert positioners[axis].shape == (16,), (
+                f"{axis} should be per-frame; got shape {positioners[axis].shape}"
+            )
+        # z-outermost: first 8 frames share z[0], last 8 share z[1]
+        z_pf = positioners["z"][...]
+        assert len(set(z_pf[:8].tolist())) == 1
+        assert len(set(z_pf[8:].tolist())) == 1
+        assert z_pf[0] != z_pf[8]
