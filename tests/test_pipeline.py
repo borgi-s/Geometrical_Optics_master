@@ -592,7 +592,9 @@ class TestReciprocalConfigParsing:
         assert config.reciprocal.hkl == (-1, 1, -1)
         assert config.reciprocal.keV == 17.0
 
-    def test_simulation_config_missing_reciprocal_raises(self, tmp_path: Path) -> None:
+    def test_simulation_config_missing_reciprocal_uses_default(self, tmp_path: Path) -> None:
+        # Sub-project F: missing [reciprocal] block now returns Al 111 @ 17 keV default
+        # instead of raising. Old behavior (raise ValueError) removed in v2.0.0.
         from dfxm_geo.pipeline import SimulationConfig
 
         cfg = self._write_minimal_sim_toml(
@@ -602,10 +604,14 @@ class TestReciprocalConfigParsing:
             + self._minimal_io()
             + self._minimal_postprocess(),
         )
-        with pytest.raises(ValueError, match=r"missing \[reciprocal\] block"):
-            SimulationConfig.from_toml(cfg)
+        config = SimulationConfig.from_toml(cfg)
+        assert config.reciprocal is not None
+        assert config.reciprocal.hkl == (-1, 1, -1)
+        assert config.reciprocal.keV == 17.0
 
-    def test_simulation_config_missing_hkl_raises(self, tmp_path: Path) -> None:
+    def test_simulation_config_missing_hkl_uses_default_hkl(self, tmp_path: Path) -> None:
+        # Sub-project F: partial [reciprocal] (only keV) falls back to default hkl.
+        # Old behavior (raise ValueError for missing hkl) removed in v2.0.0.
         from dfxm_geo.pipeline import SimulationConfig
 
         cfg = self._write_minimal_sim_toml(
@@ -616,10 +622,14 @@ class TestReciprocalConfigParsing:
             + self._minimal_postprocess()
             + "[reciprocal]\nkeV = 17.0\n",
         )
-        with pytest.raises(ValueError, match=r"missing `hkl` in \[reciprocal\]"):
-            SimulationConfig.from_toml(cfg)
+        config = SimulationConfig.from_toml(cfg)
+        assert config.reciprocal is not None
+        assert config.reciprocal.hkl == (-1, 1, -1)
+        assert config.reciprocal.keV == 17.0
 
-    def test_simulation_config_missing_keV_raises(self, tmp_path: Path) -> None:
+    def test_simulation_config_missing_keV_uses_default_keV(self, tmp_path: Path) -> None:
+        # Sub-project F: partial [reciprocal] (only hkl) falls back to default keV.
+        # Old behavior (raise ValueError for missing keV) removed in v2.0.0.
         from dfxm_geo.pipeline import SimulationConfig
 
         cfg = self._write_minimal_sim_toml(
@@ -630,8 +640,10 @@ class TestReciprocalConfigParsing:
             + self._minimal_postprocess()
             + "[reciprocal]\nhkl = [-1, 1, -1]\n",
         )
-        with pytest.raises(ValueError, match=r"missing `keV` in \[reciprocal\]"):
-            SimulationConfig.from_toml(cfg)
+        config = SimulationConfig.from_toml(cfg)
+        assert config.reciprocal is not None
+        assert config.reciprocal.hkl == (-1, 1, -1)
+        assert config.reciprocal.keV == 17.0
 
     def test_simulation_config_invalid_hkl_propagates_validate_error(self, tmp_path: Path) -> None:
         from dfxm_geo.pipeline import SimulationConfig
@@ -655,7 +667,9 @@ class TestReciprocalConfigParsing:
         assert config.reciprocal.hkl == (-1, 1, -1)
         assert config.reciprocal.keV == 17.0
 
-    def test_identification_config_missing_reciprocal_raises(self, tmp_path: Path) -> None:
+    def test_identification_config_missing_reciprocal_uses_default(self, tmp_path: Path) -> None:
+        # Sub-project F: missing [reciprocal] block now returns Al 111 @ 17 keV default
+        # instead of raising. Old behavior (raise ValueError) removed in v2.0.0.
         from dfxm_geo.pipeline import load_identification_config
 
         cfg = tmp_path / "identify.toml"
@@ -670,8 +684,10 @@ class TestReciprocalConfigParsing:
             '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
             'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = false\n'
         )
-        with pytest.raises(ValueError, match=r"missing \[reciprocal\] block"):
-            load_identification_config(cfg)
+        config = load_identification_config(cfg)
+        assert config.reciprocal is not None
+        assert config.reciprocal.hkl == (-1, 1, -1)
+        assert config.reciprocal.keV == 17.0
 
 
 class TestDataclassToTomlRoundTrip:

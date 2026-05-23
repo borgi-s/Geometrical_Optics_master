@@ -23,3 +23,20 @@ class TestCenteredCrystalDefaults:
         # b · n == 0 and t ∥ (n × b) — the __post_init__ checks.
         # Construction passing without ValueError is the assertion.
         CenteredCrystalConfig()
+
+
+class TestReciprocalDefaults:
+    def test_bare_construction_uses_al_111_17kev(self) -> None:
+        cfg = ReciprocalConfig()
+        assert cfg.hkl == (-1, 1, -1)
+        assert cfg.keV == 17.0
+
+    def test_from_dict_none_returns_default(self) -> None:
+        cfg = ReciprocalConfig.from_dict(None)
+        assert cfg.hkl == (-1, 1, -1)
+        assert cfg.keV == 17.0
+
+    def test_from_dict_empty_returns_default(self) -> None:
+        cfg = ReciprocalConfig.from_dict({})
+        assert cfg.hkl == (-1, 1, -1)
+        assert cfg.keV == 17.0

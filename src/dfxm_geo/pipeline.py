@@ -356,34 +356,38 @@ class ReciprocalConfig:
     The TOML ``[reciprocal]`` block carries both this (small, consumed by
     forward + identify) and bootstrap's MC params (large, consumed only by
     `dfxm-bootstrap`). This dataclass holds only the lookup-relevant keys.
+
+    Sub-project F: both fields default to the IUCrJ-canonical Al 111 @ 17 keV.
+    `from_dict(None)` / `from_dict({})` returns the default; partial dicts
+    (one of hkl/keV) fall back to the default for the missing key.
     """
 
-    hkl: tuple[int, int, int]
-    keV: float
+    hkl: tuple[int, int, int] = (-1, 1, -1)
+    keV: float = 17.0
 
-    @classmethod
-    def from_dict(cls, data: dict | None) -> ReciprocalConfig:
-        if data is None:
-            raise ValueError(
-                "missing [reciprocal] block — forward/identify require explicit "
-                "hkl + keV; see configs/default.toml."
-            )
-        if "hkl" not in data:
-            raise ValueError("missing `hkl` in [reciprocal] — required for kernel lookup.")
-        if "keV" not in data:
-            raise ValueError("missing `keV` in [reciprocal] — required for kernel lookup.")
-        hkl = tuple(data["hkl"])
-        keV = float(data["keV"])
-        # Early validation per spec — catches typos / Bragg-unsatisfiable
-        # before the kernel lookup. Propagates A's ValueErrors verbatim.
+    def __post_init__(self) -> None:
+        # Normalize hkl to a tuple in case a list slipped through programmatic
+        # construction; from_dict already does this for TOML callers.
+        if not isinstance(self.hkl, tuple):
+            self.hkl = tuple(self.hkl)
         from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
         # TODO(non-Al materials): hardcoded Al lattice parameter; revisit if/when
         # the codebase supports other crystals. Tracked as deferred work in the
         # sub-project A spec ("materials other than Al") and in the sub-project D
         # spec ("out of scope").
-        _validate_reflection(hkl, keV, 4.0495e-10)
-        return cls(hkl=hkl, keV=keV)
+        _validate_reflection(self.hkl, self.keV, 4.0495e-10)
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> ReciprocalConfig:
+        if not data:
+            return cls()
+        kwargs: dict = {}
+        if "hkl" in data:
+            kwargs["hkl"] = tuple(data["hkl"])
+        if "keV" in data:
+            kwargs["keV"] = float(data["keV"])
+        return cls(**kwargs)
 
 
 @dataclass
