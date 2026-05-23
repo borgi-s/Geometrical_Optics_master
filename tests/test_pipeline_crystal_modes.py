@@ -34,8 +34,8 @@ class TestCenteredCrystalConfig:
 
 
 class TestWallCrystalConfig:
-    def test_constructs_with_defaults(self) -> None:
-        cfg = WallCrystalConfig()
+    def test_explicit_construction_succeeds(self) -> None:
+        cfg = WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")
         assert cfg.dis == 4.0
         assert cfg.ndis == 151
         assert cfg.sample_remount == "S1"
@@ -46,7 +46,7 @@ class TestWallCrystalConfig:
 
     def test_invalid_remount_rejected(self) -> None:
         with pytest.raises(ValueError, match="sample_remount must be one of"):
-            WallCrystalConfig(sample_remount="S9")
+            WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S9")
 
 
 class TestRandomDislocationsConfig:

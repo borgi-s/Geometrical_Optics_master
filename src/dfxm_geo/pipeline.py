@@ -201,17 +201,20 @@ class CenteredCrystalConfig:
             )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class WallCrystalConfig:
     """Dis-spaced grid of dislocations (sub-project C, mode='wall').
 
-    The current Borgi/Purdue IUCrJ 2024 layout. Preserved unchanged from
-    the legacy flat `CrystalConfig`.
+    The current Borgi/Purdue IUCrJ 2024 layout. Sub-project F strips the
+    publication-grade defaults: dis/ndis/sample_remount must be specified
+    explicitly. This is the v2.0.0 breaking change. `kw_only=True` ensures
+    the strip surfaces as a clear "missing N required keyword-only argument"
+    TypeError rather than positional-arg confusion.
     """
 
-    dis: float = 4.0
-    ndis: int = 151
-    sample_remount: str = "S1"
+    dis: float
+    ndis: int
+    sample_remount: str
 
     def __post_init__(self) -> None:
         if self.sample_remount not in SAMPLE_REMOUNT_OPTIONS:

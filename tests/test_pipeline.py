@@ -34,7 +34,7 @@ class TestSimulationConfigDefaults:
         cfg = SimulationConfig(
             crystal=CrystalConfig(
                 mode="wall",
-                wall=WallCrystalConfig(dis=4.0, ndis=151),
+                wall=WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1"),
             )
         )
         assert cfg.crystal.wall is not None
@@ -64,7 +64,7 @@ class TestSimulationConfigFromToml:
         p = tmp_path / "minimal.toml"
         p.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.1\nsteps = 10\n[scan.chi]\nrange = 0.2\nsteps = 20\n",
             encoding="utf-8",
         )
@@ -124,7 +124,7 @@ class TestCrystalConfigSampleRemount:
     def test_default_is_S1(self) -> None:
         from dfxm_geo.pipeline import WallCrystalConfig
 
-        cfg = WallCrystalConfig(dis=4.0, ndis=151)
+        cfg = WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")
         assert cfg.sample_remount == "S1"
 
     def test_accepts_S2_S3_S4(self) -> None:
@@ -182,7 +182,9 @@ class TestPostprocessConfigDefaults:
 
     def test_simulation_config_includes_postprocess_field(self) -> None:
         cfg = SimulationConfig(
-            crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151))
+            crystal=CrystalConfig(
+                mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")
+            )
         )
         assert cfg.postprocess == PostprocessConfig()
 
@@ -192,7 +194,7 @@ class TestPostprocessConfigFromToml:
         p = tmp_path / "with_pp.toml"
         p.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.1\nsteps = 10\n[scan.chi]\nrange = 0.2\nsteps = 20\n"
             "\n[postprocess]\nenabled = false\nchi_oversample = 5\n",
             encoding="utf-8",
@@ -207,7 +209,7 @@ class TestPostprocessConfigFromToml:
         p = tmp_path / "no_pp.toml"
         p.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.1\nsteps = 10\n[scan.chi]\nrange = 0.2\nsteps = 20\n",
             encoding="utf-8",
         )
@@ -234,7 +236,9 @@ def tiny_h5_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
     chi_steps, phi_steps = 5, 5
     H, W = 4, 4
     config = SimulationConfig(
-        crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=1.0, ndis=2)),
+        crystal=CrystalConfig(
+            mode="wall", wall=WallCrystalConfig(dis=1.0, ndis=2, sample_remount="S1")
+        ),
         scan=ScanConfig(
             phi=AxisScanConfig(range=0.05, steps=phi_steps),
             chi=AxisScanConfig(range=0.05, steps=chi_steps),
@@ -336,7 +340,9 @@ class TestRunPostprocess:
         tmp_path: Path,
     ) -> None:
         cfg = SimulationConfig(
-            crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151))
+            crystal=CrystalConfig(
+                mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")
+            )
         )
         with pytest.raises(FileNotFoundError, match="dfxm_geo.h5"):
             run_postprocess(tmp_path, cfg)
@@ -349,7 +355,9 @@ class TestRunPostprocess:
         import h5py as _h5py
 
         cfg = SimulationConfig(
-            crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151))
+            crystal=CrystalConfig(
+                mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")
+            )
         )
         # Create an .h5 with only /1.1 — no /2.1 perfect crystal scan.
         h5_path = tmp_path / "dfxm_geo.h5"
@@ -381,7 +389,7 @@ class TestCliMainFlags:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n",
             encoding="utf-8",
         )
@@ -406,7 +414,7 @@ class TestCliMainFlags:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n",
             encoding="utf-8",
         )
@@ -439,7 +447,7 @@ class TestCliMainFlags:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n",
             encoding="utf-8",
         )
@@ -473,7 +481,7 @@ class TestCliMainFlags:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n"
             "\n[postprocess]\nenabled = false\n",
             encoding="utf-8",
