@@ -821,8 +821,13 @@ def Find_Hg_from_population(
     ]
 
     # Compute Fg via the multi-dislocation kernel.
+    # rl is in metres here; Fd_find_mixed's field formula expects micrometres
+    # (b = BURGERS_VECTOR is in µm), so convert — exactly as the wall path does
+    # via Fd_find(rl * 1e6, ...) and the reference disloc_identify.py does via
+    # Fd_find_mixed(rl * 1e6, ...). Omitting this made |rd| 1e6x too small and
+    # the 1/r field 1e6x too large (sub-project C regression).
     # Returns shape (X, 3, 3) with identity already added (Fg, not Fdd).
-    Fg = Fd_find_multi_dislocs_mixed(rl_eff, Us, crystals, Theta, S=S)
+    Fg = Fd_find_multi_dislocs_mixed(rl_eff * 1e6, Us, crystals, Theta, S=S)
 
     # Convert Fg → Hg using the same convention as load_or_generate_Hg:
     #   Hg = transpose(Fg^-1) - I
