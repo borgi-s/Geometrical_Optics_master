@@ -73,3 +73,18 @@ class TestCrystalConfigDefault:
 
         with pytest.raises(ValueError, match=r"\[crystal\.wall\] sub-block is required"):
             CrystalConfig.from_dict({"mode": "wall"})
+
+
+class TestSimulationConfigDefaults:
+    def test_bare_construction_succeeds(self) -> None:
+        cfg = SimulationConfig()
+        # Crystal cascades to default
+        assert cfg.crystal.mode == "centered"
+        assert cfg.crystal.centered is not None
+        # Reciprocal cascades to default
+        assert cfg.reciprocal is not None
+        assert cfg.reciprocal.hkl == (-1, 1, -1)
+        assert cfg.reciprocal.keV == 17.0
+        # Scan defaults to all-axes-fixed (single mode)
+        assert cfg.scan.scanned_axes() == ()
+        assert cfg.scan.derived_mode_name() == "single"

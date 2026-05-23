@@ -60,7 +60,7 @@ class TestSimulationConfigFromToml:
         assert cfg.postprocess.chi_oversample == 20
 
     def test_omitted_optional_sections_use_defaults(self, tmp_path: Path) -> None:
-        """[crystal] is required (new schema); [io] and [postprocess] are optional."""
+        """[io] and [postprocess] are optional; missing sections fall back to dataclass defaults."""
         p = tmp_path / "minimal.toml"
         p.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
@@ -77,15 +77,16 @@ class TestSimulationConfigFromToml:
         assert cfg.scan.chi.steps == 20
         assert cfg.io == IOConfig()
 
-    def test_missing_crystal_section_raises(self, tmp_path: Path) -> None:
-        """The [crystal] section is mandatory (new schema)."""
+    def test_missing_crystal_section_uses_default(self, tmp_path: Path) -> None:
+        """Sub-project F: [crystal] section is now optional; missing → canonical centered default."""
         p = tmp_path / "no_crystal.toml"
         p.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
             encoding="utf-8",
         )
-        with pytest.raises((KeyError, ValueError)):
-            SimulationConfig.from_toml(p)
+        cfg = SimulationConfig.from_toml(p)
+        assert cfg.crystal.mode == "centered"
+        assert cfg.crystal.centered is not None
 
     def test_all_shipped_variants_parse(self) -> None:
         """Every dfxm-forward config under configs/ + configs/variants/ parses cleanly.

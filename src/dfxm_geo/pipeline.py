@@ -402,14 +402,13 @@ class ReciprocalConfig:
 
 @dataclass
 class SimulationConfig:
-    crystal: CrystalConfig  # NO DEFAULT — required; construct via CrystalConfig.from_dict
+    # Sub-project F: crystal cascades to canonical-centered default (was: required).
+    crystal: CrystalConfig = field(default_factory=CrystalConfig.default)
     scan: ScanConfig = field(default_factory=ScanConfig)
     io: IOConfig = field(default_factory=IOConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
-    # Sub-project D: optional in Python construction (defaults to None for
-    # back-compat with test fixtures). `from_toml` requires it; `run_simulation`
-    # raises if None at runtime.
-    reciprocal: ReciprocalConfig | None = None
+    # Sub-project F: reciprocal cascades to Al 111 @ 17 keV (was: Optional[None]).
+    reciprocal: ReciprocalConfig = field(default_factory=ReciprocalConfig)
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -617,11 +616,6 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
-    if config.reciprocal is None:
-        raise ValueError(
-            "SimulationConfig.reciprocal is None — must specify [reciprocal] "
-            "block in TOML or set it programmatically before calling run_simulation."
-        )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -668,9 +662,9 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
                 w.ndis,
                 fm.psize,
                 fm.zl_rms,
-                h=config.reciprocal.hkl[0],  # type: ignore[union-attr]
-                k=config.reciprocal.hkl[1],  # type: ignore[union-attr]
-                l=config.reciprocal.hkl[2],  # type: ignore[union-attr]
+                h=config.reciprocal.hkl[0],
+                k=config.reciprocal.hkl[1],
+                l=config.reciprocal.hkl[2],
                 S=S,
                 remount_name=w.sample_remount,
                 z_offset_um=z,
@@ -685,9 +679,9 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
             rl_eff = fm.Z_shift(z) if z != 0.0 else None
             return fm.Find_Hg_from_population(
                 population,
-                h=config.reciprocal.hkl[0],  # type: ignore[union-attr]
-                k=config.reciprocal.hkl[1],  # type: ignore[union-attr]
-                l=config.reciprocal.hkl[2],  # type: ignore[union-attr]
+                h=config.reciprocal.hkl[0],
+                k=config.reciprocal.hkl[1],
+                l=config.reciprocal.hkl[2],
                 rl=rl_eff,
             )
 
