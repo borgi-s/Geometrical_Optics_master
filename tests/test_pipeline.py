@@ -34,7 +34,7 @@ class TestSimulationConfigDefaults:
         cfg = SimulationConfig(
             crystal=CrystalConfig(
                 mode="wall",
-                wall=WallCrystalConfig(dis=4.0, ndis=151),
+                wall=WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1"),
             )
         )
         assert cfg.crystal.wall is not None
@@ -60,11 +60,11 @@ class TestSimulationConfigFromToml:
         assert cfg.postprocess.chi_oversample == 20
 
     def test_omitted_optional_sections_use_defaults(self, tmp_path: Path) -> None:
-        """[crystal] is required (new schema); [io] and [postprocess] are optional."""
+        """[io] and [postprocess] are optional; missing sections fall back to dataclass defaults."""
         p = tmp_path / "minimal.toml"
         p.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.1\nsteps = 10\n[scan.chi]\nrange = 0.2\nsteps = 20\n",
             encoding="utf-8",
         )
@@ -77,15 +77,16 @@ class TestSimulationConfigFromToml:
         assert cfg.scan.chi.steps == 20
         assert cfg.io == IOConfig()
 
-    def test_missing_crystal_section_raises(self, tmp_path: Path) -> None:
-        """The [crystal] section is mandatory (new schema)."""
+    def test_missing_crystal_section_uses_default(self, tmp_path: Path) -> None:
+        """Sub-project F: [crystal] section is now optional; missing → canonical centered default."""
         p = tmp_path / "no_crystal.toml"
         p.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n",
             encoding="utf-8",
         )
-        with pytest.raises((KeyError, ValueError)):
-            SimulationConfig.from_toml(p)
+        cfg = SimulationConfig.from_toml(p)
+        assert cfg.crystal.mode == "centered"
+        assert cfg.crystal.centered is not None
 
     def test_all_shipped_variants_parse(self) -> None:
         """Every dfxm-forward config under configs/ + configs/variants/ parses cleanly.
@@ -123,7 +124,7 @@ class TestCrystalConfigSampleRemount:
     def test_default_is_S1(self) -> None:
         from dfxm_geo.pipeline import WallCrystalConfig
 
-        cfg = WallCrystalConfig(dis=4.0, ndis=151)
+        cfg = WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")
         assert cfg.sample_remount == "S1"
 
     def test_accepts_S2_S3_S4(self) -> None:
@@ -181,7 +182,9 @@ class TestPostprocessConfigDefaults:
 
     def test_simulation_config_includes_postprocess_field(self) -> None:
         cfg = SimulationConfig(
-            crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151))
+            crystal=CrystalConfig(
+                mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")
+            )
         )
         assert cfg.postprocess == PostprocessConfig()
 
@@ -191,7 +194,7 @@ class TestPostprocessConfigFromToml:
         p = tmp_path / "with_pp.toml"
         p.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.1\nsteps = 10\n[scan.chi]\nrange = 0.2\nsteps = 20\n"
             "\n[postprocess]\nenabled = false\nchi_oversample = 5\n",
             encoding="utf-8",
@@ -206,7 +209,7 @@ class TestPostprocessConfigFromToml:
         p = tmp_path / "no_pp.toml"
         p.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.1\nsteps = 10\n[scan.chi]\nrange = 0.2\nsteps = 20\n",
             encoding="utf-8",
         )
@@ -233,7 +236,9 @@ def tiny_h5_simulation_output(tmp_path: Path) -> tuple[Path, SimulationConfig]:
     chi_steps, phi_steps = 5, 5
     H, W = 4, 4
     config = SimulationConfig(
-        crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=1.0, ndis=2)),
+        crystal=CrystalConfig(
+            mode="wall", wall=WallCrystalConfig(dis=1.0, ndis=2, sample_remount="S1")
+        ),
         scan=ScanConfig(
             phi=AxisScanConfig(range=0.05, steps=phi_steps),
             chi=AxisScanConfig(range=0.05, steps=chi_steps),
@@ -335,7 +340,9 @@ class TestRunPostprocess:
         tmp_path: Path,
     ) -> None:
         cfg = SimulationConfig(
-            crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151))
+            crystal=CrystalConfig(
+                mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")
+            )
         )
         with pytest.raises(FileNotFoundError, match="dfxm_geo.h5"):
             run_postprocess(tmp_path, cfg)
@@ -348,7 +355,9 @@ class TestRunPostprocess:
         import h5py as _h5py
 
         cfg = SimulationConfig(
-            crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151))
+            crystal=CrystalConfig(
+                mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")
+            )
         )
         # Create an .h5 with only /1.1 — no /2.1 perfect crystal scan.
         h5_path = tmp_path / "dfxm_geo.h5"
@@ -380,7 +389,7 @@ class TestCliMainFlags:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n",
             encoding="utf-8",
         )
@@ -405,7 +414,7 @@ class TestCliMainFlags:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n",
             encoding="utf-8",
         )
@@ -438,7 +447,7 @@ class TestCliMainFlags:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n",
             encoding="utf-8",
         )
@@ -472,7 +481,7 @@ class TestCliMainFlags:
         config_path = tmp_path / "cfg.toml"
         config_path.write_text(
             "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
-            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\n'
+            '\n[crystal]\nmode = "wall"\n[crystal.wall]\ndis = 4.0\nndis = 151\nsample_remount = "S1"\n'
             "\n[scan.phi]\nrange = 0.05\nsteps = 5\n[scan.chi]\nrange = 0.05\nsteps = 5\n"
             "\n[postprocess]\nenabled = false\n",
             encoding="utf-8",
@@ -592,7 +601,9 @@ class TestReciprocalConfigParsing:
         assert config.reciprocal.hkl == (-1, 1, -1)
         assert config.reciprocal.keV == 17.0
 
-    def test_simulation_config_missing_reciprocal_raises(self, tmp_path: Path) -> None:
+    def test_simulation_config_missing_reciprocal_uses_default(self, tmp_path: Path) -> None:
+        # Sub-project F: missing [reciprocal] block now returns Al 111 @ 17 keV default
+        # instead of raising. Old behavior (raise ValueError) removed in v2.0.0.
         from dfxm_geo.pipeline import SimulationConfig
 
         cfg = self._write_minimal_sim_toml(
@@ -602,10 +613,14 @@ class TestReciprocalConfigParsing:
             + self._minimal_io()
             + self._minimal_postprocess(),
         )
-        with pytest.raises(ValueError, match=r"missing \[reciprocal\] block"):
-            SimulationConfig.from_toml(cfg)
+        config = SimulationConfig.from_toml(cfg)
+        assert config.reciprocal is not None
+        assert config.reciprocal.hkl == (-1, 1, -1)
+        assert config.reciprocal.keV == 17.0
 
-    def test_simulation_config_missing_hkl_raises(self, tmp_path: Path) -> None:
+    def test_simulation_config_missing_hkl_uses_default_hkl(self, tmp_path: Path) -> None:
+        # Sub-project F: partial [reciprocal] (only keV) falls back to default hkl.
+        # Old behavior (raise ValueError for missing hkl) removed in v2.0.0.
         from dfxm_geo.pipeline import SimulationConfig
 
         cfg = self._write_minimal_sim_toml(
@@ -616,10 +631,14 @@ class TestReciprocalConfigParsing:
             + self._minimal_postprocess()
             + "[reciprocal]\nkeV = 17.0\n",
         )
-        with pytest.raises(ValueError, match=r"missing `hkl` in \[reciprocal\]"):
-            SimulationConfig.from_toml(cfg)
+        config = SimulationConfig.from_toml(cfg)
+        assert config.reciprocal is not None
+        assert config.reciprocal.hkl == (-1, 1, -1)
+        assert config.reciprocal.keV == 17.0
 
-    def test_simulation_config_missing_keV_raises(self, tmp_path: Path) -> None:
+    def test_simulation_config_missing_keV_uses_default_keV(self, tmp_path: Path) -> None:
+        # Sub-project F: partial [reciprocal] (only hkl) falls back to default keV.
+        # Old behavior (raise ValueError for missing keV) removed in v2.0.0.
         from dfxm_geo.pipeline import SimulationConfig
 
         cfg = self._write_minimal_sim_toml(
@@ -630,8 +649,10 @@ class TestReciprocalConfigParsing:
             + self._minimal_postprocess()
             + "[reciprocal]\nhkl = [-1, 1, -1]\n",
         )
-        with pytest.raises(ValueError, match=r"missing `keV` in \[reciprocal\]"):
-            SimulationConfig.from_toml(cfg)
+        config = SimulationConfig.from_toml(cfg)
+        assert config.reciprocal is not None
+        assert config.reciprocal.hkl == (-1, 1, -1)
+        assert config.reciprocal.keV == 17.0
 
     def test_simulation_config_invalid_hkl_propagates_validate_error(self, tmp_path: Path) -> None:
         from dfxm_geo.pipeline import SimulationConfig
@@ -655,7 +676,9 @@ class TestReciprocalConfigParsing:
         assert config.reciprocal.hkl == (-1, 1, -1)
         assert config.reciprocal.keV == 17.0
 
-    def test_identification_config_missing_reciprocal_raises(self, tmp_path: Path) -> None:
+    def test_identification_config_missing_reciprocal_uses_default(self, tmp_path: Path) -> None:
+        # Sub-project F: missing [reciprocal] block now returns Al 111 @ 17 keV default
+        # instead of raising. Old behavior (raise ValueError) removed in v2.0.0.
         from dfxm_geo.pipeline import load_identification_config
 
         cfg = tmp_path / "identify.toml"
@@ -670,8 +693,10 @@ class TestReciprocalConfigParsing:
             '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
             'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = false\n'
         )
-        with pytest.raises(ValueError, match=r"missing \[reciprocal\] block"):
-            load_identification_config(cfg)
+        config = load_identification_config(cfg)
+        assert config.reciprocal is not None
+        assert config.reciprocal.hkl == (-1, 1, -1)
+        assert config.reciprocal.keV == 17.0
 
 
 class TestDataclassToTomlRoundTrip:

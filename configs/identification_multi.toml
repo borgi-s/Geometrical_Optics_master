@@ -1,3 +1,14 @@
+# Default DFXM identification config (mode='multi').
+#
+# Every block below shows the DEFAULT value `dfxm-identify` would use if
+# the block were omitted. A literally-empty .toml file is a valid input —
+# the result for an empty .toml is mode='single' + canonical {111} sweep
+# + default noise + Al 111 @ 17 keV. To get the mode='multi' behavior
+# this file describes, the [multi] block below is required (no default).
+#
+# Edit any block to override; delete any block to fall back to the
+# default shown here.
+#
 # dfxm-identify: Monte Carlo over 2 random dislocations per image.
 #
 # Forward-looking extension beyond Borgi 2025; intended for ML-training-data

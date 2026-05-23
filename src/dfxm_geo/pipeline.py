@@ -168,9 +168,9 @@ class CenteredCrystalConfig:
       - t parallel to (n × b)  (line direction consistent with slip system)
     """
 
-    b: tuple[int, int, int]
-    n: tuple[int, int, int]
-    t: tuple[int, int, int]
+    b: tuple[int, int, int] = (1, 0, -1)
+    n: tuple[int, int, int] = (1, 1, 1)
+    t: tuple[int, int, int] = (1, -2, 1)
 
     def __post_init__(self) -> None:
         b = self.b
@@ -201,17 +201,20 @@ class CenteredCrystalConfig:
             )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class WallCrystalConfig:
     """Dis-spaced grid of dislocations (sub-project C, mode='wall').
 
-    The current Borgi/Purdue IUCrJ 2024 layout. Preserved unchanged from
-    the legacy flat `CrystalConfig`.
+    The current Borgi/Purdue IUCrJ 2024 layout. Sub-project F strips the
+    publication-grade defaults: dis/ndis/sample_remount must be specified
+    explicitly. This is the v2.0.0 breaking change. `kw_only=True` ensures
+    the strip surfaces as a clear "missing N required keyword-only argument"
+    TypeError rather than positional-arg confusion.
     """
 
-    dis: float = 4.0
-    ndis: int = 151
-    sample_remount: str = "S1"
+    dis: float
+    ndis: int
+    sample_remount: str
 
     def __post_init__(self) -> None:
         if self.sample_remount not in SAMPLE_REMOUNT_OPTIONS:
@@ -285,12 +288,22 @@ class CrystalConfig:
             )
 
     @classmethod
+    def default(cls) -> CrystalConfig:
+        """Sub-project F: canonical empty-TOML default.
+
+        Returns mode='centered' with CenteredCrystalConfig() (canonical FCC
+        primary). Used as the SimulationConfig.crystal default factory and
+        as the empty-TOML fallback in from_dict.
+        """
+        return cls(mode="centered", centered=CenteredCrystalConfig())
+
+    @classmethod
     def from_dict(cls, data: dict | None) -> CrystalConfig:
-        if data is None:
-            raise ValueError(
-                "missing [crystal] block — forward/identify require explicit "
-                "crystal layout; see configs/default.toml."
-            )
+        # Sub-project F: empty/missing [crystal] → canonical centered default.
+        # Explicit `[crystal] mode = "<m>"` without `[crystal.<m>]` still raises
+        # below; "default" is reached only by omission, not declaration.
+        if not data:
+            return cls.default()
         if "mode" not in data:
             raise ValueError("missing `mode` in [crystal] — required to pick a layout.")
         mode = data["mode"]
@@ -356,46 +369,49 @@ class ReciprocalConfig:
     The TOML ``[reciprocal]`` block carries both this (small, consumed by
     forward + identify) and bootstrap's MC params (large, consumed only by
     `dfxm-bootstrap`). This dataclass holds only the lookup-relevant keys.
+
+    Sub-project F: both fields default to the IUCrJ-canonical Al 111 @ 17 keV.
+    `from_dict(None)` / `from_dict({})` returns the default; partial dicts
+    (one of hkl/keV) fall back to the default for the missing key.
     """
 
-    hkl: tuple[int, int, int]
-    keV: float
+    hkl: tuple[int, int, int] = (-1, 1, -1)
+    keV: float = 17.0
 
-    @classmethod
-    def from_dict(cls, data: dict | None) -> ReciprocalConfig:
-        if data is None:
-            raise ValueError(
-                "missing [reciprocal] block — forward/identify require explicit "
-                "hkl + keV; see configs/default.toml."
-            )
-        if "hkl" not in data:
-            raise ValueError("missing `hkl` in [reciprocal] — required for kernel lookup.")
-        if "keV" not in data:
-            raise ValueError("missing `keV` in [reciprocal] — required for kernel lookup.")
-        hkl = tuple(data["hkl"])
-        keV = float(data["keV"])
-        # Early validation per spec — catches typos / Bragg-unsatisfiable
-        # before the kernel lookup. Propagates A's ValueErrors verbatim.
+    def __post_init__(self) -> None:
+        # Normalize hkl to a tuple in case a list slipped through programmatic
+        # construction; from_dict already does this for TOML callers.
+        if not isinstance(self.hkl, tuple):
+            self.hkl = tuple(self.hkl)
         from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
         # TODO(non-Al materials): hardcoded Al lattice parameter; revisit if/when
         # the codebase supports other crystals. Tracked as deferred work in the
         # sub-project A spec ("materials other than Al") and in the sub-project D
         # spec ("out of scope").
-        _validate_reflection(hkl, keV, 4.0495e-10)
-        return cls(hkl=hkl, keV=keV)
+        _validate_reflection(self.hkl, self.keV, 4.0495e-10)
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> ReciprocalConfig:
+        if not data:
+            return cls()
+        kwargs: dict = {}
+        if "hkl" in data:
+            kwargs["hkl"] = tuple(data["hkl"])
+        if "keV" in data:
+            kwargs["keV"] = float(data["keV"])
+        return cls(**kwargs)
 
 
 @dataclass
 class SimulationConfig:
-    crystal: CrystalConfig  # NO DEFAULT — required; construct via CrystalConfig.from_dict
+    # Sub-project F: crystal cascades to canonical-centered default (was: required).
+    crystal: CrystalConfig = field(default_factory=CrystalConfig.default)
     scan: ScanConfig = field(default_factory=ScanConfig)
     io: IOConfig = field(default_factory=IOConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
-    # Sub-project D: optional in Python construction (defaults to None for
-    # back-compat with test fixtures). `from_toml` requires it; `run_simulation`
-    # raises if None at runtime.
-    reciprocal: ReciprocalConfig | None = None
+    # Sub-project F: reciprocal cascades to Al 111 @ 17 keV (was: Optional[None]).
+    reciprocal: ReciprocalConfig = field(default_factory=ReciprocalConfig)
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -416,7 +432,7 @@ class SimulationConfig:
 class IdentificationCrystalConfig:
     """Crystal config for `dfxm-identify`. Slip plane + Burgers vector sweep."""
 
-    slip_plane_normal: tuple[int, int, int]
+    slip_plane_normal: tuple[int, int, int] = (1, 1, 1)
     angle_start_deg: float = 0.0
     angle_stop_deg: float = 350.0
     angle_step_deg: float = 10.0
@@ -484,16 +500,16 @@ class IdentificationConfig:
     Validates mode / sub-config / slip-plane consistency in __post_init__.
     """
 
-    mode: Literal["single", "multi", "z-scan"]
-    crystal: IdentificationCrystalConfig
-    scan: ScanConfig  # shared with forward (was IdentificationScanConfig)
-    noise: IdentificationNoiseConfig  # noise/intensity block (was flat in IdentificationScanConfig)
-    io: IOConfig
+    # Sub-project F: every field cascades to the empty-TOML default.
+    mode: Literal["single", "multi", "z-scan"] = "single"
+    crystal: IdentificationCrystalConfig = field(default_factory=IdentificationCrystalConfig)
+    scan: ScanConfig = field(default_factory=ScanConfig)
+    noise: IdentificationNoiseConfig = field(default_factory=IdentificationNoiseConfig)
+    io: IOConfig = field(default_factory=IOConfig)
     multi: IdentificationMonteCarloConfig | None = None
     zscan: IdentificationZScanConfig | None = None
-    # Sub-project D: optional in Python construction; load_identification_config
-    # requires it.
-    reciprocal: ReciprocalConfig | None = None
+    # Sub-project F: reciprocal tightens to non-Optional + default.
+    reciprocal: ReciprocalConfig = field(default_factory=ReciprocalConfig)
 
     def __post_init__(self) -> None:
         if self.mode not in ("single", "multi", "z-scan"):
@@ -529,15 +545,16 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         Validated IdentificationConfig.
 
     Raises:
-        ValueError: if the TOML is missing the top-level `mode` field, or if
-            the validation in IdentificationConfig.__post_init__ rejects the
-            content.
+        ValueError: if `mode` is present but not one of {"single", "multi",
+            "z-scan"}, or if the validation in
+            IdentificationConfig.__post_init__ rejects the content. A missing
+            top-level `mode` field defaults to `"single"` (sub-project F).
     """
     with open(path, "rb") as fh:
         data = tomllib.load(fh)
 
-    if "mode" not in data:
-        raise ValueError(f"{path}: missing top-level 'mode' field")
+    # Sub-project F: 'mode' is now optional in TOML; defaults to 'single'.
+    mode = data.get("mode", "single")
 
     crystal_data = data.get("crystal", {})
     if "slip_plane_normal" in crystal_data:
@@ -556,7 +573,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     reciprocal = ReciprocalConfig.from_dict(data.get("reciprocal"))
 
     return IdentificationConfig(
-        mode=data["mode"],
+        mode=mode,
         crystal=crystal,
         scan=scan,
         noise=noise,
@@ -603,11 +620,6 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
-    if config.reciprocal is None:
-        raise ValueError(
-            "SimulationConfig.reciprocal is None — must specify [reciprocal] "
-            "block in TOML or set it programmatically before calling run_simulation."
-        )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -654,9 +666,9 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
                 w.ndis,
                 fm.psize,
                 fm.zl_rms,
-                h=config.reciprocal.hkl[0],  # type: ignore[union-attr]
-                k=config.reciprocal.hkl[1],  # type: ignore[union-attr]
-                l=config.reciprocal.hkl[2],  # type: ignore[union-attr]
+                h=config.reciprocal.hkl[0],
+                k=config.reciprocal.hkl[1],
+                l=config.reciprocal.hkl[2],
                 S=S,
                 remount_name=w.sample_remount,
                 z_offset_um=z,
@@ -671,9 +683,9 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
             rl_eff = fm.Z_shift(z) if z != 0.0 else None
             return fm.Find_Hg_from_population(
                 population,
-                h=config.reciprocal.hkl[0],  # type: ignore[union-attr]
-                k=config.reciprocal.hkl[1],  # type: ignore[union-attr]
-                l=config.reciprocal.hkl[2],  # type: ignore[union-attr]
+                h=config.reciprocal.hkl[0],
+                k=config.reciprocal.hkl[1],
+                l=config.reciprocal.hkl[2],
                 rl=rl_eff,
             )
 
@@ -1725,11 +1737,6 @@ def run_identification(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode."""
-    if config.reciprocal is None:
-        raise ValueError(
-            "IdentificationConfig.reciprocal is None — must specify [reciprocal] "
-            "block in TOML or set it programmatically before calling run_identification."
-        )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
     if config.mode == "single":

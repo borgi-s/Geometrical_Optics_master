@@ -1,3 +1,15 @@
+# Default DFXM identification config (mode='z-scan').
+#
+# Every block below shows the DEFAULT value `dfxm-identify` would use if
+# the block were omitted. A literally-empty .toml file is a valid input —
+# the result for an empty .toml is mode='single' + canonical {111} sweep
+# + default noise + Al 111 @ 17 keV. To get the mode='z-scan' behavior
+# this file describes, the [zscan] block below is required — including
+# `z_offsets_um`, which has no default.
+#
+# Edit any block to override; delete any block to fall back to the
+# default shown here.
+#
 # dfxm-identify: z-scan mode (4D scan — depth × Burgers × angle × rocking-curve).
 #
 # Mirrors the ESRF_DTU branch's save_scan workflow: for each z layer, sweep

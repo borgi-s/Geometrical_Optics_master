@@ -34,8 +34,8 @@ class TestCenteredCrystalConfig:
 
 
 class TestWallCrystalConfig:
-    def test_constructs_with_defaults(self) -> None:
-        cfg = WallCrystalConfig()
+    def test_explicit_construction_succeeds(self) -> None:
+        cfg = WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")
         assert cfg.dis == 4.0
         assert cfg.ndis == 151
         assert cfg.sample_remount == "S1"
@@ -46,7 +46,7 @@ class TestWallCrystalConfig:
 
     def test_invalid_remount_rejected(self) -> None:
         with pytest.raises(ValueError, match="sample_remount must be one of"):
-            WallCrystalConfig(sample_remount="S9")
+            WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S9")
 
 
 class TestRandomDislocationsConfig:
@@ -117,9 +117,11 @@ class TestCrystalConfigFromDict:
         assert cfg.centered is None
         assert cfg.wall is None
 
-    def test_none_dict_rejected(self) -> None:
-        with pytest.raises(ValueError, match=r"missing \[crystal\] block"):
-            CrystalConfig.from_dict(None)
+    def test_none_dict_returns_default(self) -> None:
+        # Sub-project F: from_dict(None) now returns the canonical centered default.
+        cfg = CrystalConfig.from_dict(None)
+        assert cfg.mode == "centered"
+        assert cfg.centered is not None
 
     def test_missing_mode_rejected(self) -> None:
         with pytest.raises(ValueError, match=r"missing `mode` in \[crystal\]"):
