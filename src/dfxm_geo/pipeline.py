@@ -168,9 +168,9 @@ class CenteredCrystalConfig:
       - t parallel to (n × b)  (line direction consistent with slip system)
     """
 
-    b: tuple[int, int, int]
-    n: tuple[int, int, int]
-    t: tuple[int, int, int]
+    b: tuple[int, int, int] = (1, 0, -1)
+    n: tuple[int, int, int] = (1, 1, 1)
+    t: tuple[int, int, int] = (1, -2, 1)
 
     def __post_init__(self) -> None:
         b = self.b
