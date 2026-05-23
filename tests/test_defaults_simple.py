@@ -97,3 +97,17 @@ class TestIdentificationCrystalDefaults:
         # Other fields already had defaults — spot-check:
         assert cfg.sweep_all_slip_planes is True
         assert cfg.exclude_invisibility is True
+
+
+class TestIdentificationConfigDefaults:
+    def test_bare_construction_succeeds(self) -> None:
+        cfg = IdentificationConfig()
+        assert cfg.mode == "single"
+        assert cfg.crystal.slip_plane_normal == (1, 1, 1)
+        assert cfg.scan.derived_mode_name() == "single"
+        assert cfg.noise.poisson_noise is True
+        assert cfg.reciprocal is not None
+        assert cfg.reciprocal.hkl == (-1, 1, -1)
+        # multi/zscan blocks stay None outside their modes
+        assert cfg.multi is None
+        assert cfg.zscan is None

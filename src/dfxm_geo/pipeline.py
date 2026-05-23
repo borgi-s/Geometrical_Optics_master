@@ -497,16 +497,16 @@ class IdentificationConfig:
     Validates mode / sub-config / slip-plane consistency in __post_init__.
     """
 
-    mode: Literal["single", "multi", "z-scan"]
-    crystal: IdentificationCrystalConfig
-    scan: ScanConfig  # shared with forward (was IdentificationScanConfig)
-    noise: IdentificationNoiseConfig  # noise/intensity block (was flat in IdentificationScanConfig)
-    io: IOConfig
+    # Sub-project F: every field cascades to the empty-TOML default.
+    mode: Literal["single", "multi", "z-scan"] = "single"
+    crystal: IdentificationCrystalConfig = field(default_factory=IdentificationCrystalConfig)
+    scan: ScanConfig = field(default_factory=ScanConfig)
+    noise: IdentificationNoiseConfig = field(default_factory=IdentificationNoiseConfig)
+    io: IOConfig = field(default_factory=IOConfig)
     multi: IdentificationMonteCarloConfig | None = None
     zscan: IdentificationZScanConfig | None = None
-    # Sub-project D: optional in Python construction; load_identification_config
-    # requires it.
-    reciprocal: ReciprocalConfig | None = None
+    # Sub-project F: reciprocal tightens to non-Optional + default.
+    reciprocal: ReciprocalConfig = field(default_factory=ReciprocalConfig)
 
     def __post_init__(self) -> None:
         if self.mode not in ("single", "multi", "z-scan"):
@@ -542,15 +542,16 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         Validated IdentificationConfig.
 
     Raises:
-        ValueError: if the TOML is missing the top-level `mode` field, or if
-            the validation in IdentificationConfig.__post_init__ rejects the
-            content.
+        ValueError: if `mode` is present but not one of {"single", "multi",
+            "z-scan"}, or if the validation in
+            IdentificationConfig.__post_init__ rejects the content. A missing
+            top-level `mode` field defaults to `"single"` (sub-project F).
     """
     with open(path, "rb") as fh:
         data = tomllib.load(fh)
 
-    if "mode" not in data:
-        raise ValueError(f"{path}: missing top-level 'mode' field")
+    # Sub-project F: 'mode' is now optional in TOML; defaults to 'single'.
+    mode = data.get("mode", "single")
 
     crystal_data = data.get("crystal", {})
     if "slip_plane_normal" in crystal_data:
@@ -569,7 +570,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     reciprocal = ReciprocalConfig.from_dict(data.get("reciprocal"))
 
     return IdentificationConfig(
-        mode=data["mode"],
+        mode=mode,
         crystal=crystal,
         scan=scan,
         noise=noise,
@@ -1733,11 +1734,6 @@ def run_identification(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode."""
-    if config.reciprocal is None:
-        raise ValueError(
-            "IdentificationConfig.reciprocal is None — must specify [reciprocal] "
-            "block in TOML or set it programmatically before calling run_identification."
-        )
     _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
 
     if config.mode == "single":

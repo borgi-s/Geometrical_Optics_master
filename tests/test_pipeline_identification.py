@@ -222,12 +222,12 @@ keV = 17.0
     assert cfg.noise.rng_seed == 42
 
 
-def test_load_identification_config_missing_mode_raises(tmp_path):
-    """A TOML missing the top-level `mode = ...` field raises."""
-    cfg_path = tmp_path / "bad.toml"
+def test_load_identification_config_missing_mode_defaults_to_single(tmp_path):
+    """Sub-project F: a TOML with no top-level `mode` field defaults to 'single'."""
+    cfg_path = tmp_path / "no_mode.toml"
     cfg_path.write_text("[crystal]\nslip_plane_normal = [1, 1, 1]\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="missing top-level 'mode'"):
-        load_identification_config(cfg_path)
+    cfg = load_identification_config(cfg_path)
+    assert cfg.mode == "single"
 
 
 def _tiny_single_config(tmp_path):
