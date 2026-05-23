@@ -429,7 +429,7 @@ class SimulationConfig:
 class IdentificationCrystalConfig:
     """Crystal config for `dfxm-identify`. Slip plane + Burgers vector sweep."""
 
-    slip_plane_normal: tuple[int, int, int]
+    slip_plane_normal: tuple[int, int, int] = (1, 1, 1)
     angle_start_deg: float = 0.0
     angle_stop_deg: float = 350.0
     angle_step_deg: float = 10.0

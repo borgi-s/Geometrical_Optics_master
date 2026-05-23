@@ -88,3 +88,12 @@ class TestSimulationConfigDefaults:
         # Scan defaults to all-axes-fixed (single mode)
         assert cfg.scan.scanned_axes() == ()
         assert cfg.scan.derived_mode_name() == "single"
+
+
+class TestIdentificationCrystalDefaults:
+    def test_bare_construction_uses_slip_plane_111(self) -> None:
+        cfg = IdentificationCrystalConfig()
+        assert cfg.slip_plane_normal == (1, 1, 1)
+        # Other fields already had defaults — spot-check:
+        assert cfg.sweep_all_slip_planes is True
+        assert cfg.exclude_invisibility is True
