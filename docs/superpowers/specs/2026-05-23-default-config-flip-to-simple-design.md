@@ -224,7 +224,7 @@ Alternatives considered and rejected:
     raises `TypeError`; `WallCrystalConfig(dis=4.0)` raises (missing 2);
     `WallCrystalConfig(dis=4.0, ndis=151, sample_remount="S1")`
     succeeds.
-  - **RENAMED** `tests/test_version_is_1_2_0.py` →
+  - **RENAMED** `tests/test_version_is_1_3_1.py` →
     `tests/test_version_is_2_0_0.py` (`git mv` + edit the asserted
     version string). Same single-line check that the installed package
     version matches the release.
@@ -425,7 +425,7 @@ Detailed list under "Files modified > Tests". Summary of test deltas:
 
 - **4 new test files** (defaults_simple, empty_toml_runs,
   partial_reciprocal_override, wall_no_defaults).
-- **1 renamed test file**: `test_version_is_1_2_0.py` →
+- **1 renamed test file**: `test_version_is_1_3_1.py` →
   `test_version_is_2_0_0.py` (single-line version-string change).
 - **~3-5 existing tests updated** for the `WallCrystalConfig()` strip
   and the from_dict no-longer-raises behavior (exact count discovered
