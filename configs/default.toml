@@ -1,9 +1,22 @@
-# Default DFXM forward-simulation config (post-B+C).
-# Active mode is the simple-case `centered` single dislocation. Switch to
-# `wall` or `random_dislocations` by uncommenting the matching block below
-# and changing `mode` accordingly.
+# Default DFXM forward-simulation config.
+#
+# Every block below shows the DEFAULT value the pipeline would use if
+# the block were omitted entirely. A literally-empty .toml file is a
+# valid input: `dfxm-forward --config <empty.toml>` produces a single
+# detector image of a single canonical FCC dislocation at the origin,
+# Al 111 reflection at 17 keV. (The empty case uses the dataclass
+# defaults: b=(1, 0, -1), n=(1, 1, 1), t=(1, -2, 1).)
+#
+# Edit any block to override; delete any block to fall back to the
+# default shown here.
+#
+# The active [crystal] + [scan] blocks below are tuned to produce the
+# recognizable 2D mosa rocking grid out-of-the-box for users running
+# `dfxm-forward --config configs/default.toml` — this is NOT what an
+# empty .toml produces (empty = single image, IUCrJ-canonical slip system).
 
 [reciprocal]
+# Default. Override or omit.
 # Used by `dfxm-bootstrap --config configs/default.toml` to (re)generate the
 # reciprocal-space resolution kernel pickle. Defaults reproduce the CDD_inc
 # canonical recipe (Al 111 reflection at 17 keV, square-aperture beamstop
@@ -36,10 +49,14 @@ dphi_range = 0.0
 # or scanned (value + range + steps). Mode name is derived.
 
 [scan.phi]
+# Override-only: omit for fixed-at-0. Together with [scan.chi] this gives
+# the 2D "mosa" rocking grid the IUCrJ paper used.
 range = 6e-4               # rad; half-range (0.034 deg in old degrees)
 steps = 61
 
 [scan.chi]
+# Override-only: omit for fixed-at-0. Together with [scan.phi] this gives
+# the 2D "mosa" rocking grid the IUCrJ paper used.
 range = 2e-3               # rad; half-range (0.115 deg in old degrees)
 steps = 61
 
@@ -50,14 +67,20 @@ steps = 61
 # Crystal: active mode = centered. Commented-out blocks show the other two modes.
 
 [crystal]
+# Default: mode = "centered" with canonical FCC primary slip system.
+# Override-only: change `mode` and provide the matching sub-block.
 mode = "centered"
 
 [crystal.centered]
+# This file uses the IUCrJ b/n/t (1,-1,0)/(1,1,1)/(1,1,-2) to keep
+# `dfxm-forward --config configs/default.toml` output bit-stable.
+# The empty-TOML fall-through uses different canonical values:
+# b=(1,0,-1), n=(1,1,1), t=(1,-2,1).
 b = [1, -1, 0]   # Burgers vector indices
 n = [1, 1, 1]    # slip plane normal indices
 t = [1, 1, -2]   # dislocation line direction
 
-# [crystal.wall]
+# [crystal.wall]       # required (no defaults as of v2.0.0): dis, ndis, sample_remount
 # dis = 4.0
 # ndis = 151
 # sample_remount = "S1"
@@ -69,6 +92,7 @@ t = [1, 1, -2]   # dislocation line direction
 # seed = 42
 
 [io]
+# Default. Override or omit.
 fn_prefix = "/mosa_test_0000_"
 ftype = ".npy"
 dislocs_dirname = "images10"
@@ -77,6 +101,7 @@ include_perfect_crystal = true
 # max_workers = 4  # uncomment to cap parallel forward() calls; None = auto
 
 [postprocess]
+# Default. Override or omit.
 enabled = true
 chi_oversample = 20
 phi_oversample = 20
