@@ -1,3 +1,13 @@
+# Default DFXM identification config (mode='single').
+#
+# Every block below shows the DEFAULT value `dfxm-identify` would use if
+# the block were omitted. A literally-empty .toml file is a valid input —
+# the result is mode='single' + canonical {111} slip-plane sweep + default
+# noise + Al 111 @ 17 keV.
+#
+# Edit any block to override; delete any block to fall back to the
+# default shown here.
+#
 # dfxm-identify: deterministic single-dislocation sweep
 #
 # Reproduces the test set of Borgi 2025 (J. Appl. Cryst. 58, 813-821):
