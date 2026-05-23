@@ -285,12 +285,22 @@ class CrystalConfig:
             )
 
     @classmethod
+    def default(cls) -> CrystalConfig:
+        """Sub-project F: canonical empty-TOML default.
+
+        Returns mode='centered' with CenteredCrystalConfig() (canonical FCC
+        primary). Used as the SimulationConfig.crystal default factory and
+        as the empty-TOML fallback in from_dict.
+        """
+        return cls(mode="centered", centered=CenteredCrystalConfig())
+
+    @classmethod
     def from_dict(cls, data: dict | None) -> CrystalConfig:
-        if data is None:
-            raise ValueError(
-                "missing [crystal] block — forward/identify require explicit "
-                "crystal layout; see configs/default.toml."
-            )
+        # Sub-project F: empty/missing [crystal] → canonical centered default.
+        # Explicit `[crystal] mode = "<m>"` without `[crystal.<m>]` still raises
+        # below; "default" is reached only by omission, not declaration.
+        if not data:
+            return cls.default()
         if "mode" not in data:
             raise ValueError("missing `mode` in [crystal] — required to pick a layout.")
         mode = data["mode"]

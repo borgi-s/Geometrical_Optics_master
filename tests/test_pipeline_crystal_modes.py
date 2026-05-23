@@ -117,9 +117,11 @@ class TestCrystalConfigFromDict:
         assert cfg.centered is None
         assert cfg.wall is None
 
-    def test_none_dict_rejected(self) -> None:
-        with pytest.raises(ValueError, match=r"missing \[crystal\] block"):
-            CrystalConfig.from_dict(None)
+    def test_none_dict_returns_default(self) -> None:
+        # Sub-project F: from_dict(None) now returns the canonical centered default.
+        cfg = CrystalConfig.from_dict(None)
+        assert cfg.mode == "centered"
+        assert cfg.centered is not None
 
     def test_missing_mode_rejected(self) -> None:
         with pytest.raises(ValueError, match=r"missing `mode` in \[crystal\]"):
