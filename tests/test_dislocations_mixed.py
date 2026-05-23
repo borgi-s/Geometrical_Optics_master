@@ -100,12 +100,14 @@ def test_Fd_find_mixed_position_offset_shifts_singularity(identity_rotations):
     """Translating the dislocation core by `position_lab_um` is equivalent to
     evaluating Fd_find_mixed at rl shifted in the opposite direction.
 
-    With position_lab_um=(2µm, 0, 0), `rl_shifted - (2e-6, 0, 0)` internally
-    equals `rl_unshifted` — so the two calls must return bit-identical fields.
+    `rl` is in micrometres (callers pass rl * 1e6) and `position_lab_um` is
+    also in micrometres, so with position_lab_um=(2µm, 0, 0),
+    `rl_shifted - (2, 0, 0)` internally equals `rl_unshifted` — the two calls
+    must return bit-identical fields.
     """
     Us, Ud, Theta = identity_rotations
-    rl_unshifted = np.array([[3e-6], [1e-6], [0.0]])
-    rl_shifted = np.array([[5e-6], [1e-6], [0.0]])
+    rl_unshifted = np.array([[3.0], [1.0], [0.0]])  # micrometres
+    rl_shifted = np.array([[5.0], [1.0], [0.0]])  # micrometres
 
     Fg_no_offset = Fd_find_mixed(rl_unshifted, Us, Ud_mix=Ud, rotation_deg=0.0, Theta=Theta)
     Fg_with_offset = Fd_find_mixed(

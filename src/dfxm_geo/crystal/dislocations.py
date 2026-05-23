@@ -283,8 +283,10 @@ def Fd_find_mixed(
         Fg of shape (X, 3, 3) in the grain frame, with the identity added.
     """
     if position_lab_um != (0.0, 0.0, 0.0):
-        offset_m = np.asarray(position_lab_um).reshape(3, 1) * 1e-6
-        rl = rl - offset_m
+        # rl is in micrometres (callers pass rl * 1e6); the offset is already
+        # in micrometres, so subtract directly — no metre conversion.
+        offset_um = np.asarray(position_lab_um).reshape(3, 1)
+        rl = rl - offset_um
 
     # Eq. 8 of Borgi 2025: r_l = Θ^T · Us · Ud · r_d → r_d = Ud^T · Us^T · Θ · r_l.
     rs = Theta @ rl
