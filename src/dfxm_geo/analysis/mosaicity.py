@@ -13,11 +13,12 @@ already reshaped to ``(chi_steps, phi_steps, H, W)`` and return:
 All angular ranges are in **radians** — the project-wide convention shared by
 the ``[scan.*]`` TOML blocks, ``build_scan_grid``, and ``forward``.
 
-The straight port preserves the original numerical conventions, including the
-``abs(shift)`` sign-loss in ``compute_chi_shift``. The per-pixel
-``center_of_mass`` loop in ``compute_com_maps`` was vectorized via two einsum
-contractions in Phase 8 close-out (May 2026), eliminating ~86k scipy calls
-per pipeline run at the production detector size.
+``compute_chi_shift`` preserves the original numerical conventions, including
+the ``abs(shift)`` sign-loss. ``compute_com_maps`` was vectorized via two
+einsum contractions in Phase 8 close-out (May 2026), then in v2.0.2 changed
+from the original oversampled-grid index lookup to a direct intensity-weighted
+mean in radians — the exact center of mass, with no quantization (see the
+``compute_com_maps`` docstring).
 """
 
 from __future__ import annotations
@@ -66,17 +67,27 @@ def compute_com_maps(
     chi_steps: int,
     *,
     chi_shift: float = 0.0,
-    oversample: int = 20,
-    chi_oversample: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-pixel center-of-mass extraction over the (φ, χ) rocking grid.
 
-    For each detector pixel ``(i, j)``, computes the centroid of
-    ``stack[:, :, i, j]`` (a ``chi_steps × phi_steps`` rocking-curve image)
-    and looks the (φ, χ) values up on a refined grid. The φ axis uses
-    ``oversample`` cells per original step; the χ axis uses ``chi_oversample``
-    when provided, else falls back to ``oversample`` (matching the original
-    ``init_forward.py`` convention of one shared factor).
+    For each detector pixel ``(i, j)`` this computes the intensity-weighted
+    mean (the true first moment) of ``stack[:, :, i, j]`` along the φ and χ
+    axes, in **radians**::
+
+        COM_φ = Σ I·φ / Σ I        COM_χ = Σ I·χ / Σ I + chi_shift
+
+    where ``φ`` / ``χ`` run over ``linspace(-range, range, steps)``.
+
+    .. note:: v2.0.2 de-quantization
+
+        Earlier versions (a straight port of ``init_forward.py``) computed the
+        centroid *index* and then looked it up on an ``oversample``-refined grid
+        via ``np.rint`` — quantizing the COM onto a grid whose step is
+        ``2·range/(steps·oversample)``. For a wide axis like χ (±mrad) that step
+        (~µrad) is comparable to the χ-COM signal itself, so the map showed
+        spurious contour banding while the narrow φ axis looked fine. The direct
+        weighted mean here is the exact COM — no quantizer, no ``oversample``
+        knob, and free of the half-step bias the refined-grid indexing carried.
 
     Args:
         stack: Shape ``(chi_steps, phi_steps, H, W)``. Detector frame of the
@@ -85,48 +96,29 @@ def compute_com_maps(
         chi_range, chi_steps: Half-range (radians) and step count of χ.
         chi_shift: Additive shift to the χ axis (radians), as returned by
             :func:`compute_chi_shift`.
-        oversample: High-resolution refinement factor for the φ grid (and the
-            χ grid when ``chi_oversample`` is None).
-        chi_oversample: Optional χ-axis refinement factor; defaults to
-            ``oversample``.
 
     Returns:
         ``(phi_list, chi_list)`` mosaicity maps, both shape ``(H, W)`` and in
         radians. Pixels whose rocking-curve image is identically zero produce
         ``np.nan`` in both outputs (dead detector pixels, beamstop shadows).
     """
-    chi_over = chi_oversample if chi_oversample is not None else oversample
-    # Scan ranges and chi_shift are in radians (project-wide convention, set in
-    # the [scan.*] TOML blocks and consumed unconverted by `build_scan_grid` /
-    # `forward`). The COM lookup grids are therefore built directly in radians —
-    # no deg→rad conversion (the pre-v2.0.2 port carried over init_forward.py's
-    # degrees convention and double-counted by deg2rad-ing an already-radian
-    # range, shrinking every COM map by 180/π ≈ 57x).
-    phi_high = np.linspace(-phi_range, phi_range, phi_steps * oversample)
-    chi_high = np.linspace(-chi_range + chi_shift, chi_range + chi_shift, chi_steps * chi_over)
+    # Scan ranges and chi_shift are radians (project-wide convention, set in the
+    # [scan.*] TOML blocks and consumed unconverted by `build_scan_grid` /
+    # `forward`). The COM is therefore a weighted mean directly in radians — no
+    # deg→rad conversion.
+    phi_vals = np.linspace(-phi_range, phi_range, phi_steps)
+    chi_vals = np.linspace(-chi_range, chi_range, chi_steps) + chi_shift
 
     H, W = stack.shape[2], stack.shape[3]
+    totals = stack.sum(axis=(0, 1), dtype=np.float64)  # (H, W)
+    chi_weighted = np.einsum("cphw,c->hw", stack, chi_vals, dtype=np.float64)
+    phi_weighted = np.einsum("cphw,p->hw", stack, phi_vals, dtype=np.float64)
 
-    chi_indices = np.arange(chi_steps, dtype=np.float64)
-    phi_indices = np.arange(phi_steps, dtype=np.float64)
-    totals = stack.sum(axis=(0, 1))  # (H, W)
-    chi_weighted = np.einsum("cphw,c->hw", stack, chi_indices)
-    phi_weighted = np.einsum("cphw,p->hw", stack, phi_indices)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        chi_idx_arr = chi_weighted / totals
-        phi_idx_arr = phi_weighted / totals
-
-    # Dead pixels (totals == 0) produce NaN COMs; preserve them as NaN in the
-    # output instead of casting to an arbitrary int (the per-pixel loop hit
-    # this via the isnan branch).
-    valid = np.isfinite(chi_idx_arr) & np.isfinite(phi_idx_arr)
-
+    # Dead pixels (totals == 0) stay NaN; everything else is the weighted mean.
     phi_list = np.full((H, W), np.nan)
     chi_list = np.full((H, W), np.nan)
-    # int(round(x)) on Python floats uses banker's rounding; np.rint matches.
-    phi_lookup = np.rint(phi_idx_arr[valid] * oversample).astype(np.int64)
-    chi_lookup = np.rint(chi_idx_arr[valid] * chi_over).astype(np.int64)
-    phi_list[valid] = phi_high[phi_lookup]
-    chi_list[valid] = chi_high[chi_lookup]
+    valid = totals != 0
+    phi_list[valid] = phi_weighted[valid] / totals[valid]
+    chi_list[valid] = chi_weighted[valid] / totals[valid]
 
     return phi_list, chi_list

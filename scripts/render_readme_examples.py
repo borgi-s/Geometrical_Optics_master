@@ -33,23 +33,27 @@ import sys
 import tempfile
 from pathlib import Path
 
-import numpy as np
-
 
 def _build_small_config(tmp_dir: Path) -> Path:
     """Write a scaled-down TOML for fast example rendering."""
     cfg = tmp_dir / "render_small.toml"
     cfg.write_text(
         "[crystal]\n"
+        'mode = "wall"\n'
+        "\n"
+        "[crystal.wall]\n"
         "dis = 4\n"
         "ndis = 151\n"
         'sample_remount = "S1"\n'
         "\n"
-        "[scan]\n"
-        "phi_range = 0.034377467707849395\n"
-        "phi_steps = 11\n"
-        "chi_range = 0.11459155902616465\n"
-        "chi_steps = 11\n"
+        # Article ranges (Borgi 2024), radians: phi ±600 µrad, chi ±2 mrad.
+        "[scan.phi]\n"
+        "range = 6e-4\n"
+        "steps = 11\n"
+        "\n"
+        "[scan.chi]\n"
+        "range = 2e-3\n"
+        "steps = 11\n"
         "\n"
         "[io]\n"
         'fn_prefix = "/mosa_test_0000_"\n'
@@ -70,18 +74,23 @@ def _build_small_config(tmp_dir: Path) -> Path:
     return cfg
 
 
-def _save_dislocs_frame_png(images_dir: Path, out_png: Path) -> None:
-    """Save one frame from the dislocs stack as a PNG."""
+def _save_dislocs_frame_png(h5_path: Path, out_png: Path) -> None:
+    """Save the center frame of the dislocs detector stack as a PNG.
+
+    Reads the BLISS-layout detector dataset from the v1.2+ HDF5 output
+    (``/1.1/instrument/dfxm_sim_detector/data``); the legacy per-frame
+    ``.npy`` layout was retired in v1.1.0.
+    """
+    import h5py
     import matplotlib
 
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
     # Pick the center frame of the rocking grid.
-    npy_files = sorted(images_dir.glob("*.npy"))
-    if not npy_files:
-        raise FileNotFoundError(f"no .npy frames in {images_dir}")
-    arr = np.load(npy_files[len(npy_files) // 2])
+    with h5py.File(h5_path, "r") as f:
+        data = f["/1.1/instrument/dfxm_sim_detector/data"]
+        arr = data[data.shape[0] // 2, :, :]
     fig, ax = plt.subplots(figsize=(4, 4), dpi=144)
     im = ax.imshow(arr.T, origin="lower", cmap="viridis")
     ax.set_title("DFXM forward image (center of rocking grid)")
@@ -124,29 +133,32 @@ def main(argv: list[str] | None = None) -> int:
         cfg = SimulationConfig.from_toml(cfg_path)
         run_dir = tmp / "run"
         run_simulation(cfg, run_dir)
-        run_postprocess(run_dir, cfg)
+        res = run_postprocess(run_dir, cfg)
 
-        # 1. A dislocs-stack frame.
+        # 1. A dislocs-stack frame (center of the rocking grid, from the HDF5).
         _save_dislocs_frame_png(
-            run_dir / cfg.io.dislocs_dirname,
+            res["h5_path"],
             out_dir / "example_dislocs_frame.png",
         )
 
         # 2. The README needs PNG, not SVG, for portable embedding. Re-render the
-        # mosaicity figure as PNG from the saved data products.
-        phi_list = np.load(run_dir / cfg.postprocess.data_dirname / "phi_list.npy")
-        chi_list = np.load(run_dir / cfg.postprocess.data_dirname / "chi_list.npy")
+        # mosaicity figure as PNG from the COM maps returned by run_postprocess.
+        phi_list = res["phi_list"]
+        chi_list = res["chi_list"]
         import matplotlib
 
         matplotlib.use("Agg", force=True)
         import matplotlib.pyplot as plt
 
         fig, (axp, axc) = plt.subplots(1, 2, figsize=(8, 4), dpi=144)
+        # Fixed ±1e-4 rad color range — the same scale used for the qi/COM maps
+        # in Borgi et al. (2024), where the COM↔qi correspondence reads as an
+        # excellent match. Autoscaling per-panel would exaggerate small residuals.
         for ax, data, title in (
             (axp, phi_list, "phi COM (mosaicity)"),
             (axc, chi_list, "chi COM (mosaicity)"),
         ):
-            im = ax.imshow(data, origin="lower", cmap="RdBu_r")
+            im = ax.imshow(data, origin="lower", cmap="RdBu_r", vmin=-1e-4, vmax=1e-4)
             ax.set_title(title)
             ax.set_axis_off()
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)

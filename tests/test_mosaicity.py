@@ -64,14 +64,12 @@ class TestComputeChiShift:
 
 class TestComputeComMaps:
     def test_planted_centroids_recovered(self) -> None:
-        """Each pixel has a planted intensity peak at a known (chi, phi) cell.
-        compute_com_maps must return the corresponding chi_high / phi_high
-        radian values."""
+        """Each pixel has a single planted peak at a known (chi, phi) cell.
+        The weighted-mean COM must return that cell's radian value exactly."""
         chi_steps = 11
         phi_steps = 7
         chi_range = 0.1
         phi_range = 0.05
-        oversample = 20
         H, W = 3, 4
         stack = np.zeros((chi_steps, phi_steps, H, W))
         # plant pixel (i, j) → peak at chi=i+1, phi=j+1 (modulo grid)
@@ -86,21 +84,18 @@ class TestComputeComMaps:
             chi_range,
             chi_steps,
             chi_shift=0.0,
-            oversample=oversample,
         )
 
-        # Scan ranges are radians (project-wide convention); compute_com_maps
-        # returns the lookup values directly, no deg→rad conversion.
-        phi_high = np.linspace(-phi_range, phi_range, phi_steps * oversample)
-        chi_high = np.linspace(-chi_range, chi_range, chi_steps * oversample)
+        # Scan ranges are radians (project-wide convention); a single-cell peak
+        # has its COM exactly on that cell's grid value.
+        phi_vals = np.linspace(-phi_range, phi_range, phi_steps)
+        chi_vals = np.linspace(-chi_range, chi_range, chi_steps)
         assert phi_list.shape == (H, W)
         assert chi_list.shape == (H, W)
         for i in range(H):
             for j in range(W):
-                expected_phi = phi_high[((j + 1) % phi_steps) * oversample]
-                expected_chi = chi_high[((i + 1) % chi_steps) * oversample]
-                assert phi_list[i, j] == pytest.approx(expected_phi)
-                assert chi_list[i, j] == pytest.approx(expected_chi)
+                assert phi_list[i, j] == pytest.approx(phi_vals[(j + 1) % phi_steps])
+                assert chi_list[i, j] == pytest.approx(chi_vals[(i + 1) % chi_steps])
 
     def test_chi_shift_is_applied_additively(self) -> None:
         """Passing chi_shift shifts the χ output by that amount (radians, 1:1)."""
@@ -108,27 +103,14 @@ class TestComputeComMaps:
         phi_steps = 7
         chi_range = 0.1
         phi_range = 0.05
-        oversample = 20
         stack = np.zeros((chi_steps, phi_steps, 1, 1))
         stack[5, 3, 0, 0] = 1.0
 
         _, chi_zero = compute_com_maps(
-            stack,
-            phi_range,
-            phi_steps,
-            chi_range,
-            chi_steps,
-            chi_shift=0.0,
-            oversample=oversample,
+            stack, phi_range, phi_steps, chi_range, chi_steps, chi_shift=0.0
         )
         _, chi_shifted = compute_com_maps(
-            stack,
-            phi_range,
-            phi_steps,
-            chi_range,
-            chi_steps,
-            chi_shift=0.02,
-            oversample=oversample,
+            stack, phi_range, phi_steps, chi_range, chi_steps, chi_shift=0.02
         )
         # chi_shift is in radians and applied 1:1 (no deg→rad conversion)
         assert (chi_shifted[0, 0] - chi_zero[0, 0]) == pytest.approx(0.02, rel=1e-9)
@@ -149,50 +131,31 @@ class TestComputeComMaps:
             chi_range=0.1,
             chi_steps=chi_steps,
             chi_shift=0.0,
-            oversample=10,
         )
         assert phi_list.shape == (H, W)
         assert chi_list.shape == (H, W)
 
-    def test_independent_chi_and_phi_oversample(self) -> None:
-        """chi_oversample, when provided, can differ from oversample (phi)."""
+    def test_fractional_centroid_recovered(self) -> None:
+        """The weighted mean recovers an OFF-grid centroid exactly — the whole
+        point of the v2.0.2 de-quantization. Equal intensity in two adjacent
+        χ cells must give the χ value halfway between them, which the old
+        oversampled-index lookup could only approximate (snapped to the grid)."""
         chi_steps = 5
         phi_steps = 5
         chi_range = 0.1
         phi_range = 0.1
         stack = np.zeros((chi_steps, phi_steps, 1, 1))
-        stack[2, 2, 0, 0] = 1.0  # exact-grid peak
+        # Equal weight in χ cells 2 and 3, both at φ cell 3.
+        stack[2, 3, 0, 0] = 1.0
+        stack[3, 3, 0, 0] = 1.0
 
-        # Equal oversample
-        phi_eq, chi_eq = compute_com_maps(
-            stack,
-            phi_range=phi_range,
-            phi_steps=phi_steps,
-            chi_range=chi_range,
-            chi_steps=chi_steps,
-            chi_shift=0.0,
-            oversample=10,
-            chi_oversample=10,
+        phi_list, chi_list = compute_com_maps(
+            stack, phi_range, phi_steps, chi_range, chi_steps, chi_shift=0.0
         )
-        # Different chi_oversample changes only the chi result
-        phi_diff, chi_diff = compute_com_maps(
-            stack,
-            phi_range=phi_range,
-            phi_steps=phi_steps,
-            chi_range=chi_range,
-            chi_steps=chi_steps,
-            chi_shift=0.0,
-            oversample=10,
-            chi_oversample=50,
-        )
-        # phi outputs should be identical (same oversample, same peak)
-        assert phi_eq[0, 0] == pytest.approx(phi_diff[0, 0])
-        # chi values should each match their respective refined-grid lookup
-        # value at COM index 2 (grid index 2 * chi_over).
-        expected_chi_10 = np.linspace(-chi_range, chi_range, chi_steps * 10)[2 * 10]
-        expected_chi_50 = np.linspace(-chi_range, chi_range, chi_steps * 50)[2 * 50]
-        assert chi_eq[0, 0] == pytest.approx(expected_chi_10, rel=1e-9)
-        assert chi_diff[0, 0] == pytest.approx(expected_chi_50, rel=1e-9)
+        chi_vals = np.linspace(-chi_range, chi_range, chi_steps)
+        phi_vals = np.linspace(-phi_range, phi_range, phi_steps)
+        assert chi_list[0, 0] == pytest.approx(0.5 * (chi_vals[2] + chi_vals[3]), rel=1e-9)
+        assert phi_list[0, 0] == pytest.approx(phi_vals[3], rel=1e-9)
 
     @pytest.mark.filterwarnings("ignore:invalid value encountered in scalar divide:RuntimeWarning")
     def test_zero_intensity_pixel_produces_nan(self) -> None:
@@ -212,7 +175,6 @@ class TestComputeComMaps:
             chi_range=0.1,
             chi_steps=chi_steps,
             chi_shift=0.0,
-            oversample=10,
         )
 
         # Live pixel is finite
