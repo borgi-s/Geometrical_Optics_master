@@ -4,8 +4,11 @@ An animated rocking curve over a single centered edge dislocation: the forward
 DFXM detector image is re-rendered as the goniometer tilt phi sweeps from
 -150 to +150 microradians (chi = 0, Delta-theta = 0). As phi rocks through the
 Bragg condition the strong-beam field brightens at phi = 0 and the dislocation
-contrast localizes toward the core in the weak-beam wings -- the rocking curve,
-seen spatially.
+contrast localizes toward the core in the weak-beam wings.
+
+The left panel is the detector image; the right panel is the rocking curve
+itself -- the per-frame integrated intensity vs phi -- with a dot tracking the
+phi of the image currently shown.
 
 This is NOT part of CI (it runs the forward model end-to-end and loads the
 reciprocal-space kernel). Regenerate manually after a change to the forward
@@ -39,7 +42,10 @@ PHI_MAX_URAD = 150.0  # rocking half-range; ~within the rock-curve HWHM so the
 #                        shared scale keeps both the intensity pulse and the
 #                        dislocation contrast visible across the whole sweep
 N_FRAMES = 31  # phi steps from -PHI_MAX to +PHI_MAX (10 urad steps)
+NN3_MULT = 10  # multiply the default zl (beam-depth) ray count for finer
+#                depth integration through the Gaussian beam profile
 FPS = 12
+SLOWDOWN = 5  # play each frame SLOWDOWN x longer (slower animation)
 GAMMA = 0.45  # display power-law: lifts the weak-beam wings so the
 #                        dislocation stays visible across the sweep while phi=0
 #                        remains brightest (the rocking-curve pulse is preserved)
@@ -52,7 +58,7 @@ def _rescale(npix: int, nsub: int) -> None:
     fm.Npixels, fm.Nsub = npix, nsub
     fm.NN1 = int(npix // 3 * nsub)
     fm.NN2 = int(npix * nsub)
-    fm.NN3 = int(npix // 30 * nsub)
+    fm.NN3 = int(npix // 30 * nsub) * NN3_MULT
     fm.yl_start = -fm.psize * npix / 2 + fm.psize / (2 * nsub)
     fm.xl_start = fm.yl_start / np.tan(2 * fm.theta_0) / 3
     fm.zl_start = -0.5 * fm.zl_rms * 6
@@ -101,12 +107,22 @@ def main() -> None:
     vmax = float(np.percentile(np.stack(imgs), 99.9))  # shared scale; ignore hot pixels
     print(f"rendered {len(imgs)} frames; shared vmax={vmax:.3g}")
 
-    # Render each frame through a fixed-size matplotlib canvas.
+    # Rocking curve: integrated intensity per frame vs phi (normalized to peak).
+    phis_urad = phis * 1e6
+    rock = np.array([float(im_arr.sum()) for im_arr in imgs])
+    rock /= rock.max()
+
+    # Two panels: left = detector image, right = the rocking curve with a dot
+    # tracking the current phi. Build once; update artists per frame so every
+    # frame is the same canvas size.
     ext = [fm.yl_start * 1e6, -fm.yl_start * 1e6, fm.xl_start * 1e6, -fm.xl_start * 1e6]
-    fig, ax = plt.subplots(figsize=(7.2, 2.9), dpi=110)
-    fig.subplots_adjust(left=0.08, right=0.99, top=0.86, bottom=0.16)
     norm = PowerNorm(GAMMA, vmin=0.0, vmax=vmax)
-    im = ax.imshow(
+    fig, (axL, axR) = plt.subplots(
+        1, 2, figsize=(9.6, 3.3), dpi=110, gridspec_kw={"width_ratios": [1.35, 1.0]}
+    )
+    fig.subplots_adjust(left=0.06, right=0.97, top=0.84, bottom=0.18, wspace=0.30)
+
+    im = axL.imshow(
         imgs[0],
         origin="lower",
         extent=ext,
@@ -115,14 +131,23 @@ def main() -> None:
         aspect="equal",
         interpolation="bilinear",
     )
-    ax.set_xlabel(r"$y_\ell$ ($\mu$m)", fontsize=9)
-    ax.set_ylabel(r"$x_\ell$ ($\mu$m)", fontsize=9)
-    title = ax.set_title("", fontsize=11)
+    axL.set_xlabel(r"$y_\ell$ ($\mu$m)", fontsize=9)
+    axL.set_ylabel(r"$x_\ell$ ($\mu$m)", fontsize=9)
+    title = axL.set_title("", fontsize=11)
+
+    axR.plot(phis_urad, rock, "-", color="0.55", lw=1.6)
+    axR.set_xlim(phis_urad[0], phis_urad[-1])
+    axR.set_ylim(0, 1.05)
+    axR.set_xlabel(r"$\phi$ ($\mu$rad)", fontsize=9)
+    axR.set_ylabel("integrated intensity (norm.)", fontsize=9)
+    axR.set_title("rocking curve", fontsize=11)
+    (marker,) = axR.plot([phis_urad[0]], [rock[0]], "o", color="crimson", ms=8, zorder=5)
 
     rgb_frames: list[np.ndarray] = []
-    for img, phi in zip(imgs, phis, strict=True):
+    for k, (img, phi) in enumerate(zip(imgs, phis, strict=True)):
         im.set_data(img)
-        title.set_text(rf"single dislocation rocking curve   $\phi = {phi * 1e6:+.0f}$ $\mu$rad")
+        title.set_text(rf"single dislocation   $\phi = {phi * 1e6:+.0f}$ $\mu$rad")
+        marker.set_data([phis_urad[k]], [rock[k]])
         fig.canvas.draw()
         rgb_frames.append(np.asarray(fig.canvas.buffer_rgba())[..., :3].copy())
     plt.close(fig)
@@ -145,7 +170,7 @@ def main() -> None:
         gif_path,
         save_all=True,
         append_images=pil[1:],
-        duration=int(1000 / FPS),
+        duration=int(1000 / FPS * SLOWDOWN),
         loop=0,
         optimize=True,
     )
