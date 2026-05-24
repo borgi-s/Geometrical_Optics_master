@@ -129,10 +129,12 @@ def main() -> None:
 
     # Ping-pong: -150 -> +150 -> -150 so the loop is seamless.
     loop_frames = rgb_frames + rgb_frames[-2:0:-1]
-    # Quantize every frame to ONE shared 128-color palette (derived from the
-    # brightest frame): indexed GIF is far smaller than truecolor, a shared
-    # palette avoids inter-frame flicker, and 128 colors render viridis cleanly.
-    palette = Image.fromarray(rgb_frames[len(rgb_frames) // 2]).quantize(
+    # Quantize every frame to ONE shared 128-color palette: indexed GIF is far
+    # smaller than truecolor and a shared palette avoids inter-frame flicker.
+    # Derive the palette from ALL frames stacked together so it spans the full
+    # viridis range (dark-purple wings through bright-yellow core) — a palette
+    # from a single frame misses colors the other frames need and greys them out.
+    palette = Image.fromarray(np.concatenate(rgb_frames, axis=0)).quantize(
         colors=128, method=Image.Quantize.MEDIANCUT
     )
     pil = [
