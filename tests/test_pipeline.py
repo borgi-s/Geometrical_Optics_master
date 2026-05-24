@@ -322,7 +322,7 @@ class TestRunPostprocess:
             assert "/1.1/dfxm_geo/analysis/phi_list" in f
             assert "/1.1/dfxm_geo/analysis/chi_list" in f
             assert "/1.1/dfxm_geo/analysis/qi_field" in f
-            assert "/1.1/dfxm_geo/analysis/chi_shift_deg" in f
+            assert "/1.1/dfxm_geo/analysis/chi_shift_rad" in f
         # Figures still on disk (F1 decision)
         fig_dir = output_dir / "figures"
         assert (fig_dir / "mosaicity_maps.svg").exists()

@@ -116,7 +116,7 @@ revisit).
 - `<output>/analysis/phi_list.npy` — mosaicity-in-φ map (radians)
 - `<output>/analysis/chi_list.npy` — mosaicity-in-χ map (radians)
 - `<output>/analysis/qi_field.npy` — qi field at the (x, y) plane, z = 0 included
-- `<output>/analysis/chi_shift_deg.txt` — scalar χ-axis correction (bare float, degrees)
+- `chi_shift_rad` (HDF5 analysis group) — scalar χ-axis correction (bare float, radians)
 - `<output>/figures/mosaicity_maps.svg` — "Extreme Phi" / "Extreme Chi" 2-panel figure
 - `<output>/figures/qi_cross_section.svg` — qi_1 / qi_2 (x, y) cross-section
 

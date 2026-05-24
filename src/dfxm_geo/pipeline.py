@@ -355,6 +355,10 @@ class PostprocessConfig:
     """
 
     enabled: bool = True
+    # Deprecated (v2.0.2): COM maps are now an exact weighted mean, so these two
+    # no longer affect output. Retained so existing [postprocess] TOML blocks
+    # still parse. Only chi_oversample_for_shift is still consumed (by
+    # compute_chi_shift, for the perfect-crystal χ-offset calibration).
     chi_oversample: int = 20
     phi_oversample: int = 20
     chi_oversample_for_shift: int = 100
@@ -881,6 +885,10 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         chi_range,
         oversample=config.postprocess.chi_oversample_for_shift,
     )
+    # COM maps are an exact intensity-weighted mean (v2.0.2); the phi/chi
+    # oversample knobs are no longer consumed here (kept on PostprocessConfig
+    # for TOML/back-compat only). chi_oversample_for_shift still drives the
+    # compute_chi_shift refinement above.
     phi_list, chi_list = compute_com_maps(
         dis_reshape,
         phi_range,
@@ -888,8 +896,6 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         chi_range,
         chi_steps,
         chi_shift=chi_shift,
-        oversample=config.postprocess.phi_oversample,
-        chi_oversample=config.postprocess.chi_oversample,
     )
     if fm.Hg is None:
         raise RuntimeError("fm.Hg is not set. Call run_simulation() first.")
@@ -902,7 +908,7 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
             ("phi_list", phi_list),
             ("chi_list", chi_list),
             ("qi_field", qi_field),
-            ("chi_shift_deg", float(chi_shift)),
+            ("chi_shift_rad", float(chi_shift)),
         ]:
             if name in analysis:
                 del analysis[name]

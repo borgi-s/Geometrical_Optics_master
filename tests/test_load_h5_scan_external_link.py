@@ -75,6 +75,14 @@ def test_load_h5_scan_follows_external_link(tmp_path: Path) -> None:
         )
         np.testing.assert_array_equal(flat, stack)
         assert dim_h == h and dim_w == w
+        # Reshape is (chi_steps, phi_steps, H, W) — the order the mosaicity
+        # COM functions (compute_com_maps / compute_chi_shift) consume, so the
+        # φ axis is axis 1 and χ is axis 0. Frames are phi-inner/chi-outer, so
+        # reshape[c, p] == flat[c * phi_steps + p].
+        assert reshape.shape == (3, 2, h, w)
+        for c in range(3):
+            for p in range(2):
+                np.testing.assert_array_equal(reshape[c, p], stack[c * 2 + p])
     finally:
         fm.Hg = None
         fm._loaded_kernel_path = None

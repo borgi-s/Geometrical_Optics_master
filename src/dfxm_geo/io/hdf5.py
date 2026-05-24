@@ -527,8 +527,9 @@ def load_h5_scan(
     Args:
         path: HDF5 file path.
         scan_id: BLISS scan id, default "1.1" (dislocations).
-        phi_steps, chi_steps: needed for the (phi, chi, H, W) reshape. If
-            omitted, both are inferred from the embedded /dfxm_geo/config_toml.
+        phi_steps, chi_steps: needed for the (chi, phi, H, W) reshape (chi
+            outer, phi inner — the layout the mosaicity COM functions consume).
+            If omitted, both are inferred from the embedded /dfxm_geo/config_toml.
 
     Returns:
         (stack, stack_reshape, dim_1, dim_2) — same as the legacy
@@ -549,11 +550,15 @@ def load_h5_scan(
             f"Scan {scan_id} has {n} frames, expected "
             f"{phi_steps}*{chi_steps}={phi_steps * chi_steps}"
         )
-    # Reshape: fscan2d order is phi-inner, chi-outer.
-    # data[k] for k = chi_idx * phi_steps + phi_idx
-    # We want stack_reshape[phi_idx, chi_idx] == data[chi_idx*phi_steps + phi_idx]
-    # which means reshape to (chi_steps, phi_steps, H, W) then transpose.
-    stack_reshape = data.reshape(chi_steps, phi_steps, h, w).transpose(1, 0, 2, 3)
+    # Reshape: fscan2d order is phi-inner, chi-outer, i.e.
+    # data[k] for k = chi_idx * phi_steps + phi_idx. Reshaping to
+    # (chi_steps, phi_steps, H, W) therefore lands chi on axis 0 and phi on
+    # axis 1 directly (stack_reshape[chi_idx, phi_idx] == data[k]). This is
+    # the (chi, phi) layout the mosaicity COM functions consume
+    # (`compute_com_maps`, `compute_chi_shift`); do NOT transpose to (phi, chi)
+    # — that silently swaps the φ and χ COM maps (every grid had φ↔χ swapped
+    # until v2.0.2; only undetected because production used phi_steps==chi_steps).
+    stack_reshape = data.reshape(chi_steps, phi_steps, h, w)
     return data, stack_reshape, h, w
 
 
