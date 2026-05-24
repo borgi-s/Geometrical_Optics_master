@@ -17,7 +17,9 @@ model or when publishing a new README look:
     python scripts/render_rocking_gif.py
 
 Defaults: single centered dislocation (canonical FCC primary), Al 111 @ 17 keV,
-phi in [-150, +150] urad over 31 frames, ping-pong loop, fixed color scale.
+phi in [-150, +150] urad over 31 frames, ping-pong loop, fixed color scale, and
+the reciprocal kernel Gaussian-smoothed (sigma=1 cell) to remove the blocky
+cell-quantization banding (the "B" method).
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import PowerNorm
 from PIL import Image
+from scipy.ndimage import gaussian_filter
 
 import dfxm_geo.direct_space.forward_model as fm
 
@@ -49,6 +52,9 @@ SLOWDOWN = 5  # play each frame SLOWDOWN x longer (slower animation)
 GAMMA = 0.45  # display power-law: lifts the weak-beam wings so the
 #                        dislocation stays visible across the sweep while phi=0
 #                        remains brightest (the rocking-curve pulse is preserved)
+KERNEL_SMOOTH_SIGMA = 1.0  # Gaussian-smooth the reciprocal kernel (in grid
+#                            cells) to remove the blocky cell-quantization
+#                            banding in the forward image; 0 disables it
 HKL = (-1, 1, -1)
 KEV = 17.0
 
@@ -91,6 +97,10 @@ def main() -> None:
 
     _rescale(NPIXELS, NSUB)
     _lookup_and_load_kernel(HKL, KEV)
+    # B method: smooth the reciprocal kernel to denoise the blocky Monte-Carlo
+    # histogram so the forward image's cell-quantization banding disappears.
+    if KERNEL_SMOOTH_SIGMA > 0:
+        fm.Resq_i = gaussian_filter(np.asarray(fm.Resq_i, dtype=float), sigma=KERNEL_SMOOTH_SIGMA)
 
     # Single centered dislocation (canonical FCC primary).
     crystal = CrystalConfig(mode="centered", centered=CenteredCrystalConfig())
