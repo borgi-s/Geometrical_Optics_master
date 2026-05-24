@@ -92,9 +92,9 @@ def save_images_parallel(
     ----------------------------------------------------------------------------------------------
     Parameters:
         Hg (float): A parameter.
-        phi_range (float): Range of phi values in degrees.
+        phi_range (float): Half-range of phi values in radians.
         phi_steps (int): Number of steps in the phi range.
-        chi_range (float): Range of chi values in degrees.
+        chi_range (float): Half-range of chi values in radians.
         chi_steps (int): Number of steps in the chi range.
         fpath (str): Path to a folder where the images will be saved.
         fn_prefix (str): Prefix for the image filenames.
@@ -107,8 +107,9 @@ def save_images_parallel(
     Returns:
         True (bool): True if the function completes successfully.
     """
-    Phi = np.linspace(-np.deg2rad(phi_range), np.deg2rad(phi_range), phi_steps)
-    Chi = np.linspace(-np.deg2rad(chi_range), np.deg2rad(chi_range), chi_steps)
+    # Scan ranges are radians (project-wide convention); used directly.
+    Phi = np.linspace(-phi_range, phi_range, phi_steps)
+    Chi = np.linspace(-chi_range, chi_range, chi_steps)
 
     # Create a folder in the specified path if it doesn't exist
     if not os.path.exists(fpath):

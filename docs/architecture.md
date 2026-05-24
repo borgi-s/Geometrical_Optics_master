@@ -90,8 +90,8 @@ The end-to-end pipeline has five stages. Stages 1–3 are the forward simulation
    stacks back from disk via `load_images`, corrects the χ axis with
    `compute_chi_shift`, then extracts per-pixel center-of-mass positions
    over the (φ, χ) grid with `compute_com_maps`. Outputs `phi_list` and
-   `chi_list` arrays (shape `(H, W)` each, in radians) plus
-   `chi_shift_deg.txt`, saved under `<output>/<io.data_dirname>/`.
+   `chi_list` arrays (shape `(H, W)` each, in radians) plus a
+   `chi_shift_rad` scalar (radians), stored in the HDF5 analysis group.
 
 5. **Render SVG figures** (`viz.mosaicity`, Phase 9.2). `plot_mosaicity_maps`
    produces the two-panel "extreme φ / χ" figure; `plot_qi_cross_section`

@@ -51,8 +51,9 @@ def _load_images_legacy(
     return stack, stack_reshape, dim_1, dim_2
 
 
-def _phi_per_frame(phi_steps: int, chi_steps: int, phi_range_deg: float) -> np.ndarray:
-    Phi = np.linspace(-np.deg2rad(phi_range_deg), np.deg2rad(phi_range_deg), phi_steps)
+def _phi_per_frame(phi_steps: int, chi_steps: int, phi_range_rad: float) -> np.ndarray:
+    # Scan ranges are radians (project-wide convention); used directly.
+    Phi = np.linspace(-phi_range_rad, phi_range_rad, phi_steps)
     out = np.empty(phi_steps * chi_steps, dtype=np.float64)
     for chi_idx in range(chi_steps):
         for phi_idx in range(phi_steps):
@@ -60,8 +61,8 @@ def _phi_per_frame(phi_steps: int, chi_steps: int, phi_range_deg: float) -> np.n
     return out
 
 
-def _chi_per_frame(phi_steps: int, chi_steps: int, chi_range_deg: float) -> np.ndarray:
-    Chi = np.linspace(-np.deg2rad(chi_range_deg), np.deg2rad(chi_range_deg), chi_steps)
+def _chi_per_frame(phi_steps: int, chi_steps: int, chi_range_rad: float) -> np.ndarray:
+    Chi = np.linspace(-chi_range_rad, chi_range_rad, chi_steps)
     out = np.empty(phi_steps * chi_steps, dtype=np.float64)
     for chi_idx in range(chi_steps):
         for phi_idx in range(phi_steps):
@@ -75,8 +76,8 @@ def migrate_npy_dir_to_h5(
     *,
     phi_steps: int,
     chi_steps: int,
-    phi_range_deg: float,
-    chi_range_deg: float,
+    phi_range_rad: float,
+    chi_range_rad: float,
     dis: float,
     ndis: int,
     sample_remount: str,
@@ -117,12 +118,12 @@ def migrate_npy_dir_to_h5(
     config_toml = (
         f'[crystal]\nmode = "wall"\n[crystal.wall]\ndis = {dis}\n'
         f'ndis = {ndis}\nsample_remount = "{sample_remount}"\n\n'
-        f"[scan.phi]\nrange = {phi_range_deg}\nsteps = {phi_steps}\n\n"
-        f"[scan.chi]\nrange = {chi_range_deg}\nsteps = {chi_steps}\n"
+        f"[scan.phi]\nrange = {phi_range_rad}\nsteps = {phi_steps}\n\n"
+        f"[scan.chi]\nrange = {chi_range_rad}\nsteps = {chi_steps}\n"
     )
-    title = _scan_title(phi_range_deg, phi_steps, chi_range_deg, chi_steps)
-    phi_pf = _phi_per_frame(phi_steps, chi_steps, phi_range_deg)
-    chi_pf = _chi_per_frame(phi_steps, chi_steps, chi_range_deg)
+    title = _scan_title(phi_range_rad, phi_steps, chi_range_rad, chi_steps)
+    phi_pf = _phi_per_frame(phi_steps, chi_steps, phi_range_rad)
+    chi_pf = _chi_per_frame(phi_steps, chi_steps, chi_range_rad)
     out_dir = h5_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -300,8 +301,8 @@ def cli_main_h5_to_h5(argv: list[str] | None = None) -> int:
 class _MigrateParams(TypedDict):
     phi_steps: int
     chi_steps: int
-    phi_range_deg: float
-    chi_range_deg: float
+    phi_range_rad: float
+    chi_range_rad: float
     dis: float
     ndis: int
     sample_remount: str
@@ -312,8 +313,8 @@ class _MigrateParams(TypedDict):
 _IUCRJ_2024_DEFAULTS: _MigrateParams = {
     "phi_steps": 61,
     "chi_steps": 61,
-    "phi_range_deg": 0.0006 * 180 / np.pi,
-    "chi_range_deg": 0.002 * 180 / np.pi,
+    "phi_range_rad": 0.0006,
+    "chi_range_rad": 0.002,
     "dis": 4.0,
     "ndis": 151,
     "sample_remount": "S1",
@@ -355,8 +356,8 @@ def cli_main(argv: list[str] | None = None) -> int:
         params = {
             "phi_steps": int(raw["scan"]["phi_steps"]),
             "chi_steps": int(raw["scan"]["chi_steps"]),
-            "phi_range_deg": float(raw["scan"]["phi_range"]),
-            "chi_range_deg": float(raw["scan"]["chi_range"]),
+            "phi_range_rad": float(raw["scan"]["phi_range"]),
+            "chi_range_rad": float(raw["scan"]["chi_range"]),
             "dis": float(raw["crystal"]["dis"]),
             "ndis": int(raw["crystal"]["ndis"]),
             "sample_remount": str(raw["crystal"]["sample_remount"]),

@@ -176,7 +176,7 @@ with h5py.File("output/first-run/dfxm_geo.h5", "r") as f:
     print()
     print("Analysis (from postprocess):")
     print("  phi_list shape:", f["/1.1/dfxm_geo/analysis/phi_list"].shape)
-    print("  chi_shift_deg:", float(f["/1.1/dfxm_geo/analysis/chi_shift_deg"][()]))
+    print("  chi_shift_rad:", float(f["/1.1/dfxm_geo/analysis/chi_shift_rad"][()]))
 '@
 ```
 

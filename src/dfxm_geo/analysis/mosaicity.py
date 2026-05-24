@@ -4,11 +4,14 @@ The functions in this module are a port of the per-pixel center-of-mass
 extraction in the original ``init_forward.py``. They consume image stacks
 already reshaped to ``(chi_steps, phi_steps, H, W)`` and return:
 
-- ``compute_chi_shift``: a scalar χ-axis offset (in degrees) measured from the
+- ``compute_chi_shift``: a scalar χ-axis offset (in radians) measured from the
   corner pixel of a strain-free reference stack. Use it to calibrate the χ
   axis before extracting COMs from a strained stack.
 - ``compute_com_maps``: per-pixel mosaicity maps in φ and χ (radians) for a
   strained stack.
+
+All angular ranges are in **radians** — the project-wide convention shared by
+the ``[scan.*]`` TOML blocks, ``build_scan_grid``, and ``forward``.
 
 The straight port preserves the original numerical conventions, including the
 ``abs(shift)`` sign-loss in ``compute_chi_shift``. The per-pixel
@@ -35,19 +38,19 @@ def compute_chi_shift(
     The corner pixel ``stack_perfect[:, :, -1, -1]`` of a strain-free crystal
     should peak at χ = 0. Any offset is interpreted as a systematic shift
     introduced by the finite rocking grid; this function returns the magnitude
-    of that offset in *degrees* (matching ``init_forward.py``'s convention,
-    which converts to radians downstream via ``np.deg2rad``).
+    of that offset in *radians* (the value is expressed in the same units as
+    ``chi_range``, which is radians per the project-wide convention).
 
     Args:
         stack_perfect: Shape ``(chi_steps, phi_steps, H, W)``. Detector frame
             of the perfect-crystal rocking sweep.
         chi_steps: Number of χ steps in the rocking grid.
-        chi_range: Half-range of χ in degrees (same units as ``configs/default.toml``).
+        chi_range: Half-range of χ in radians (same units as ``configs/default.toml``).
         oversample: High-resolution refinement factor on the χ axis. The
             original script uses 100.
 
     Returns:
-        Absolute χ-axis shift in degrees.
+        Absolute χ-axis shift in radians.
     """
     com = center_of_mass(stack_perfect[:, :, -1, -1])
     chi_high = np.linspace(-chi_range, chi_range, chi_steps * oversample)
@@ -78,9 +81,9 @@ def compute_com_maps(
     Args:
         stack: Shape ``(chi_steps, phi_steps, H, W)``. Detector frame of the
             dislocated rocking sweep.
-        phi_range, phi_steps: Half-range (degrees) and step count of φ.
-        chi_range, chi_steps: Half-range (degrees) and step count of χ.
-        chi_shift: Additive shift to the χ axis (degrees), as returned by
+        phi_range, phi_steps: Half-range (radians) and step count of φ.
+        chi_range, chi_steps: Half-range (radians) and step count of χ.
+        chi_shift: Additive shift to the χ axis (radians), as returned by
             :func:`compute_chi_shift`.
         oversample: High-resolution refinement factor for the φ grid (and the
             χ grid when ``chi_oversample`` is None).
@@ -93,10 +96,14 @@ def compute_com_maps(
         ``np.nan`` in both outputs (dead detector pixels, beamstop shadows).
     """
     chi_over = chi_oversample if chi_oversample is not None else oversample
-    phi_high = np.deg2rad(np.linspace(-phi_range, phi_range, phi_steps * oversample))
-    chi_high = np.deg2rad(
-        np.linspace(-chi_range + chi_shift, chi_range + chi_shift, chi_steps * chi_over)
-    )
+    # Scan ranges and chi_shift are in radians (project-wide convention, set in
+    # the [scan.*] TOML blocks and consumed unconverted by `build_scan_grid` /
+    # `forward`). The COM lookup grids are therefore built directly in radians —
+    # no deg→rad conversion (the pre-v2.0.2 port carried over init_forward.py's
+    # degrees convention and double-counted by deg2rad-ing an already-radian
+    # range, shrinking every COM map by 180/π ≈ 57x).
+    phi_high = np.linspace(-phi_range, phi_range, phi_steps * oversample)
+    chi_high = np.linspace(-chi_range + chi_shift, chi_range + chi_shift, chi_steps * chi_over)
 
     H, W = stack.shape[2], stack.shape[3]
 

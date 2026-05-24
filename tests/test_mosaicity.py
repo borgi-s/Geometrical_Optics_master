@@ -89,8 +89,10 @@ class TestComputeComMaps:
             oversample=oversample,
         )
 
-        phi_high = np.deg2rad(np.linspace(-phi_range, phi_range, phi_steps * oversample))
-        chi_high = np.deg2rad(np.linspace(-chi_range, chi_range, chi_steps * oversample))
+        # Scan ranges are radians (project-wide convention); compute_com_maps
+        # returns the lookup values directly, no deg→rad conversion.
+        phi_high = np.linspace(-phi_range, phi_range, phi_steps * oversample)
+        chi_high = np.linspace(-chi_range, chi_range, chi_steps * oversample)
         assert phi_list.shape == (H, W)
         assert chi_list.shape == (H, W)
         for i in range(H):
@@ -101,7 +103,7 @@ class TestComputeComMaps:
                 assert chi_list[i, j] == pytest.approx(expected_chi)
 
     def test_chi_shift_is_applied_additively(self) -> None:
-        """Passing chi_shift shifts the χ output by that amount (degrees → radians)."""
+        """Passing chi_shift shifts the χ output by that amount (radians, 1:1)."""
         chi_steps = 11
         phi_steps = 7
         chi_range = 0.1
@@ -128,8 +130,8 @@ class TestComputeComMaps:
             chi_shift=0.02,
             oversample=oversample,
         )
-        # delta on the chi grid equals deg2rad(0.02)
-        assert (chi_shifted[0, 0] - chi_zero[0, 0]) == pytest.approx(np.deg2rad(0.02), rel=1e-9)
+        # chi_shift is in radians and applied 1:1 (no deg→rad conversion)
+        assert (chi_shifted[0, 0] - chi_zero[0, 0]) == pytest.approx(0.02, rel=1e-9)
 
     def test_non_square_grid(self) -> None:
         """COM extraction must not assume H == W (regression guard for the
@@ -187,8 +189,8 @@ class TestComputeComMaps:
         assert phi_eq[0, 0] == pytest.approx(phi_diff[0, 0])
         # chi values should each match their respective refined-grid lookup
         # value at COM index 2 (grid index 2 * chi_over).
-        expected_chi_10 = np.deg2rad(np.linspace(-chi_range, chi_range, chi_steps * 10))[2 * 10]
-        expected_chi_50 = np.deg2rad(np.linspace(-chi_range, chi_range, chi_steps * 50))[2 * 50]
+        expected_chi_10 = np.linspace(-chi_range, chi_range, chi_steps * 10)[2 * 10]
+        expected_chi_50 = np.linspace(-chi_range, chi_range, chi_steps * 50)[2 * 50]
         assert chi_eq[0, 0] == pytest.approx(expected_chi_10, rel=1e-9)
         assert chi_diff[0, 0] == pytest.approx(expected_chi_50, rel=1e-9)
 

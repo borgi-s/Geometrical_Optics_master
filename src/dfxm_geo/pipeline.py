@@ -902,7 +902,7 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
             ("phi_list", phi_list),
             ("chi_list", chi_list),
             ("qi_field", qi_field),
-            ("chi_shift_deg", float(chi_shift)),
+            ("chi_shift_rad", float(chi_shift)),
         ]:
             if name in analysis:
                 del analysis[name]
