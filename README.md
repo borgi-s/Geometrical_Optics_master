@@ -37,13 +37,13 @@ The central black cloud is the angular/energy acceptance in the imaging coordina
 
 ## How it works — direct space → detector
 
-After the kernel is built, the forward stage scans a rocking grid in (ϕ, χ). For each scan position, the per-pixel rocking curves are reduced to a centre-of-mass (COM) map. The left column below shows the ϕ and χ COM maps for a single centered dislocation; the right column shows the underlying `q_i` field at the z = 0 mid-plane of the illuminated slice — the same physics, viewed in reciprocal vs. real space:
+After the kernel is built, the forward stage rocks the sample through the Bragg condition and renders the expected detector image at each angle. Below, a single edge dislocation is imaged as the goniometer tilt ϕ sweeps from −150 to +150 µrad (χ = 0): the matrix brightens through ϕ = 0 (strong beam), while the dislocation's strain field casts a characteristic weak-beam contrast whose lobes invert across the rocking curve.
 
 <p align="center">
-  <img src="docs/img/qi_vs_com_comparison.png" alt="2x2 panel: top row shows phi and chi COM maps from a 61x61 rocking scan; bottom row shows qi_0 and qi_1 direct-space fields at z=0" />
+  <img src="docs/img/rocking_single_dislocation.gif" alt="Animated DFXM forward model of a single edge dislocation as the sample rocks in phi from -150 to +150 microradians; the matrix brightens through phi=0 and the weak-beam dislocation contrast inverts across the rocking curve" width="650" />
 </p>
 
-61 × 61 mosa grid (ϕ ∈ ±300 µrad, χ ∈ ±3 mrad), Npixels = 510, Al 111 @ 17 keV. The COM maps (top) are reconstructed from the scan; the `q_i` slices (bottom) are an internal of the forward model. The spatial agreement is the GO model's self-consistency check.
+Single centered dislocation (canonical FCC primary), Al 111 @ 17 keV, Npixels = 360. Each frame is one forward-model evaluation at the labelled ϕ, sharing a fixed (γ-corrected) color scale so the rocking-curve brightness change is faithful.
 
 ## Stack
 
