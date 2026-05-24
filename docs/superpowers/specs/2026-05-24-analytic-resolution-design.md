@@ -279,8 +279,9 @@ bootstrap+forward and record.
 ## 8. Rollout
 
 1. Implement A + B. Validate (§6). `mypy` + `pytest` green.
-2. Flip the `auto` default to analytic for no-beamstop (release-worthy change;
-   version bump). MC remains for beamstop and `backend="mc"`.
+2. Flip the `auto` default to analytic for no-beamstop, released as **v2.1.0**
+   (a behavior change for existing no-beamstop configs). MC remains for beamstop
+   and `backend="mc"`.
 3. Defer: removing the bootstrap `.npz` machinery — keep it for beamstop and as
    a regression reference.
 
@@ -288,7 +289,7 @@ bootstrap+forward and record.
 
 - COM-cleanliness test: assert against a smooth analytic reference, or against
   a high-resolution grid? (Decide during implementation.)
-- Version number for the default-flip release (v2.1 vs v3.0 — behavior change
-  for existing no-beamstop configs).
 - Conditioning threshold for the `σ_eps`-degeneracy error (§7) — pick a concrete
   cutoff during implementation (e.g. on `cond(C_rest)` or `min-eig/max-eig`).
+
+**Decided:** default-flip ships as **v2.1.0**.
