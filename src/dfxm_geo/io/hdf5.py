@@ -608,11 +608,15 @@ def write_identification_h5(
 
     if kernel_npz is None:
         kernel_npz = _fm._loaded_kernel_path
-        if kernel_npz is None:
+        if kernel_npz is None and _fm._analytic_eval is None:
             raise RuntimeError(
-                "no kernel loaded — call _lookup_and_load_kernel(hkl, keV) "
-                "before writing identification HDF5 provenance."
+                "no resolution backend loaded — call _lookup_and_load_kernel(hkl, "
+                "keV) or _load_analytic_resolution(config) before writing "
+                "identification HDF5 provenance."
             )
+        # Analytic backend: kernel_npz stays None (no MC kernel exists); the
+        # kernel provenance sub-group is skipped and the backend choice is
+        # captured in the embedded config TOML.
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -694,11 +698,15 @@ def write_simulation_h5(
 
     if kernel_npz is None:
         kernel_npz = _fm._loaded_kernel_path
-        if kernel_npz is None:
+        if kernel_npz is None and _fm._analytic_eval is None:
             raise RuntimeError(
-                "no kernel loaded — call _lookup_and_load_kernel(hkl, keV) "
-                "before writing HDF5 provenance."
+                "no resolution backend loaded — call _lookup_and_load_kernel(hkl, "
+                "keV) or _load_analytic_resolution(config) before writing HDF5 "
+                "provenance."
             )
+        # Analytic backend: kernel_npz stays None (no MC kernel exists); the
+        # kernel provenance sub-group is skipped and the backend choice is
+        # captured in the embedded config TOML.
 
     out_dir = path.parent
     out_dir.mkdir(parents=True, exist_ok=True)

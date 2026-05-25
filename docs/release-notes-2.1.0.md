@@ -64,11 +64,27 @@ form cannot represent a beamstop).
   - `zeta_v_clip` — vertical-divergence truncation (the condenser physical
     aperture; sets the erf-difference truncation limits).
 
+## HDF5 output for analytic runs
+
+The analytic backend completes a full `run_simulation` / `run_identification`
+run **without any MC kernel on disk** — that is the point of the closed form.
+The HDF5 provenance writer previously hard-required a loaded kernel and would
+crash an otherwise kernel-free analytic run at write time; it now writes the
+master file with no kernel sub-group when the analytic backend is active.
+
+The embedded provenance TOML (`/dfxm_geo/config_toml`) now also records the
+`backend` and `beamstop` selection, so an analytic-backend output is
+self-describing and the embedded config round-trips the run faithfully.
+
 ## Migrated / updated
 
 - `configs/default.toml`: documented the new `backend` key with an inline
   comment in `[reciprocal]`. The example config keeps `beamstop = true`, so
   it stays on the MC path; existing values are unchanged.
+- `scripts/render_readme_examples.py` (`--backend analytic`) and
+  `scripts/render_rocking_gif.py` (`DFXM_BACKEND=analytic`) can render their
+  figures through the analytic backend. `scripts/compare_resolution_backends.py`
+  overlays the MC and analytic resolution functions for validation.
 
 ## Unchanged
 

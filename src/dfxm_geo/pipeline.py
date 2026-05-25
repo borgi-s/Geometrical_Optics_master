@@ -795,6 +795,10 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
         h, k, l = config.reciprocal.hkl
         lines.append(f"hkl = [{h}, {k}, {l}]")
         lines.append(f"keV = {config.reciprocal.keV}")
+        # Record the backend selection so the embedded TOML round-trips the run
+        # and the HDF5 provenance is self-describing (analytic vs MC).
+        lines.append(f'backend = "{config.reciprocal.backend}"')
+        lines.append(f"beamstop = {str(config.reciprocal.beamstop).lower()}")
         lines.append("")
 
     # [scan.<axis>] - only render axes that differ from default (skip if value==0

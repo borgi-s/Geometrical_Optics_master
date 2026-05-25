@@ -83,6 +83,45 @@ def test_dispatch_explicit_analytic_with_beamstop_errors():
         _load_resolution(cfg)
 
 
+def test_run_simulation_analytic_writes_hdf5_without_kernel(tmp_path):
+    """Regression: a full run_simulation with the analytic backend and NO MC
+    kernel loaded must complete and write a valid HDF5 master.
+
+    The HDF5 provenance writer used to hard-require a loaded kernel
+    (`_fm._loaded_kernel_path`), so the entire analytic CLI path crashed at
+    write time. The earlier unit tests masked it by pre-loading a kernel for
+    geometry; here we force the genuine analytic-only state.
+    """
+    import h5py
+
+    from dfxm_geo.pipeline import SimulationConfig, run_simulation
+
+    # Force the clean / analytic-only state: no MC kernel anywhere.
+    fm._loaded_kernel_path = None
+    fm._analytic_eval = None
+
+    toml = tmp_path / "analytic.toml"
+    toml.write_text('[reciprocal]\nbackend = "analytic"\nbeamstop = false\n')
+    cfg = SimulationConfig.from_toml(toml)
+    cfg.io.include_perfect_crystal = False  # speed: single scan only
+
+    try:
+        out = run_simulation(cfg, tmp_path)
+        assert isinstance(out, dict)
+        master_h5 = tmp_path / "dfxm_geo.h5"
+        assert master_h5.exists()
+        with h5py.File(master_h5, "r") as f:
+            assert "/dfxm_geo" in f
+            # Analytic runs have no MC kernel, so no kernel provenance sub-group.
+            assert "/dfxm_geo/kernel" not in f
+            # The backend choice is captured in the embedded config TOML.
+            assert "analytic" in f["/dfxm_geo/config_toml"][()].decode()
+    finally:
+        # Don't leak the analytic evaluator into later (MC) tests -- forward()
+        # prefers it over the LUT whenever it is set.
+        fm._analytic_eval = None
+
+
 @pytest.mark.slow
 def test_analytic_forward_matches_mc_no_beamstop(tmp_path):
     """Forward parity: the closed-form backend reproduces the MC LUT forward
