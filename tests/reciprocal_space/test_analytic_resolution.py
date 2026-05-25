@@ -71,3 +71,25 @@ def test_closed_form_matches_quadrature():
     # independent scipy.integrate.quad oracle in C:\Users\borgi\tmp\math_check).
     mask = quad > quad.max() * 1e-9
     np.testing.assert_allclose(closed[mask], quad[mask], rtol=1e-8, atol=1e-12)
+
+
+def test_degenerate_eps_raises():
+    kw = _nominal_kwargs()
+    kw["eps_rms"] = 1e-12  # collapses qrock' Gaussian spread
+    with pytest.raises(ValueError, match="degenerate"):
+        AnalyticResolution(**kw)
+
+
+def test_zero_vertical_divergence_is_pure_gaussian():
+    kw = _nominal_kwargs()
+    kw["zeta_v_fwhm"] = 0.0  # sigma_zv = 0 -> no truncation, pure 3D Gaussian
+    res = AnalyticResolution(**kw)
+    assert res._gaussian_only is True
+    p0 = res(np.zeros((3, 1)))
+    np.testing.assert_allclose(p0, [1.0], atol=1e-12)
+    # Pure-Gaussian density integrates without erf; just confirm it is finite
+    # and peaked at 0.
+    q = np.zeros((3, 2))
+    q[2, 1] = 3e-3
+    p = res(q)
+    assert p[0] == pytest.approx(1.0) and 0.0 < p[1] < 1.0
