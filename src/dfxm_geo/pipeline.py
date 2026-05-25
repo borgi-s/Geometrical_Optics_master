@@ -368,25 +368,33 @@ class PostprocessConfig:
 
 @dataclass
 class ReciprocalConfig:
-    """Sub-project D: reflection identity for kernel lookup.
+    """Reflection identity + resolution-backend selection.
 
-    The TOML ``[reciprocal]`` block carries both this (small, consumed by
-    forward + identify) and bootstrap's MC params (large, consumed only by
-    `dfxm-bootstrap`). This dataclass holds only the lookup-relevant keys.
-
-    Sub-project F: both fields default to the IUCrJ-canonical Al 111 @ 17 keV.
-    `from_dict(None)` / `from_dict({})` returns the default; partial dicts
-    (one of hkl/keV) fall back to the default for the missing key.
+    `backend`: "auto" (default; analytic when beamstop off, else MC),
+    "analytic" (force closed-form; errors if beamstop on), or "mc".
+    The instrument params mirror reciprocal_space.kernel.generate_kernel and
+    feed the analytic backend (the MC backend reads them from the kernel .npz).
     """
 
     hkl: tuple[int, int, int] = (-1, 1, -1)
     keV: float = 17.0
+    backend: str = "auto"
+    beamstop: bool = True  # matches generate_kernel default
+    zeta_v_fwhm: float = 5.3e-4
+    zeta_h_fwhm: float = 0.0
+    NA_rms: float = 7.31e-4 / 2.35
+    eps_rms: float = 1.41e-4 / 2.35
+    zeta_v_clip: float = 1.4e-4
+
+    _VALID_BACKENDS = ("auto", "analytic", "mc")
 
     def __post_init__(self) -> None:
-        # Normalize hkl to a tuple in case a list slipped through programmatic
-        # construction; from_dict already does this for TOML callers.
         if not isinstance(self.hkl, tuple):
             self.hkl = tuple(self.hkl)
+        if self.backend not in self._VALID_BACKENDS:
+            raise ValueError(
+                f"backend must be one of {self._VALID_BACKENDS}, got {self.backend!r}."
+            )
         from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
         # TODO(non-Al materials): hardcoded Al lattice parameter; revisit if/when
@@ -404,6 +412,14 @@ class ReciprocalConfig:
             kwargs["hkl"] = tuple(data["hkl"])
         if "keV" in data:
             kwargs["keV"] = float(data["keV"])
+        for key in ("backend",):
+            if key in data:
+                kwargs[key] = str(data[key])
+        if "beamstop" in data:
+            kwargs["beamstop"] = bool(data["beamstop"])
+        for key in ("zeta_v_fwhm", "zeta_h_fwhm", "NA_rms", "eps_rms", "zeta_v_clip"):
+            if key in data:
+                kwargs[key] = float(data[key])
         return cls(**kwargs)
 
 
