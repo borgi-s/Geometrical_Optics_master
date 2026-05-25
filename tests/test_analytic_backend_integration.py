@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 import dfxm_geo.direct_space.forward_model as fm
-from dfxm_geo.pipeline import ReciprocalConfig
+from dfxm_geo.pipeline import ReciprocalConfig, _load_resolution
 
 
 def test_reciprocal_config_backend_defaults():
@@ -49,3 +49,25 @@ def test_forward_uses_analytic_when_registered():
         assert img.sum() > 0
     finally:
         fm._analytic_eval = None  # restore LUT path
+
+
+def test_dispatch_auto_no_beamstop_selects_analytic():
+    cfg = ReciprocalConfig.from_dict({"beamstop": False})  # auto + beamstop off
+    fm._analytic_eval = None
+    _load_resolution(cfg)
+    assert fm._analytic_eval is not None
+    fm._analytic_eval = None
+
+
+def test_dispatch_auto_beamstop_selects_mc():
+    cfg = ReciprocalConfig.from_dict({"beamstop": True})  # auto + beamstop on
+    fm._analytic_eval = None
+    _load_resolution(cfg)
+    assert fm._analytic_eval is None  # MC path: kernel loaded, no analytic
+    assert fm._loaded_kernel_path is not None
+
+
+def test_dispatch_explicit_analytic_with_beamstop_errors():
+    cfg = ReciprocalConfig.from_dict({"backend": "analytic", "beamstop": True})
+    with pytest.raises(ValueError, match="beamstop"):
+        _load_resolution(cfg)

@@ -632,6 +632,30 @@ def _lookup_and_load_kernel(
     )
 
 
+def _load_resolution(config: ReciprocalConfig) -> None:
+    """Select and load the resolution backend per config (spec sec. 5.4).
+
+    auto     -> analytic if beamstop off, else MC
+    analytic -> analytic; ValueError if beamstop on (cannot represent it)
+    mc       -> MC
+    """
+    use_analytic = config.backend == "analytic" or (
+        config.backend == "auto" and not config.beamstop
+    )
+    if config.backend == "analytic" and config.beamstop:
+        raise ValueError(
+            "backend='analytic' is incompatible with beamstop=True (the wire/"
+            "knife-edge/aperture stop cannot be represented in closed form). "
+            "Use backend='mc', or disable the beamstop."
+        )
+    if use_analytic:
+        fm._analytic_eval = None  # clear any stale evaluator
+        fm._load_analytic_resolution(config)
+    else:
+        fm._analytic_eval = None  # ensure forward() uses the LUT
+        _lookup_and_load_kernel(config.hkl, config.keV)
+
+
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
     """Execute a DFXM forward-simulation run from a config object.
 
@@ -640,7 +664,7 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
-    _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
+    _load_resolution(config.reciprocal)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1759,7 +1783,7 @@ def run_identification(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode."""
-    _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
+    _load_resolution(config.reciprocal)
 
     if config.mode == "single":
         return _run_identification_single(config, output_dir)
