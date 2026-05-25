@@ -39,6 +39,7 @@ eps_rms     = 6.0e-5                 # = 1.41e-4 / 2.35
 D  = 0.000565685424949238   # = 2 * sqrt(50e-6 * 1.6e-3)
 d1 = 0.274
 # Beamstop config.
+# backend = "auto"   # "auto" (analytic when beamstop off, else MC) | "analytic" | "mc"
 beamstop   = true
 bs_height  = 25e-3
 aperture   = true
