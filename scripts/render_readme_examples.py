@@ -108,6 +108,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Use a scaled-down config (11x11 rocking, ~30 s wall clock).",
     )
+    parser.add_argument(
+        "--backend",
+        choices=("mc", "analytic"),
+        default="mc",
+        help="Resolution backend. 'mc' (default) uses the beamstop Monte-Carlo "
+        "kernel and reproduces the published images. 'analytic' uses the v2.1.0 "
+        "closed-form backend, which forces the beamstop OFF -- a physically "
+        "different (no-beamstop) image.",
+    )
     args = parser.parse_args(argv)
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -131,6 +140,12 @@ def main(argv: list[str] | None = None) -> int:
             _build_small_config(tmp) if args.small else repo_root / "configs" / "default.toml"
         )
         cfg = SimulationConfig.from_toml(cfg_path)
+        if args.backend == "analytic":
+            # The closed-form backend exists only for the no-beamstop regime, so
+            # selecting it forces the beamstop off (run_simulation would raise
+            # otherwise). Note this changes the physics vs the published images.
+            cfg.reciprocal.backend = "analytic"
+            cfg.reciprocal.beamstop = False
         run_dir = tmp / "run"
         run_simulation(cfg, run_dir)
         res = run_postprocess(run_dir, cfg)

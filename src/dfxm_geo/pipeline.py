@@ -368,25 +368,33 @@ class PostprocessConfig:
 
 @dataclass
 class ReciprocalConfig:
-    """Sub-project D: reflection identity for kernel lookup.
+    """Reflection identity + resolution-backend selection.
 
-    The TOML ``[reciprocal]`` block carries both this (small, consumed by
-    forward + identify) and bootstrap's MC params (large, consumed only by
-    `dfxm-bootstrap`). This dataclass holds only the lookup-relevant keys.
-
-    Sub-project F: both fields default to the IUCrJ-canonical Al 111 @ 17 keV.
-    `from_dict(None)` / `from_dict({})` returns the default; partial dicts
-    (one of hkl/keV) fall back to the default for the missing key.
+    `backend`: "auto" (default; analytic when beamstop off, else MC),
+    "analytic" (force closed-form; errors if beamstop on), or "mc".
+    The instrument params mirror reciprocal_space.kernel.generate_kernel and
+    feed the analytic backend (the MC backend reads them from the kernel .npz).
     """
 
     hkl: tuple[int, int, int] = (-1, 1, -1)
     keV: float = 17.0
+    backend: str = "auto"
+    beamstop: bool = True  # matches generate_kernel default
+    zeta_v_fwhm: float = 5.3e-4
+    zeta_h_fwhm: float = 0.0
+    NA_rms: float = 7.31e-4 / 2.35
+    eps_rms: float = 1.41e-4 / 2.35
+    zeta_v_clip: float = 1.4e-4
+
+    _VALID_BACKENDS = ("auto", "analytic", "mc")
 
     def __post_init__(self) -> None:
-        # Normalize hkl to a tuple in case a list slipped through programmatic
-        # construction; from_dict already does this for TOML callers.
         if not isinstance(self.hkl, tuple):
             self.hkl = tuple(self.hkl)
+        if self.backend not in self._VALID_BACKENDS:
+            raise ValueError(
+                f"backend must be one of {self._VALID_BACKENDS}, got {self.backend!r}."
+            )
         from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
         # TODO(non-Al materials): hardcoded Al lattice parameter; revisit if/when
@@ -404,6 +412,14 @@ class ReciprocalConfig:
             kwargs["hkl"] = tuple(data["hkl"])
         if "keV" in data:
             kwargs["keV"] = float(data["keV"])
+        for key in ("backend",):
+            if key in data:
+                kwargs[key] = str(data[key])
+        if "beamstop" in data:
+            kwargs["beamstop"] = bool(data["beamstop"])
+        for key in ("zeta_v_fwhm", "zeta_h_fwhm", "NA_rms", "eps_rms", "zeta_v_clip"):
+            if key in data:
+                kwargs[key] = float(data[key])
         return cls(**kwargs)
 
 
@@ -616,6 +632,30 @@ def _lookup_and_load_kernel(
     )
 
 
+def _load_resolution(config: ReciprocalConfig) -> None:
+    """Select and load the resolution backend per config (spec sec. 5.4).
+
+    auto     -> analytic if beamstop off, else MC
+    analytic -> analytic; ValueError if beamstop on (cannot represent it)
+    mc       -> MC
+    """
+    use_analytic = config.backend == "analytic" or (
+        config.backend == "auto" and not config.beamstop
+    )
+    if config.backend == "analytic" and config.beamstop:
+        raise ValueError(
+            "backend='analytic' is incompatible with beamstop=True (the wire/"
+            "knife-edge/aperture stop cannot be represented in closed form). "
+            "Use backend='mc', or disable the beamstop."
+        )
+    if use_analytic:
+        fm._analytic_eval = None  # clear any stale evaluator
+        fm._load_analytic_resolution(config)
+    else:
+        fm._analytic_eval = None  # ensure forward() uses the LUT
+        _lookup_and_load_kernel(config.hkl, config.keV)
+
+
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
     """Execute a DFXM forward-simulation run from a config object.
 
@@ -624,7 +664,7 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
-    _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
+    _load_resolution(config.reciprocal)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -755,6 +795,10 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
         h, k, l = config.reciprocal.hkl
         lines.append(f"hkl = [{h}, {k}, {l}]")
         lines.append(f"keV = {config.reciprocal.keV}")
+        # Record the backend selection so the embedded TOML round-trips the run
+        # and the HDF5 provenance is self-describing (analytic vs MC).
+        lines.append(f'backend = "{config.reciprocal.backend}"')
+        lines.append(f"beamstop = {str(config.reciprocal.beamstop).lower()}")
         lines.append("")
 
     # [scan.<axis>] - only render axes that differ from default (skip if value==0
@@ -1743,7 +1787,7 @@ def run_identification(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode."""
-    _lookup_and_load_kernel(config.reciprocal.hkl, config.reciprocal.keV)
+    _load_resolution(config.reciprocal)
 
     if config.mode == "single":
         return _run_identification_single(config, output_dir)

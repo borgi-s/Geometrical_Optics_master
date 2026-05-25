@@ -14,7 +14,12 @@ This is NOT part of CI (it runs the forward model end-to-end and loads the
 reciprocal-space kernel). Regenerate manually after a change to the forward
 model or when publishing a new README look:
 
-    python scripts/render_rocking_gif.py
+    python scripts/render_rocking_gif.py                  # MC (beamstop kernel)
+    DFXM_BACKEND=analytic python scripts/render_rocking_gif.py   # v2.1.0 analytic
+
+The analytic backend (env DFXM_BACKEND=analytic or the BACKEND knob) is the
+v2.1.0 closed-form, no-beamstop resolution function -- a physically different
+image (no beamstop) and no cell-quantization banding (smoothing is skipped).
 
 Defaults: single centered dislocation (canonical FCC primary), Al 111 @ 17 keV,
 phi in [-150, +150] urad over 31 frames, ping-pong loop, fixed color scale, and
@@ -54,9 +59,12 @@ GAMMA = 0.45  # display power-law: lifts the weak-beam wings so the
 #                        remains brightest (the rocking-curve pulse is preserved)
 KERNEL_SMOOTH_SIGMA = 1.0  # Gaussian-smooth the reciprocal kernel (in grid
 #                            cells) to remove the blocky cell-quantization
-#                            banding in the forward image; 0 disables it
+#                            banding in the forward image; 0 disables it (MC only)
 HKL = (-1, 1, -1)
 KEV = 17.0
+BACKEND = "mc"  # "mc" (beamstop kernel, the published look) or "analytic"
+#                 (v2.1.0 closed-form, no beamstop, no cell-quantization banding
+#                 so no smoothing needed). Override with env DFXM_BACKEND.
 
 
 def _rescale(npix: int, nsub: int) -> None:
@@ -88,19 +96,31 @@ def main() -> None:
     from dfxm_geo.pipeline import (
         CenteredCrystalConfig,
         CrystalConfig,
+        ReciprocalConfig,
         _lookup_and_load_kernel,
     )
 
     repo_root = Path(__file__).resolve().parents[1]
     out_dir = Path(os.environ.get("DFXM_RENDER_OUTPUT_DIR", repo_root / "docs" / "img"))
     out_dir.mkdir(parents=True, exist_ok=True)
+    backend = os.environ.get("DFXM_BACKEND", BACKEND).lower()
 
     _rescale(NPIXELS, NSUB)
-    _lookup_and_load_kernel(HKL, KEV)
-    # B method: smooth the reciprocal kernel to denoise the blocky Monte-Carlo
-    # histogram so the forward image's cell-quantization banding disappears.
-    if KERNEL_SMOOTH_SIGMA > 0:
-        fm.Resq_i = gaussian_filter(np.asarray(fm.Resq_i, dtype=float), sigma=KERNEL_SMOOTH_SIGMA)
+    if backend == "analytic":
+        # Closed-form backend: forward() prefers fm._analytic_eval over the MC
+        # LUT. No Resq_i histogram, hence no smoothing (it is already smooth).
+        fm._load_analytic_resolution(
+            ReciprocalConfig(hkl=HKL, keV=KEV, backend="analytic", beamstop=False)
+        )
+    else:
+        _lookup_and_load_kernel(HKL, KEV)
+        # B method: smooth the reciprocal kernel to denoise the blocky Monte-Carlo
+        # histogram so the forward image's cell-quantization banding disappears.
+        if KERNEL_SMOOTH_SIGMA > 0:
+            fm.Resq_i = gaussian_filter(
+                np.asarray(fm.Resq_i, dtype=float), sigma=KERNEL_SMOOTH_SIGMA
+            )
+    print(f"backend={backend}")
 
     # Single centered dislocation (canonical FCC primary).
     crystal = CrystalConfig(mode="centered", centered=CenteredCrystalConfig())
