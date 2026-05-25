@@ -80,6 +80,12 @@ def test_degenerate_eps_raises():
         AnalyticResolution(**kw)
 
 
+def test_call_rejects_1d_input():
+    res = AnalyticResolution(**_nominal_kwargs())
+    with pytest.raises(ValueError, match="shape"):
+        res(np.zeros(3))
+
+
 def test_zero_vertical_divergence_is_pure_gaussian():
     kw = _nominal_kwargs()
     kw["zeta_v_fwhm"] = 0.0  # sigma_zv = 0 -> no truncation, pure 3D Gaussian

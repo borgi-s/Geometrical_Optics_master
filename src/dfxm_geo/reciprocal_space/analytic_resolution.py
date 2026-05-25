@@ -75,6 +75,8 @@ class AnalyticResolution:
         self.theta = float(theta)
         self.c = float(zeta_v_clip)
         sig_eps = float(eps_rms)
+        # Divisor asymmetry (zeta_v: 2.355, zeta_h: 2.35) is intentional and
+        # mirrors resolution.py exactly -- needed for MC parity. Do not "fix".
         sig_zv = zeta_v_fwhm / 2.355
         sig_zh = zeta_h_fwhm / 2.35
         sig_na = float(NA_rms)
@@ -135,6 +137,8 @@ class AnalyticResolution:
     def __call__(self, qi: np.ndarray) -> np.ndarray:
         """Peak-normalized p_Q. qi: (3, N) imaging-space q -> prob (N,)."""
         qi = np.asarray(qi, dtype=float)
+        if qi.ndim != 2 or qi.shape[0] != 3:
+            raise ValueError(f"qi must have shape (3, N); got {qi.shape}.")
         return self._raw_pq(qi) / self._peak
 
 
@@ -160,6 +164,8 @@ def quadrature_pq(
     M = _build_M(theta)
     m_u = M[:, 1]
     M_g = M[:, [0, 2, 3, 4]]
+    # zeta_h divisor 2.35 (vs zeta_v's 2.355 above) is intentional, mirroring
+    # resolution.py for MC parity. Do not "fix" to 2.355.
     Sigma_g = np.diag([eps_rms**2, (zeta_h_fwhm / 2.35) ** 2, NA_rms**2, NA_rms**2])
     C_rest = M_g @ Sigma_g @ M_g.T
     cho = scipy.linalg.cho_factor(C_rest, lower=True)
