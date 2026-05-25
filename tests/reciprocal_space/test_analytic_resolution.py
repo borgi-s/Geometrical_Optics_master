@@ -5,6 +5,7 @@ import pytest
 from dfxm_geo.reciprocal_space.analytic_resolution import (
     AnalyticResolution,
     _build_M,
+    quadrature_pq,
 )
 
 THETA = 0.156611  # Al 111 @ 17 keV
@@ -52,3 +53,21 @@ def test_call_is_peak_normalized_and_vectorized():
     assert np.all((p >= 0) & (p <= 1.0 + 1e-12))
     assert p[0] == pytest.approx(1.0)
     assert p[1] < 1.0 and p[2] < 1.0 and p[3] < 1.0
+
+
+def test_closed_form_matches_quadrature():
+    kw = _nominal_kwargs()
+    res = AnalyticResolution(**kw)
+    rng = np.random.default_rng(0)
+    # q points spanning a few sigma in each imaging axis.
+    q = (rng.standard_normal((3, 200)).T * np.array([2e-4, 1.2e-3, 1.2e-3])).T
+    closed = res._raw_pq(q)  # unnormalized, to compare to the integral
+    quad = quadrature_pq(q, **kw)
+    # Compare where the density is meaningfully nonzero. The wide q-draw above
+    # scatters ~1/3 of the points many sigma into the tail, where the closed
+    # form's exp() factor underflows to exactly 0.0 while the Gauss-Legendre
+    # sum returns a denormal-range positive (~1e-30); a relative test there is
+    # meaningless. On the bulk the two agree to ~1e-13 (verified against an
+    # independent scipy.integrate.quad oracle in C:\Users\borgi\tmp\math_check).
+    mask = quad > quad.max() * 1e-9
+    np.testing.assert_allclose(closed[mask], quad[mask], rtol=1e-8, atol=1e-12)

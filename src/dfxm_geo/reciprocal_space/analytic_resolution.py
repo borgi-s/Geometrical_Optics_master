@@ -136,3 +136,50 @@ class AnalyticResolution:
         """Peak-normalized p_Q. qi: (3, N) imaging-space q -> prob (N,)."""
         qi = np.asarray(qi, dtype=float)
         return self._raw_pq(qi) / self._peak
+
+
+def quadrature_pq(
+    qi: np.ndarray,
+    *,
+    theta: float,
+    zeta_v_fwhm: float,
+    zeta_h_fwhm: float,
+    NA_rms: float,
+    eps_rms: float,
+    zeta_v_clip: float = 1.4e-4,
+    n_nodes: int = 200,
+) -> np.ndarray:
+    """Approach B: marginalize the 4 Gaussians analytically (conditional 3D
+    Gaussian), integrate the truncated zeta_v over [-c, c] by Gauss-Legendre
+    quadrature. Returns the *unnormalized* density (same scale as
+    AnalyticResolution._raw_pq). Serves as the algebra oracle and the fallback
+    if the NA-aperture approximation ever exceeds tolerance.
+    """
+    qi = np.asarray(qi, dtype=float)
+    sig_zv = zeta_v_fwhm / 2.355
+    M = _build_M(theta)
+    m_u = M[:, 1]
+    M_g = M[:, [0, 2, 3, 4]]
+    Sigma_g = np.diag([eps_rms**2, (zeta_h_fwhm / 2.35) ** 2, NA_rms**2, NA_rms**2])
+    C_rest = M_g @ Sigma_g @ M_g.T
+    cho = scipy.linalg.cho_factor(C_rest, lower=True)
+    logdet = 2.0 * float(np.sum(np.log(np.diag(cho[0]))))
+    norm3 = (2 * np.pi) ** (-1.5) * np.exp(-0.5 * logdet)
+
+    nodes, weights = np.polynomial.legendre.leggauss(n_nodes)
+    u = zeta_v_clip * nodes  # map [-1,1] -> [-c,c]
+    wu = zeta_v_clip * weights
+    z_trunc = (
+        sig_zv
+        * np.sqrt(2 * np.pi)
+        * (_norm_cdf(zeta_v_clip / sig_zv) - _norm_cdf(-zeta_v_clip / sig_zv))
+    )
+    fu = np.exp(-(u**2) / (2 * sig_zv**2)) / z_trunc
+
+    out = np.zeros(qi.shape[1])
+    for ui, wui, fui in zip(u, wu, fu, strict=True):
+        d = qi - m_u[:, None] * ui  # (3, N)
+        sol = scipy.linalg.cho_solve(cho, d)
+        quad = np.einsum("in,in->n", d, sol)
+        out += wui * fui * norm3 * np.exp(-0.5 * quad)
+    return out
