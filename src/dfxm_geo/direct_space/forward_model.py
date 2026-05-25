@@ -25,7 +25,8 @@ from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
 if TYPE_CHECKING:
-    from dfxm_geo.pipeline import CrystalConfig, ScanConfig
+    from dfxm_geo.pipeline import CrystalConfig, ReciprocalConfig, ScanConfig
+    from dfxm_geo.reciprocal_space.analytic_resolution import AnalyticResolution
 
 # Module-level default for the sample-remount rotation matrix.
 # Defined here to avoid cross-module imports and satisfy ruff-B008.
@@ -152,6 +153,10 @@ qi2_start = qi2_step = None
 qi3_start = qi3_step = None
 qi_starts = qi_steps = None
 Hg = q_hkl = None
+
+# Analytic resolution backend (Task 5). When set, forward() evaluates this
+# closed-form p_Q(qi) instead of the Resq_i lookup. None => MC LUT path.
+_analytic_eval: "AnalyticResolution | None" = None
 
 
 def Find_Hg(
@@ -413,6 +418,31 @@ def _lookup_kernel_path(
     return matches[0]
 
 
+def _load_analytic_resolution(config: "ReciprocalConfig") -> None:
+    """Build the closed-form resolution evaluator and register it for forward().
+
+    Derives theta from (hkl, keV) the same way the MC bootstrap does, then
+    builds an AnalyticResolution from the config's instrument params. Also
+    computes the default Hg/q_hkl if not already present (parity with
+    _load_default_kernel(compute_Hg=True)).
+    """
+    global _analytic_eval, Hg, q_hkl
+    from dfxm_geo.reciprocal_space.analytic_resolution import AnalyticResolution
+    from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+    theta = _validate_reflection(config.hkl, config.keV, 4.0495e-10)
+    _analytic_eval = AnalyticResolution(
+        theta=theta,
+        zeta_v_fwhm=config.zeta_v_fwhm,
+        zeta_h_fwhm=config.zeta_h_fwhm,
+        NA_rms=config.NA_rms,
+        eps_rms=config.eps_rms,
+        zeta_v_clip=config.zeta_v_clip,
+    )
+    if Hg is None:
+        Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
+
+
 def forward(
     Hg: np.ndarray,
     phi: float = 0,
@@ -436,10 +466,11 @@ def forward(
         Forward-model image of shape (NN2//Nsub, NN1//Nsub). If qi_return is
         True, returns (image, qi_field) where qi_field has shape (3, NN1, NN2, NN3).
     """
-    if Resq_i is None:
+    if Resq_i is None and _analytic_eval is None:
         raise RuntimeError(
-            "forward_model state is not initialized. Call "
-            "_load_default_kernel(pkl_path) before calling forward()."
+            "forward_model state is not initialized. Load a kernel "
+            "(_lookup_and_load_kernel) or register the analytic backend "
+            "(_load_analytic_resolution) before calling forward()."
         )
 
     if TwoDeltaTheta != 0:
@@ -476,6 +507,27 @@ def forward(
     # Calculate scattering vector in imaging space; `qc` is no longer needed.
     qi = Theta @ qc
     del qc
+
+    if _analytic_eval is not None:
+        # Grid-free: evaluate the closed-form p_Q at every ray's qi. No
+        # grid-bounds mask -- the closed form returns ~0 in the tails, and
+        # _flat_indices already maps every ray to its detector pixel.
+        prob = (_analytic_eval(qi) * prob_z).astype(np.float32)
+        if not qi_return:
+            del qi
+        contribution = np.bincount(_flat_indices, weights=prob, minlength=im_1.size)
+        del prob
+        im_1 += contribution.reshape(im_1.shape)
+        del contribution
+        if qi_return:
+            qi_field = qi.reshape(3, NN1, NN2, NN3)
+            return im_1, qi_field
+        return im_1
+
+    # MC LUT path: the analytic branch above returned early, so reaching here
+    # guarantees Resq_i is loaded. Assert re-narrows it for the type checker
+    # (the guard now only requires that *one* of Resq_i / _analytic_eval is set).
+    assert Resq_i is not None
 
     # Calculate indices for Resq_i that pass through the mask
     index1 = np.floor((qi[0] - qi1_start) / qi1_step).astype(np.int16)

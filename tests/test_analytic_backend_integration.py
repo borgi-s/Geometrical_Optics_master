@@ -1,6 +1,8 @@
 # tests/test_analytic_backend_integration.py
+import numpy as np
 import pytest
 
+import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import ReciprocalConfig
 
 
@@ -30,3 +32,20 @@ def test_reciprocal_config_parses_backend_and_beamstop():
 def test_reciprocal_config_rejects_bad_backend():
     with pytest.raises(ValueError, match="backend"):
         ReciprocalConfig.from_dict({"backend": "nonsense"})
+
+
+def test_forward_uses_analytic_when_registered():
+    # Load any kernel for geometry/Hg/q_hkl, then register the analytic eval.
+    from dfxm_geo.pipeline import _lookup_and_load_kernel
+
+    cfg = ReciprocalConfig.from_dict(None)
+    _lookup_and_load_kernel(cfg.hkl, cfg.keV)  # sets Hg, q_hkl, geometry
+    try:
+        fm._load_analytic_resolution(cfg)
+        assert fm._analytic_eval is not None
+        img = fm.forward(fm.Hg, phi=0.0, chi=0.0)
+        assert img.shape == (fm.NN2 // fm.Nsub, fm.NN1 // fm.Nsub)
+        assert np.all(np.isfinite(img))
+        assert img.sum() > 0
+    finally:
+        fm._analytic_eval = None  # restore LUT path
