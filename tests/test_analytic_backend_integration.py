@@ -1,11 +1,19 @@
 # tests/test_analytic_backend_integration.py
-import numpy as np
-import pytest
+import matplotlib
 
-import dfxm_geo.direct_space.forward_model as fm
-from dfxm_geo.pipeline import ReciprocalConfig, _load_resolution
-from dfxm_geo.reciprocal_space.kernel import _validate_reflection
-from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func
+matplotlib.use("Agg")  # headless: must precede pyplot import
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
+
+import dfxm_geo.direct_space.forward_model as fm  # noqa: E402
+from dfxm_geo.pipeline import (  # noqa: E402
+    ReciprocalConfig,
+    _load_resolution,
+    _lookup_and_load_kernel,
+)
+from dfxm_geo.reciprocal_space.kernel import _validate_reflection  # noqa: E402
+from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func  # noqa: E402
 
 
 def test_reciprocal_config_backend_defaults():
@@ -38,8 +46,6 @@ def test_reciprocal_config_rejects_bad_backend():
 
 def test_forward_uses_analytic_when_registered():
     # Load any kernel for geometry/Hg/q_hkl, then register the analytic eval.
-    from dfxm_geo.pipeline import _lookup_and_load_kernel
-
     cfg = ReciprocalConfig.from_dict(None)
     _lookup_and_load_kernel(cfg.hkl, cfg.keV)  # sets Hg, q_hkl, geometry
     try:
@@ -172,3 +178,84 @@ def test_analytic_forward_matches_mc_no_beamstop(tmp_path):
     # Pearson against a finite-N MC reference. mad is the tight physics gate.
     assert corr > 0.9, f"analytic/MC correlation {corr:.4f} too low (structural)"
     assert mad < 0.03, f"analytic/MC mean-norm abs diff {mad:.4f} too large"
+
+
+def _com_value_hist_modes(com: np.ndarray, *, bins: int = 400, prom_frac: float = 0.01):
+    """Number of prominent modes in the histogram of COM values.
+
+    Banding (the MC LUT quantizing COM onto discrete grid sub-levels) shows up
+    as a "grassy" multi-peaked COM-value histogram. A smooth (analytic) COM map
+    has only the few physical lobes from the strain field. Returns (n_modes,
+    hist, bin_centers) so the caller can both assert and plot.
+    """
+    from scipy.signal import find_peaks
+
+    finite = com[np.isfinite(com)]
+    lo, hi = np.percentile(finite, [1, 99])
+    counts, edges = np.histogram(finite, bins=bins, range=(lo, hi))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    peaks, _ = find_peaks(counts.astype(float), prominence=prom_frac * counts.max())
+    return len(peaks), counts, centers
+
+
+@pytest.mark.slow
+def test_analytic_com_has_no_grid_banding(tmp_path):
+    """A phi rocking-scan COM map from the analytic backend should be smooth,
+    not quantized onto LUT grid sub-levels like the MC backend.
+
+    Metric note (replaces the original distinct-float-levels heuristic, which
+    was not discriminating): COM is a ratio of intensity stacks, and that
+    division *dequantizes* the per-pixel float values -- so both backends yield
+    ~3e4 distinct rounded COM levels and `uniq_an > 5*uniq_mc` is meaningless
+    here (verified: 34477 vs 33062). The physically real signature of MC
+    banding is instead a *multi-peaked ("grassy") histogram of COM values*: the
+    LUT quantization piles COM onto discrete sub-levels, adding many spurious
+    secondary modes. The analytic COM histogram has only the few genuine lobes
+    from the dislocation strain field. We count prominent histogram modes with
+    scipy.find_peaks; this is threshold-stable (MC 4-17 modes vs analytic 2
+    across bins in {200,400,800} x prominence in {0.01,0.02,0.05}) and matches
+    the saved figure. The comparison is deterministic: the MC kernel is the
+    fixed on-disk default and the analytic backend has no RNG.
+    """
+    cfg = ReciprocalConfig.from_dict({"beamstop": False, "zeta_h_fwhm": 5.3e-4})
+    # Geometry + Hg from the on-disk default kernel lookup, then analytic eval.
+    _lookup_and_load_kernel(cfg.hkl, cfg.keV)
+    Hg = fm.Hg
+
+    phis = np.linspace(-3e-4, 3e-4, 21)  # small rocking scan (radians)
+
+    def com_map(eval_setup):
+        eval_setup()
+        stack = np.stack([fm.forward(Hg, phi=p, chi=0.0) for p in phis], axis=0)
+        weight = stack.sum(axis=0) + 1e-30
+        return (stack * phis[:, None, None]).sum(axis=0) / weight
+
+    com_an = com_map(lambda: fm._load_analytic_resolution(cfg))
+    fm._analytic_eval = None
+    # MC reference (uses the on-disk default kernel; quantized).
+    com_mc = com_map(lambda: _lookup_and_load_kernel(cfg.hkl, cfg.keV))
+
+    modes_an, hist_an, centers_an = _com_value_hist_modes(com_an)
+    modes_mc, hist_mc, centers_mc = _com_value_hist_modes(com_mc)
+    # The analytic COM histogram is clean (just the physical lobes); the MC one
+    # is banded (many spurious modes). Both gates together encode "smoother".
+    assert modes_an <= 3, (
+        f"analytic COM histogram unexpectedly multi-modal: {modes_an} modes "
+        "(expected ~2 physical lobes)"
+    )
+    assert modes_mc >= 2 * modes_an, (
+        f"MC COM not more banded than analytic: {modes_mc} vs {modes_an} modes"
+    )
+
+    fig, ax = plt.subplots(2, 2, figsize=(10, 8))
+    ax[0, 0].imshow(com_mc)
+    ax[0, 0].set_title(f"MC COM map ({modes_mc} hist modes)")
+    ax[0, 1].imshow(com_an)
+    ax[0, 1].set_title(f"analytic COM map ({modes_an} hist modes)")
+    ax[1, 0].plot(centers_mc, hist_mc)
+    ax[1, 0].set_title("MC COM value histogram (grassy = banded)")
+    ax[1, 1].plot(centers_an, hist_an)
+    ax[1, 1].set_title("analytic COM value histogram (clean)")
+    fig.tight_layout()
+    fig.savefig("docs/img/analytic_vs_mc_com.png", dpi=110)
+    plt.close(fig)
