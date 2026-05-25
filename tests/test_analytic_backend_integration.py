@@ -2,6 +2,8 @@
 import matplotlib
 
 matplotlib.use("Agg")  # headless: must precede pyplot import
+from pathlib import Path  # noqa: E402
+
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
@@ -100,20 +102,24 @@ def test_analytic_forward_matches_mc_no_beamstop(tmp_path):
     Metrics: correlation gates structural agreement; mean-abs-diff is the tight
     quantitative gate. A perfect-1.0 correlation is not attainable here because
     this forward scene is a near-flat bright field plus a thin dark dislocation
-    line -- ~98% of pixels sit on the resolution plateau, so Pearson is driven
-    by the small varying fraction and floored by residual MC plateau noise. The
-    physics that matters (the dislocation structure + plateau level) agrees:
-    central row/column profiles of the two images overlay to within the MC
-    wiggle. The smoothness *difference* that survives here is exactly what
+    line -- most pixels sit near the bright-field resolution plateau, so Pearson
+    is driven by the small varying fraction and floored by residual MC plateau
+    noise. The physics that matters (the dislocation structure + plateau level)
+    agrees: central row/column profiles of the two images overlay to within the
+    MC wiggle. The smoothness *difference* that survives here is exactly what
     Task 8 turns into the COM headline.
+
+    Determinism note: the MC kernel build is seeded (rng=default_rng(0)), so the
+    LUT -- and therefore both metrics -- are reproducible run-to-run. With the
+    seeded, well-populated kernel the observed values are corr ~0.985 and
+    mean-norm mad ~0.007, so the gates below are tight rather than defensive.
 
     Normalization note: the mad gate compares *mean*-normalized images, not
     peak-normalized. Peak-normalization divides by `img.max()`, a single pixel
-    whose value tracks the MC LUT's noisiest (most-populated) bin -- so
-    peak-norm mad swings run-to-run (0.02-0.07 across RNG seeds) purely from
-    that one spike, while the analytic max/mean is a stable 1.019. Mean-norm is
-    the robust, RNG-stable shape comparison: mad ~0.007-0.016 (< 0.03) across
-    seeds. Correlation is scale-invariant so the choice doesn't affect it.
+    whose value tracks the MC LUT's noisiest (most-populated) bin -- a brittle
+    spike -- while the analytic max/mean is a stable 1.019. Mean-norm is the
+    robust shape comparison: mad ~0.007. Correlation is scale-invariant so the
+    choice doesn't affect it.
     """
     hkl, keV = (-1, 1, -1), 17.0
     theta = _validate_reflection(hkl, keV, 4.0495e-10)
@@ -140,6 +146,7 @@ def test_analytic_forward_matches_mc_no_beamstop(tmp_path):
         phys_aper=float(2 * np.sqrt(50e-6 * 1.6e-3)) / 0.274,
         date="test",
         beamstop=False,
+        rng=np.random.default_rng(0),
         output_path=out,
         kernel_meta={
             "qi1_range": 5e-4,
@@ -174,10 +181,12 @@ def test_analytic_forward_matches_mc_no_beamstop(tmp_path):
     a = img_an / img_an.mean()
     m = img_mc / img_mc.mean()
     mad = np.mean(np.abs(a - m))
-    # 0.9 (not 0.99): see docstring -- a near-flat-field scene caps achievable
-    # Pearson against a finite-N MC reference. mad is the tight physics gate.
-    assert corr > 0.9, f"analytic/MC correlation {corr:.4f} too low (structural)"
-    assert mad < 0.03, f"analytic/MC mean-norm abs diff {mad:.4f} too large"
+    # Tight gates: the seeded, well-populated MC kernel makes this deterministic
+    # (observed corr ~0.985, mad ~0.007). Not 1.0 because a near-flat-field
+    # scene caps achievable Pearson against a finite-N MC reference; mad is the
+    # tight physics gate.
+    assert corr > 0.97, f"analytic/MC correlation {corr:.4f} too low (structural)"
+    assert mad < 0.02, f"analytic/MC mean-norm abs diff {mad:.4f} too large"
 
 
 def _com_value_hist_modes(com: np.ndarray, *, bins: int = 400, prom_frac: float = 0.01):
@@ -257,5 +266,8 @@ def test_analytic_com_has_no_grid_banding(tmp_path):
     ax[1, 1].plot(centers_an, hist_an)
     ax[1, 1].set_title("analytic COM value histogram (clean)")
     fig.tight_layout()
-    fig.savefig("docs/img/analytic_vs_mc_com.png", dpi=110)
+    # CWD-independent: resolve the tracked figure path from this file's location.
+    fig_path = Path(__file__).resolve().parent.parent / "docs" / "img" / "analytic_vs_mc_com.png"
+    fig_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(fig_path, dpi=110)
     plt.close(fig)
