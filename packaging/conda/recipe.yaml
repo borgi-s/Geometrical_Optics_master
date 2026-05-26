@@ -18,6 +18,18 @@ build:
   number: 0
   noarch: python
   script: ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+  python:
+    # Declare the console scripts so rattler-build generates OS-specific
+    # launchers at install time. Without this, the auto-detected Windows
+    # .exe launcher is broken (exits 1 with no output); the package code
+    # itself is fine on Windows.
+    entry_points:
+      - dfxm-forward = dfxm_geo.pipeline:cli_main
+      - dfxm-identify = dfxm_geo.pipeline:cli_main_identify
+      - dfxm-bootstrap = dfxm_geo.reciprocal_space.kernel:cli_main
+      - dfxm-init = dfxm_geo.init_cmd:cli_main
+      - dfxm-migrate-output = dfxm_geo.io.migrate:cli_main_npy_to_h5
+      - dfxm-migrate-h5 = dfxm_geo.io.migrate:cli_main_h5_to_h5
 
 requirements:
   host:
@@ -60,10 +72,8 @@ tests:
       - dfxm-identify --help
       - dfxm-bootstrap --help
       - dfxm-init --help
-    # Pin the script-test env to the minimum supported Python, matching the
-    # import test above. Without this it resolves the newest Python (3.14),
-    # where the numba/llvmlite Windows build is not yet usable and the CLIs
-    # fail to import. dfxm-geo targets Python 3.11–3.12.
+    # Pin the script-test env to the minimum supported Python (3.11), matching
+    # the import test. dfxm-geo targets Python 3.11–3.12.
     requirements:
       run:
         - python ${{ python_min }}.*
