@@ -109,10 +109,13 @@ def _sha256_of(path: Path) -> str:
 def _auto_max_workers() -> int:
     """Cap thread-pool workers by both CPU count and free memory.
 
-    Each ``forward()`` call needs ~1 GiB of intermediates (``qs.squeeze().T``
-    and ``qi`` are each ~270 MiB float64 at the default 510-pixel detector,
-    plus the ``prob``/``pro``/``index`` arrays). We aim for ~1 GiB headroom
-    per worker.
+    The ``base_qc`` array (``qs.squeeze().T``, ~270 MiB float64 at the default
+    510-pixel detector) is now precomputed once per scan and shared read-only
+    across workers, so it no longer counts toward per-worker footprint. The
+    dominant per-worker intermediate is ``qi`` (~270 MiB float64), plus the
+    ``prob``/``pro``/``index`` arrays — roughly half the previous per-worker
+    estimate. We still aim for ~1 GiB headroom per worker as a conservative
+    margin.
 
     Resolution order (highest precedence wins):
       1. ``DFXM_MAX_WORKERS`` env var, if set to a positive int.
