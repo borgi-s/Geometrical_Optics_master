@@ -19,7 +19,10 @@ def test_write_provenance_basic_fields(tmp_path: Path) -> None:
 
     with h5py.File(out, "r") as f:
         g = f["/dfxm_geo"]
-        assert g["version"][()].decode().startswith("1.")
+        # Provenance must record the actual installed package version.
+        from importlib.metadata import version as _pkg_version
+
+        assert g["version"][()].decode() == _pkg_version("dfxm-geo")
         # git_sha is "unknown" outside a git repo, a 40-char SHA inside one
         sha = g["git_sha"][()].decode()
         assert sha == "unknown" or len(sha) == 40
