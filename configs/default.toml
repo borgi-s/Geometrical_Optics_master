@@ -45,6 +45,9 @@ bs_height  = 25e-3
 aperture   = true
 knife_edge = false
 dphi_range = 0.0
+# seed = 0   # optional: pin the MC ray-sampling RNG for a bit-reproducible
+            # kernel. Omit (default) for an entropy-seeded random run. The CLI
+            # flag `dfxm-bootstrap --seed N` overrides this value.
 
 # Scan: per-axis primitives. Each axis is independently fixed (value, default 0)
 # or scanned (value + range + steps). Mode name is derived.

@@ -131,6 +131,7 @@ def generate_kernel(
     output_path: Path | None = None,
     hkl: tuple[int, int, int] | None = None,
     keV: float | None = None,
+    seed: int | None = None,
 ) -> Path:
     """Run the kernel-generation Monte Carlo and write the npz to ``pkl_files/``.
 
@@ -156,6 +157,11 @@ def generate_kernel(
             (sub-project D — multi-reflection lookup).
         keV: beam energy in keV (optional). Bundled into the npz scalar
             metadata for downstream load verification (sub-project D).
+        seed: optional RNG seed for the Monte Carlo ray sampling. When given,
+            two runs with identical parameters produce a bit-identical kernel
+            (useful for regression fixtures and reproducible cluster reruns).
+            When None (default), an entropy-seeded `default_rng()` is used and
+            the bundled `seed` metadata is recorded as the -1 sentinel.
 
     Returns:
         The path the npz was written to.
@@ -163,6 +169,7 @@ def generate_kernel(
     if date is None:
         date = datetime.now().strftime("%Y%m%d_%H%M")
 
+    rng = np.random.default_rng(seed)
     phys_aper = D / d1
 
     if output_path is not None:
@@ -193,6 +200,8 @@ def generate_kernel(
         # _load_default_kernel when a lookup expects a specific (hkl, keV).
         "hkl": np.array(hkl if hkl is not None else (0, 0, 0), dtype=np.int64),
         "keV": np.float64(keV if keV is not None else 0.0),
+        # MC seed provenance. -1 sentinel = unseeded (entropy) run.
+        "seed": np.int64(seed if seed is not None else -1),
     }
 
     reciprocal_res_func(
@@ -219,6 +228,7 @@ def generate_kernel(
         dphi_range=dphi_range,
         output_path=output_path,
         kernel_meta=kernel_meta,
+        rng=rng,
     )
 
     return output_path if output_path is not None else Path("pkl_files") / f"Resq_i_{date}.npz"
@@ -282,6 +292,16 @@ def cli_main(argv: list[str] | None = None) -> int:
             "instead of returning the usual 'refusing to overwrite' error. "
             "Useful as an idempotent guard in cluster batch templates that don't "
             "want to hardcode the kernel filename."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "RNG seed for the Monte Carlo ray sampling. Makes the kernel "
+            "bit-reproducible across runs. Overrides any `seed` set in the "
+            "[reciprocal] TOML block. Omit for an entropy-seeded (random) run."
         ),
     )
     args = parser.parse_args(argv)
@@ -396,6 +416,9 @@ def cli_main(argv: list[str] | None = None) -> int:
 
     reciprocal_kwargs["hkl"] = hkl_tuple
     reciprocal_kwargs["keV"] = keV_for_filename
+    # CLI --seed overrides any `seed` set in the TOML [reciprocal] block.
+    if args.seed is not None:
+        reciprocal_kwargs["seed"] = args.seed
     written = generate_kernel(output_path=output_path, **reciprocal_kwargs)
     print(f"wrote {written}")
     return 0
