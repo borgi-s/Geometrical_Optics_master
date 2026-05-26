@@ -187,8 +187,8 @@ def main(argv: list[str] | None = None) -> int:
         # exaggerate small residuals and break the visual top↔bottom comparison.
         vmin, vmax = -1e-4, 1e-4
         panels = [
-            ((phi_list * -1).T, com_extent, r"$-\mathrm{COM}_\phi$ (mosaicity)"),
-            ((chi_list * -1).T, com_extent, r"$-\mathrm{COM}_\chi$ (mosaicity)"),
+            ((phi_list * -1).T, com_extent, r"$-\mathrm{COM}_\phi$"),
+            ((chi_list * -1).T, com_extent, r"$-\mathrm{COM}_\chi$"),
             (qi_field[0, :, :, zmid].squeeze(), qi_extent, r"$q_{i,1}$ (geometric optics)"),
             (qi_field[1, :, :, zmid].squeeze(), qi_extent, r"$q_{i,2}$ (geometric optics)"),
         ]

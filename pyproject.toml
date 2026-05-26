@@ -135,6 +135,7 @@ module = [
     "h5py.*",
     "darfix.*",
     "darling",
+    "darling.*",
     "silx.*",
 ]
 ignore_missing_imports = true
