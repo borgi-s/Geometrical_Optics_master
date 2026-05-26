@@ -701,3 +701,131 @@ class TestCliMainMultiReflection:
         err = capsys.readouterr().err
         assert "Bragg condition unsatisfiable" in err
         assert "lam=" in err or "lambda" in err.lower()
+
+
+class TestKernelSeed:
+    """Reproducible kernel generation via the optional `seed` parameter.
+
+    The reciprocal-space kernel is a Monte Carlo integral; without a seed the
+    underlying `np.random.default_rng()` is non-deterministic, so two bootstrap
+    runs with identical config produce slightly different kernels. A `seed`
+    makes the MC reproducible (e.g. for regression fixtures or cluster reruns).
+    """
+
+    def test_same_seed_is_bit_identical(self, tmp_path: Path) -> None:
+        from dfxm_geo.reciprocal_space.kernel import generate_kernel
+
+        kw = dict(Nrays=3000, npoints1=20, npoints2=20, npoints3=20, beamstop=False)
+        a = tmp_path / "a.npz"
+        b = tmp_path / "b.npz"
+        generate_kernel(output_path=a, seed=12345, **kw)  # type: ignore[arg-type]
+        generate_kernel(output_path=b, seed=12345, **kw)  # type: ignore[arg-type]
+        ra = np.load(a)["Resq_i"]
+        rb = np.load(b)["Resq_i"]
+        np.testing.assert_array_equal(ra, rb)
+
+    def test_different_seeds_differ(self, tmp_path: Path) -> None:
+        from dfxm_geo.reciprocal_space.kernel import generate_kernel
+
+        kw = dict(Nrays=3000, npoints1=20, npoints2=20, npoints3=20, beamstop=False)
+        a = tmp_path / "a.npz"
+        b = tmp_path / "b.npz"
+        generate_kernel(output_path=a, seed=1, **kw)  # type: ignore[arg-type]
+        generate_kernel(output_path=b, seed=2, **kw)  # type: ignore[arg-type]
+        ra = np.load(a)["Resq_i"]
+        rb = np.load(b)["Resq_i"]
+        assert not np.array_equal(ra, rb)
+
+    def test_seed_bundled_in_metadata(self, tmp_path: Path) -> None:
+        from dfxm_geo.reciprocal_space.kernel import generate_kernel
+
+        out = tmp_path / "seeded.npz"
+        generate_kernel(
+            Nrays=2000,
+            npoints1=20,
+            npoints2=20,
+            npoints3=20,
+            beamstop=False,
+            output_path=out,
+            seed=777,
+        )
+        loaded = np.load(out)
+        assert "seed" in loaded.files
+        assert int(loaded["seed"]) == 777
+
+    def test_default_seed_none_records_sentinel(self, tmp_path: Path) -> None:
+        """Unseeded (default) runs still record a `seed` entry as -1 sentinel."""
+        from dfxm_geo.reciprocal_space.kernel import generate_kernel
+
+        out = tmp_path / "unseeded.npz"
+        generate_kernel(
+            Nrays=2000,
+            npoints1=20,
+            npoints2=20,
+            npoints3=20,
+            beamstop=False,
+            output_path=out,
+        )
+        loaded = np.load(out)
+        assert "seed" in loaded.files
+        assert int(loaded["seed"]) == -1
+
+    def test_cli_seed_flag_passed_through(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`dfxm-bootstrap --seed N` forwards N to generate_kernel."""
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        captured: dict[str, object] = {}
+
+        def fake_generate_kernel(
+            date: str | None = None,
+            *,
+            output_path: Path | None = None,
+            seed: int | None = None,
+            **kwargs: object,
+        ) -> Path:
+            captured["seed"] = seed
+            assert output_path is not None
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"")
+            return output_path
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate_kernel)
+        cfg = tmp_path / "config.toml"
+        cfg.write_text("[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\nNrays = 1000\n")
+        rc = kmod.cli_main(
+            ["--config", str(cfg), "--output", str(tmp_path / "k.npz"), "--seed", "42"]
+        )
+        assert rc == 0
+        assert captured["seed"] == 42
+
+    def test_cli_seed_flag_overrides_toml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`--seed` on the CLI takes precedence over a `seed` in the TOML."""
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        captured: dict[str, object] = {}
+
+        def fake_generate_kernel(
+            date: str | None = None,
+            *,
+            output_path: Path | None = None,
+            seed: int | None = None,
+            **kwargs: object,
+        ) -> Path:
+            captured["seed"] = seed
+            assert output_path is not None
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"")
+            return output_path
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate_kernel)
+        cfg = tmp_path / "config.toml"
+        cfg.write_text("[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\nNrays = 1000\nseed = 5\n")
+        rc = kmod.cli_main(
+            ["--config", str(cfg), "--output", str(tmp_path / "k.npz"), "--seed", "99"]
+        )
+        assert rc == 0
+        assert captured["seed"] == 99

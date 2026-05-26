@@ -152,13 +152,14 @@ class TestLegacyPickleRejection:
 
 @pytest.mark.xfail(
     reason=(
-        "Bit-equivalence golden was captured against a specific Fg cache + Nsub=2. "
-        "Find_Hg uses non-seeded np.random.default_rng(), so fresh checkouts "
-        "regenerate Fg with different dislocation positions; and the Nsub default "
-        "is now 1 (was 2 when the golden was captured). The snapshot therefore "
-        "only matches on machines that retained the original Fg cache AND run "
-        "with Nsub=2 manually. Follow-up: pin a deterministic seed in Find_Hg "
-        "for reproducible test fixtures, then regenerate the golden."
+        "Requires the 2023 legacy pickle Resq_i_20230913_1308.pkl to build the "
+        "comparison npz; that artifact is not in the repo and cannot be "
+        "reconstructed, so the test SKIPS when it is absent. Independently, the "
+        "snapshot was captured at Nsub=2 while the default is now Nsub=1. Not an "
+        "RNG-seeding issue -- the wall path Find_Hg -> Fd_find is deterministic. "
+        "(Kernel MC generation is now seedable via dfxm-bootstrap --seed, but "
+        "this snapshot predates that.) Un-xfailing needs the legacy pickle plus a "
+        "golden regenerated at the current Nsub default."
     ),
     strict=False,
 )

@@ -18,14 +18,16 @@ GOLDEN = REPO / "tests" / "data" / "golden" / "forward_legacy_writer_4frames_8x8
 
 @pytest.mark.xfail(
     reason=(
-        "Bit-equivalence golden was captured against a specific Fg cache + Nsub=2. "
-        "Find_Hg uses non-seeded np.random.default_rng(), so fresh checkouts "
-        "regenerate Fg with different dislocation positions; and the Nsub default "
-        "is now 1 (was 2 when the golden was captured). The snapshot therefore "
-        "only matches on machines that retained the original Fg cache AND run "
-        "with Nsub=2 manually. Same root cause as the sibling xfail on "
-        "test_forward_output_matches_pickle_era_snapshot. Follow-up: seed Find_Hg "
-        "for reproducible test fixtures, then regenerate the golden."
+        "Two real blockers, neither about RNG seeding (the wall path Find_Hg -> "
+        "Fd_find is fully deterministic -- no np.random anywhere): (1) the test "
+        "needs a loaded MC kernel to render via forward(), so it SKIPS on a bare "
+        "checkout with no kernel; (2) the golden was captured at Nsub=2 while the "
+        "default is now Nsub=1, so even with a kernel the rendered image differs. "
+        "To un-xfail: load a kernel, then regenerate the golden at the current "
+        "Nsub default. (Kernel MC generation is now seedable via "
+        "dfxm-bootstrap --seed / generate_kernel(seed=), but this golden predates "
+        "that and was not captured with a pinned seed.) Same situation as the "
+        "sibling xfail on test_forward_output_matches_pickle_era_snapshot."
     ),
     strict=False,
 )

@@ -433,17 +433,34 @@ scan navigator automatically. Note that darfix transitively depends on
 
 ### Via darling
 
+Use the `DarlingReader` shipped in `dfxm_geo`:
+
 ```python
 import darling
-dset = darling.DataSet("out_dir/dfxm_geo.h5", scan_id="1.1")
-print(dset.data.shape, dset.motors)
+from dfxm_geo.io.darling_reader import DarlingReader
+
+dset = darling.DataSet(DarlingReader("out_dir/dfxm_geo.h5"))
+dset.load_scan("1.1")
+print(dset.data.shape, dset.motors.shape)
 ```
 
-Darling auto-reshapes the flat `(N_frames, H, W)` stack into the
-expected 4-D `(phi_steps, chi_steps, H, W)` layout using the BLISS
-positioners metadata. Verified against `AxelHenningsson/darling` HEAD
-during v1.1.0 release validation; v1.2.0 changes only the on-disk file
-shape, not the loader contract.
+**Why a custom reader is required (v1.2.0+):** darling 2.0.0 discovers the
+detector dataset with `h5py.visititems`, which does **not** traverse external
+links. Since v1.2.0 the per-scan detector data lives in a separate LIMA-style
+file linked into the master via an `ExternalLink`, so darling's built-in
+readers cannot find it (and pointing darling at the per-scan file fails too —
+it lacks the BLISS scan structure). `DarlingReader` opens the master, reads the
+stack through the explicit linked path, and hands darling pre-resolved
+`(a, b, m, n)` data plus `(k, m, n)` motor meshgrids — exactly darling's
+`Reader` contract. It has no import-time dependency on darling, so importing
+`dfxm_geo` never requires darling to be installed.
+
+For a plain in-memory stack without darling, use
+`dfxm_geo.io.darling_reader.resolve_detector_data(path, scan_id)`, which returns
+the `(N_frames, H, W)` array with the external link resolved.
+
+`DarlingReader` handles rectilinear scans over one or two varying motors (the
+case darling targets). For >2 scanned axes use `load_h5_scan` or silx directly.
 
 ## Compression
 
