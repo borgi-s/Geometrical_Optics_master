@@ -533,8 +533,9 @@ class TestDfxmForwardSampleRemountCLI:
             venv_cli = _P(found)
 
         # Run dfxm-forward with the S2 variant config, output to tmp_path
-        repo_root = _P(__file__).resolve().parents[1]
-        variant_config = repo_root / "configs" / "variants" / "sample_remount_S2.toml"
+        from dfxm_geo.data import configs_root
+
+        variant_config = configs_root() / "variants" / "sample_remount_S2.toml"
         result = subprocess.run(
             [
                 str(venv_cli),

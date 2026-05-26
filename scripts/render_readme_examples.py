@@ -132,13 +132,12 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     # Import here so that --help works on a clean checkout that lacks the kernel.
+    from dfxm_geo.data import configs_root
     from dfxm_geo.pipeline import SimulationConfig, run_postprocess, run_simulation
 
     with tempfile.TemporaryDirectory(prefix="dfxm_render_") as td:
         tmp = Path(td)
-        cfg_path = (
-            _build_small_config(tmp) if args.small else repo_root / "configs" / "default.toml"
-        )
+        cfg_path = _build_small_config(tmp) if args.small else configs_root() / "default.toml"
         cfg = SimulationConfig.from_toml(cfg_path)
         if args.backend == "analytic":
             # The closed-form backend exists only for the no-beamstop regime, so
