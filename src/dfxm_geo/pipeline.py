@@ -26,7 +26,7 @@ import h5py
 import numpy as np
 
 import dfxm_geo.direct_space.forward_model as fm
-from dfxm_geo.analysis.mosaicity import compute_chi_shift, compute_com_maps
+from dfxm_geo.analysis.mosaicity import compute_com_maps
 from dfxm_geo.crystal.burgers import burgers_vectors as _burgers_vectors
 from dfxm_geo.crystal.burgers import (
     rotated_t_vectors as _rotated_t_vectors,
@@ -355,10 +355,11 @@ class PostprocessConfig:
     """
 
     enabled: bool = True
-    # Deprecated (v2.0.2): COM maps are now an exact weighted mean, so these two
-    # no longer affect output. Retained so existing [postprocess] TOML blocks
-    # still parse. Only chi_oversample_for_shift is still consumed (by
-    # compute_chi_shift, for the perfect-crystal χ-offset calibration).
+    # Deprecated: COM maps are now an exact weighted mean (v2.0.2) and the χ axis
+    # is read off the nominal grid with no runtime calibration, so none of these
+    # three knobs affect output any more. Retained so existing [postprocess] TOML
+    # blocks still parse. (chi_oversample_for_shift used to drive compute_chi_shift,
+    # which was dropped from postprocessing — see run_postprocess.)
     chi_oversample: int = 20
     phi_oversample: int = 20
     chi_oversample_for_shift: int = 100
@@ -890,7 +891,7 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
 
 
 def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any]:
-    """Read /1.1 and /2.1 from dfxm_geo.h5; compute χ-shift, COM maps, qi field.
+    """Read /1.1 from dfxm_geo.h5; compute COM maps and the qi field.
 
     Analysis outputs are written into /1.1/dfxm_geo/analysis/ inside the same
     HDF5 file. SVG figures land on disk under <output_dir>/figures/ (F1).
@@ -914,7 +915,8 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
             f"Expected {h5_path}; run dfxm-forward without --postprocess-only first."
         )
 
-    # Sanity-check that /2.1 exists (chi-shift needs perfect crystal).
+    # Sanity-check that /2.1 exists (the perfect-crystal scan is still part of
+    # the forward-output contract, even though postprocessing no longer reads it).
     with h5py.File(h5_path, "r") as f:
         if "/2.1" not in f:
             raise FileNotFoundError(
@@ -933,30 +935,20 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         phi_steps=phi_steps,
         chi_steps=chi_steps,
     )
-    _, perf_reshape, _, _ = load_h5_scan(
-        h5_path,
-        scan_id="2.1",
-        phi_steps=phi_steps,
-        chi_steps=chi_steps,
-    )
 
-    chi_shift = compute_chi_shift(
-        perf_reshape,
-        chi_steps,
-        chi_range,
-        oversample=config.postprocess.chi_oversample_for_shift,
-    )
-    # COM maps are an exact intensity-weighted mean (v2.0.2); the phi/chi
-    # oversample knobs are no longer consumed here (kept on PostprocessConfig
-    # for TOML/back-compat only). chi_oversample_for_shift still drives the
-    # compute_chi_shift refinement above.
+    # COM maps are an exact intensity-weighted mean (v2.0.2) read directly off the
+    # nominal χ grid. The earlier runtime χ-offset calibration (compute_chi_shift,
+    # from the perfect-crystal corner pixel) was dropped: it carried an abs()
+    # sign-loss that shifted the χ-COM map off the article axis, and the
+    # de-quantized weighted mean needs no such correction. The phi/chi oversample
+    # knobs on PostprocessConfig are now inert (kept for TOML back-compat only).
     phi_list, chi_list = compute_com_maps(
         dis_reshape,
         phi_range,
         phi_steps,
         chi_range,
         chi_steps,
-        chi_shift=chi_shift,
+        chi_shift=0.0,
     )
     if fm.Hg is None:
         raise RuntimeError("fm.Hg is not set. Call run_simulation() first.")
@@ -969,7 +961,6 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
             ("phi_list", phi_list),
             ("chi_list", chi_list),
             ("qi_field", qi_field),
-            ("chi_shift_rad", float(chi_shift)),
         ]:
             if name in analysis:
                 del analysis[name]
@@ -998,7 +989,6 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         "phi_list": phi_list,
         "chi_list": chi_list,
         "qi_field": qi_field,
-        "chi_shift": chi_shift,
         "h5_path": h5_path,
         "figures_dir": fig_dir,
     }

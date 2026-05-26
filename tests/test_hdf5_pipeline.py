@@ -152,7 +152,8 @@ def test_run_postprocess_reads_h5(tmp_path: Path, _kernel_loaded: None) -> None:
         assert "/1.1/dfxm_geo/analysis/phi_list" in f
         assert "/1.1/dfxm_geo/analysis/chi_list" in f
         assert "/1.1/dfxm_geo/analysis/qi_field" in f
-        assert "/1.1/dfxm_geo/analysis/chi_shift_rad" in f
+        # chi_shift_rad no longer written (runtime χ calibration removed).
+        assert "/1.1/dfxm_geo/analysis/chi_shift_rad" not in f
     # And SVG figures still go on disk per F1 decision.
     assert (out / "figures" / "mosaicity_maps.svg").exists()
     assert (out / "figures" / "qi_cross_section.svg").exists()
