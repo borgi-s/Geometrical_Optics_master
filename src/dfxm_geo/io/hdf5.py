@@ -41,9 +41,10 @@ SCAN_DIR_FMT = "scan{:04d}"
 DETECTOR_FILE_FMT = "{name}_0000.h5"
 DETECTOR_INTERNAL_PATH = "/entry_0000/dfxm_sim_detector/image"
 
-# (frame_idx, Hg, phi, chi, two_dtheta) — one frame's worth of args for `_compute_frame`.
+# (frame_idx, base_qc, phi, chi, two_dtheta). base_qc = precompute_forward_static(Hg),
+# shared read-only across frames; replaces the per-frame Hg as of the static-hoist.
 _FrameArgs = tuple[int, np.ndarray, float, float, float]
-"""(frame_idx, Hg, phi_rad, chi_rad, two_dtheta_rad)"""
+"""(frame_idx, base_qc, phi_rad, chi_rad, two_dtheta_rad)"""
 
 
 @dataclass(frozen=True)
@@ -142,12 +143,15 @@ def _auto_max_workers() -> int:
 
 
 def _compute_frame(args: _FrameArgs) -> tuple[int, np.ndarray]:
-    """Worker function: run forward() and return (frame_idx, image).
+    """Worker function: run the per-frame forward model and return (frame_idx, image).
 
-    args = (frame_idx, Hg, phi, chi, two_dtheta)
+    args = (frame_idx, base_qc, phi, chi, two_dtheta)
     """
-    frame_idx, Hg, phi, chi, two_dtheta = args
-    im = cast(np.ndarray, _fm.forward(Hg, phi=phi, chi=chi, TwoDeltaTheta=two_dtheta))
+    frame_idx, base_qc, phi, chi, two_dtheta = args
+    im = cast(
+        np.ndarray,
+        _fm.forward_from_static(base_qc, phi=phi, chi=chi, TwoDeltaTheta=two_dtheta),
+    )
     return frame_idx, im
 
 
@@ -228,14 +232,14 @@ def _compute_and_write_detector_file_parallel(
 ) -> None:
     """Producer-consumer parallel writer for a LIMA-style detector file.
 
-    Workers run `forward()` via `_compute_frame` and stream results into a
+    Workers run `forward_from_static()` via `_compute_frame` and stream results into a
     pre-allocated (N_frames, H, W) dataset. The dataset is at the canonical
     `DETECTOR_INTERNAL_PATH` so masters can ExternalLink to it.
 
     Args:
         path: Output detector file. Parent dirs are created if missing.
-        args_list: Sequence of (frame_idx, Hg, phi, chi) tuples, one per frame.
-            Frame indices must be a contiguous 0..N-1 set.
+        args_list: Sequence of (frame_idx, base_qc, phi, chi, two_dtheta) tuples,
+            one per frame. Frame indices must be a contiguous 0..N-1 set.
         max_workers: Override for `_auto_max_workers()`.
         detector_shape: (H, W). If None, probes args_list[0] to discover shape.
     """
@@ -725,10 +729,13 @@ def write_simulation_h5(
         return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
 
     def _build_args(Hg_in: np.ndarray) -> list[_FrameArgs]:
+        # Precompute base_qc once per scan (shared read-only across frames);
+        # the per-frame worker runs forward_from_static(base_qc, ...).
+        base_qc = _fm.precompute_forward_static(Hg_in)
         return [
             (
                 i,
-                Hg_in,
+                base_qc,
                 float(phi_per_frame[i]),
                 float(chi_per_frame[i]),
                 float(two_dtheta_per_frame[i]),
@@ -777,23 +784,27 @@ def write_simulation_h5(
                 # Dislocation scan: use Hg_provider for z-aware per-frame Hg.
                 # z-outermost frame order (from _build_scan_frames) means all frames
                 # at a given z are contiguous; we drop each Hg after its last frame.
-                z_to_Hg: dict[float, np.ndarray] = {}
+                # Cache base_qc (not raw Hg) per z: precompute_forward_static
+                # runs once per distinct z, and the shared base_qc is shipped to
+                # every frame at that z so the worker runs forward_from_static.
+                z_to_base_qc: dict[float, np.ndarray] = {}
                 provider_args_list: list[_FrameArgs] = []
                 for k in range(n):
                     z = float(z_per_frame[k])
-                    if z not in z_to_Hg:
-                        z_to_Hg[z] = Hg_provider(z)[0]  # discard q_hkl on per-z calls
+                    if z not in z_to_base_qc:
+                        Hg_z = Hg_provider(z)[0]  # discard q_hkl on per-z calls
+                        z_to_base_qc[z] = _fm.precompute_forward_static(Hg_z)
                     provider_args_list.append(
                         (
                             k,
-                            z_to_Hg[z],
+                            z_to_base_qc[z],
                             float(phi_per_frame[k]),
                             float(chi_per_frame[k]),
                             float(two_dtheta_per_frame[k]),
                         )
                     )
                     if k == n - 1 or float(z_per_frame[k + 1]) != z:
-                        del z_to_Hg[z]
+                        del z_to_base_qc[z]
                 args_list_for_scan = provider_args_list
             else:
                 # Perfect crystal /2.1, or back-compat single-Hg case.

@@ -67,3 +67,41 @@ def test_forward_from_static_qi_return_shape(loaded_Hg: np.ndarray) -> None:
     im, qi_field = fm.forward_from_static(base_qc, phi=0.0, chi=0.0, qi_return=True)
     assert im.shape == (fm.NN2 // fm.Nsub, fm.NN1 // fm.Nsub)
     assert qi_field.shape == (3, fm.NN1, fm.NN2, fm.NN3)
+
+
+def test_scan_frames_args_carry_base_qc(loaded_Hg: np.ndarray) -> None:
+    """_scan_frames_args precomputes base_qc once and ships it per frame."""
+    import numpy as np
+
+    from dfxm_geo.pipeline import (
+        ScanConfig,
+        _build_scan_frames,
+        _scan_frames_args,
+    )
+
+    scan = ScanConfig.from_dict(
+        {"phi": {"range": 6e-4, "steps": 2}, "chi": {"range": 2e-3, "steps": 2}}
+    )
+    frames = _build_scan_frames(scan)
+    args_list, _positioners = _scan_frames_args(loaded_Hg, frames, scan)
+
+    expected_base_qc = fm.precompute_forward_static(loaded_Hg)
+    # Every frame tuple carries the SAME base_qc object (shared, read-only).
+    first_base_qc = args_list[0][1]
+    np.testing.assert_array_equal(first_base_qc, expected_base_qc)
+    for args in args_list[1:]:
+        assert args[1] is first_base_qc
+
+
+def test_compute_frame_matches_forward(loaded_Hg: np.ndarray) -> None:
+    """_compute_frame(base_qc, ...) image == forward(Hg, ...) image."""
+    import numpy as np
+
+    from dfxm_geo.io.hdf5 import _compute_frame
+
+    base_qc = fm.precompute_forward_static(loaded_Hg)
+    phi, chi, two_dtheta = 1e-4, -2e-4, 3e-4
+    idx, im = _compute_frame((7, base_qc, phi, chi, two_dtheta))
+    assert idx == 7
+    expected = fm.forward(loaded_Hg, phi=phi, chi=chi, TwoDeltaTheta=two_dtheta)
+    np.testing.assert_array_equal(im, expected)

@@ -1125,16 +1125,21 @@ def _scan_frames_args(
 ) -> tuple[list[tuple[int, np.ndarray, float, float, float]], dict[str, np.ndarray | float]]:
     """Build (args_list, positioners) for one ScanSpec.
 
-    args_list elements: (frame_idx, Hg, phi_rad, chi_rad, two_dtheta_rad).
+    args_list elements: (frame_idx, base_qc, phi_rad, chi_rad, two_dtheta_rad),
+    where base_qc = precompute_forward_static(Hg) is computed ONCE here and
+    shared (read-only) across every frame -- the per-frame worker runs the
+    cheap forward_from_static(base_qc, ...) instead of recomputing the
+    Hg-only qs matmul each frame.
     positioners: dict keyed by canonical axis; scanned axes -> per-frame array,
     fixed axes -> scalar.
     """
+    base_qc = fm.precompute_forward_static(Hg)
     args_list: list[tuple[int, np.ndarray, float, float, float]] = []
     for k in range(frames.n_frames):
         args_list.append(
             (
                 k,
-                Hg,
+                base_qc,
                 float(frames.phi_pf[k]),
                 float(frames.chi_pf[k]),
                 float(frames.two_dtheta_pf[k]),
