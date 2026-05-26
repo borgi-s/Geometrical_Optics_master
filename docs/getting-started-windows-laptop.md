@@ -111,6 +111,12 @@ Both should report 0 errors. Pre-existing `import-untyped` warnings for `h5py`, 
 
 The kernel is a ~128 MB `.npz` file that takes ~50 seconds to generate at default `Nrays=1e8`. It's not committed to the repo; you generate it once per environment with `dfxm-bootstrap`.
 
+Pip-only install (no cloned repo)? Generate the config templates first:
+
+```powershell
+dfxm-init   # creates .\configs\ with default.toml and the variant templates
+```
+
 ```powershell
 dfxm-bootstrap --config configs/default.toml --if-missing
 ```
