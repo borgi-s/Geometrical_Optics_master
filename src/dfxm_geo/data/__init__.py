@@ -11,9 +11,15 @@ import importlib.resources
 from collections.abc import Iterator
 from pathlib import Path
 
+__all__ = ["configs_root", "iter_config_files"]
+
 
 def configs_root() -> Path:
-    """Filesystem path to the bundled `configs/` template directory."""
+    """Filesystem path to the bundled `configs/` template directory.
+
+    Assumes `dfxm_geo` is installed as a regular directory (the normal wheel /
+    editable case); not safe if the package is ever zip-imported.
+    """
     return Path(str(importlib.resources.files("dfxm_geo.data").joinpath("configs")))
 
 
