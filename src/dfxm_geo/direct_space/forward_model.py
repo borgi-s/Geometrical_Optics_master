@@ -444,28 +444,33 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> None:
         Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
 
 
-def forward(
-    Hg: np.ndarray,
+def precompute_forward_static(Hg: np.ndarray) -> np.ndarray:
+    """Compute the phi/chi/2theta-independent part of the forward model.
+
+    Returns ``base_qc = (Us @ Hg @ q_hkl).squeeze().T`` (shape ``(3, N)``),
+    the single most expensive step in the forward model (~73% of a call) and
+    the *only* part that depends solely on ``Hg``. Compute this once per scan
+    and pass it to ``forward_from_static`` for every frame. The result is
+    read-only and safe to share across worker threads (the dynamic half never
+    mutates it).
+    """
+    qs = Us @ Hg @ q_hkl
+    return qs.squeeze().T
+
+
+def forward_from_static(
+    base_qc: np.ndarray,
     phi: float = 0,
     chi: float = 0,
     TwoDeltaTheta: float = 0,
     qi_return: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-    """Compute the DFXM forward-model image for the given goniometer angles.
+    """Per-frame half of the forward model.
 
-    Reads module-level state populated by `_load_default_kernel()` (Resq_i,
-    qi*_start/step, etc.). Raises `RuntimeError` if state is not initialized.
-
-    Args:
-        Hg: Displacement gradient field, shape (X, 3, 3) where X = NN1*NN2*NN3.
-        phi: Radians off the Bragg condition (rotation around y_l axis).
-        chi: Radians off the Bragg condition (rotation around x_l axis).
-        TwoDeltaTheta: Radians off the Bragg angle (2θ shift).
-        qi_return: If True, also return the scattering vector field qi.
-
-    Returns:
-        Forward-model image of shape (NN2//Nsub, NN1//Nsub). If qi_return is
-        True, returns (image, qi_field) where qi_field has shape (3, NN1, NN2, NN3).
+    Takes ``base_qc`` from ``precompute_forward_static`` and the goniometer
+    angles, and produces the detector image. Reproduces the exact float
+    operations of the historical monolithic ``forward()`` tail (no
+    reassociation), so output is bit-identical.
     """
     if Resq_i is None and _analytic_eval is None:
         raise RuntimeError(
@@ -496,14 +501,10 @@ def forward(
         [[phi - TwoDeltaTheta / 2], [chi], [(TwoDeltaTheta / 2) / np.tan(theta_0)]]
     )
 
-    # Calculate scattering vector in sample space
-    qs = Us @ Hg @ q_hkl
-
-    # Calculate scattering vector in crystal/grain space. After `qc` is built
-    # `qs` and `ang_arr` are not used again; free them before allocating `qi`
-    # so the (3, NN1*NN2*NN3) float64 intermediates don't all live at once.
-    qc = qs.squeeze().T + ang_arr
-    del qs, ang_arr
+    # qc = base_qc + ang_arr. NOTE: do NOT `del base_qc` -- it is reused across
+    # frames. `ang_arr` is single-use and freed.
+    qc = base_qc + ang_arr
+    del ang_arr
 
     # Calculate scattering vector in imaging space; `qc` is no longer needed.
     qi = Theta @ qc
@@ -575,6 +576,46 @@ def forward(
         qi_field = qi.reshape(3, NN1, NN2, NN3)
         return im_1, qi_field
     return im_1
+
+
+def forward(
+    Hg: np.ndarray,
+    phi: float = 0,
+    chi: float = 0,
+    TwoDeltaTheta: float = 0,
+    qi_return: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Compute the DFXM forward-model image for the given goniometer angles.
+
+    Thin wrapper over ``precompute_forward_static`` + ``forward_from_static``,
+    preserved for one-shot callers (single images, tests). For scans, call
+    ``precompute_forward_static(Hg)`` once and ``forward_from_static`` per frame
+    to avoid recomputing the Hg-only ``base_qc`` every frame.
+
+    Args:
+        Hg: Displacement gradient field, shape (X, 3, 3) where X = NN1*NN2*NN3.
+        phi: Radians off the Bragg condition (rotation around y_l axis).
+        chi: Radians off the Bragg condition (rotation around x_l axis).
+        TwoDeltaTheta: Radians off the Bragg angle (2theta shift).
+        qi_return: If True, also return the scattering vector field qi.
+
+    Returns:
+        Forward-model image of shape (NN2//Nsub, NN1//Nsub). If qi_return is
+        True, returns (image, qi_field) where qi_field has shape (3, NN1, NN2, NN3).
+    """
+    # Guard BEFORE precompute so an uninitialized call (e.g. forward(Hg=None)
+    # with no kernel loaded) raises the clear RuntimeError rather than a
+    # TypeError from `Us @ None`.
+    if Resq_i is None and _analytic_eval is None:
+        raise RuntimeError(
+            "forward_model state is not initialized. Load a kernel "
+            "(_lookup_and_load_kernel) or register the analytic backend "
+            "(_load_analytic_resolution) before calling forward()."
+        )
+    base_qc = precompute_forward_static(Hg)
+    return forward_from_static(
+        base_qc, phi=phi, chi=chi, TwoDeltaTheta=TwoDeltaTheta, qi_return=qi_return
+    )
 
 
 def Z_shift(offset_um: float) -> np.ndarray:
