@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 
 class TestBundledConfigAccessor:
     def test_configs_root_contains_default(self) -> None:
@@ -19,3 +21,43 @@ class TestBundledConfigAccessor:
         assert "variants/dis_1.toml" in rels
         # 11 shipped templates: default + 3 identification_* + 7 variants
         assert len(rels) == 11
+
+
+class TestDfxmInit:
+    def test_writes_full_tree(self, tmp_path: Path) -> None:
+        from dfxm_geo.data import iter_config_files
+        from dfxm_geo.init_cmd import cli_main
+
+        dest = tmp_path / "configs"
+        rc = cli_main(["--dest", str(dest)])
+        assert rc == 0
+        for rel, src in iter_config_files():
+            written = dest / rel
+            assert written.is_file(), f"missing {rel}"
+            assert written.read_bytes() == src.read_bytes(), f"content mismatch {rel}"
+
+    def test_skips_existing_without_force(self, tmp_path: Path) -> None:
+        from dfxm_geo.init_cmd import cli_main
+
+        dest = tmp_path / "configs"
+        (dest).mkdir()
+        sentinel = dest / "default.toml"
+        sentinel.write_text("DO NOT OVERWRITE", encoding="utf-8")
+
+        rc = cli_main(["--dest", str(dest)])
+        assert rc == 0
+        assert sentinel.read_text(encoding="utf-8") == "DO NOT OVERWRITE"
+
+    def test_force_overwrites_existing(self, tmp_path: Path) -> None:
+        from dfxm_geo.data import configs_root
+        from dfxm_geo.init_cmd import cli_main
+
+        dest = tmp_path / "configs"
+        dest.mkdir()
+        sentinel = dest / "default.toml"
+        sentinel.write_text("DO NOT OVERWRITE", encoding="utf-8")
+
+        rc = cli_main(["--dest", str(dest), "--force"])
+        assert rc == 0
+        expected = (configs_root() / "default.toml").read_bytes()
+        assert sentinel.read_bytes() == expected
