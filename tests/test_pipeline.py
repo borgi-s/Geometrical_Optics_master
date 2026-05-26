@@ -49,8 +49,9 @@ class TestSimulationConfigDefaults:
 class TestSimulationConfigFromToml:
     def test_round_trip_default(self, tmp_path: Path) -> None:
         """Parse the shipped configs/default.toml and check key fields."""
-        repo_root = Path(__file__).resolve().parents[1]
-        cfg = SimulationConfig.from_toml(repo_root / "configs" / "default.toml")
+        from dfxm_geo.data import configs_root
+
+        cfg = SimulationConfig.from_toml(configs_root() / "default.toml")
         # default.toml uses centered mode (post-B+C)
         assert cfg.crystal.mode == "centered"
         assert cfg.crystal.centered is not None
@@ -94,12 +95,12 @@ class TestSimulationConfigFromToml:
         Excludes ``identification_*.toml`` — those use a different schema
         consumed by ``load_identification_config``, not ``SimulationConfig``.
         """
-        repo_root = Path(__file__).resolve().parents[1]
+        from dfxm_geo.data import iter_config_files
+
         configs = [
-            p
-            for p in list((repo_root / "configs").glob("*.toml"))
-            + list((repo_root / "configs" / "variants").glob("*.toml"))
-            if not p.name.startswith("identification_")
+            path
+            for rel, path in iter_config_files()
+            if not Path(rel).name.startswith("identification_")
         ]
         assert len(configs) >= 5, "expected default.toml + at least 4 variants"
         for path in configs:
@@ -669,9 +670,10 @@ class TestReciprocalConfigParsing:
             SimulationConfig.from_toml(cfg)
 
     def test_identification_config_parses_reciprocal_block(self) -> None:
+        from dfxm_geo.data import configs_root
         from dfxm_geo.pipeline import load_identification_config
 
-        config = load_identification_config(Path("configs/identification_single.toml"))
+        config = load_identification_config(configs_root() / "identification_single.toml")
         assert config.reciprocal is not None
         assert config.reciprocal.hkl == (-1, 1, -1)
         assert config.reciprocal.keV == 17.0

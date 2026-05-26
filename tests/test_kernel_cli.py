@@ -71,7 +71,9 @@ class TestDefaultConfigReciprocalBlock:
         """
         import tomllib
 
-        cfg_path = Path(__file__).resolve().parents[1] / "configs" / "default.toml"
+        from dfxm_geo.data import configs_root
+
+        cfg_path = configs_root() / "default.toml"
         with cfg_path.open("rb") as f:
             data = tomllib.load(f)
         assert "reciprocal" in data, "configs/default.toml missing [reciprocal] block"
@@ -97,9 +99,10 @@ class TestDefaultConfigReciprocalBlock:
         import inspect
         import tomllib
 
+        from dfxm_geo.data import configs_root
         from dfxm_geo.reciprocal_space.kernel import generate_kernel
 
-        cfg_path = Path(__file__).resolve().parents[1] / "configs" / "default.toml"
+        cfg_path = configs_root() / "default.toml"
         with cfg_path.open("rb") as f:
             recip = tomllib.load(f)["reciprocal"]
 
@@ -120,14 +123,18 @@ class TestDefaultConfigReciprocalBlock:
         post-sub-project-A bootstrap to record the reflection in the filename."""
         import tomllib
 
-        with open("configs/default.toml", "rb") as f:
+        from dfxm_geo.data import configs_root
+
+        with (configs_root() / "default.toml").open("rb") as f:
             data = tomllib.load(f)
         assert data["reciprocal"]["hkl"] == [-1, 1, -1]
 
     def test_default_toml_has_keV_key(self) -> None:
         import tomllib
 
-        with open("configs/default.toml", "rb") as f:
+        from dfxm_geo.data import configs_root
+
+        with (configs_root() / "default.toml").open("rb") as f:
             data = tomllib.load(f)
         assert data["reciprocal"]["keV"] == 17.0
 
