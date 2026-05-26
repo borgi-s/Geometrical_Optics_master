@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
+from dfxm_geo.data import configs_root
 from dfxm_geo.pipeline import SimulationConfig, load_identification_config
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-CONFIGS_DIR = REPO_ROOT / "configs"
+CONFIGS_DIR = configs_root()
 
 
 @pytest.mark.parametrize(

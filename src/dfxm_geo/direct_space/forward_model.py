@@ -316,7 +316,8 @@ def _load_default_kernel(
     if str(pkl_path).endswith(".pkl"):
         raise RuntimeError(
             f"Detected legacy pickle at {pkl_path!r}; pickle support was "
-            "removed in v1.0.3. Run `dfxm-bootstrap --config configs/default.toml` "
+            "removed in v1.0.3. If you don't have a configs/ directory yet, run "
+            "`dfxm-init` first, then `dfxm-bootstrap --config configs/default.toml` "
             "to regenerate the kernel as .npz."
         )
 

@@ -72,6 +72,7 @@ Paper = "https://journals.iucr.org/j/issues/2024/02/00/nb5370/"
 dfxm-forward = "dfxm_geo.pipeline:cli_main"
 dfxm-identify = "dfxm_geo.pipeline:cli_main_identify"
 dfxm-bootstrap = "dfxm_geo.reciprocal_space.kernel:cli_main"
+dfxm-init = "dfxm_geo.init_cmd:cli_main"
 dfxm-migrate-output = "dfxm_geo.io.migrate:cli_main_npy_to_h5"
 dfxm-migrate-h5 = "dfxm_geo.io.migrate:cli_main_h5_to_h5"
 
@@ -80,11 +81,15 @@ packages = [
     "dfxm_geo",
     "dfxm_geo.analysis",
     "dfxm_geo.crystal",
+    "dfxm_geo.data",
     "dfxm_geo.direct_space",
     "dfxm_geo.io",
     "dfxm_geo.reciprocal_space",
     "dfxm_geo.viz",
 ]
+
+[tool.setuptools.package-data]
+"dfxm_geo.data" = ["configs/*.toml", "configs/variants/*.toml"]
 
 [tool.setuptools.package-dir]
 "dfxm_geo" = "src/dfxm_geo"

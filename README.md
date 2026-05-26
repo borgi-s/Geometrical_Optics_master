@@ -73,6 +73,13 @@ pytest                                                # smoke tests against refe
 
 A literally empty `.toml` file is a valid input (since v2.0.0): the empty case produces a single detector image of a single canonical FCC dislocation at the origin, Al 111 reflection at 17 keV.
 
+If you installed from PyPI/wheel (no repo clone), first create local copies of
+the config templates:
+
+```bash
+dfxm-init   # writes ./configs/default.toml and the rest of the template tree
+```
+
 ```bash
 # one-time bootstrap (generates reciprocal-space kernel ~50 s; reusable thereafter):
 dfxm-bootstrap --config configs/default.toml

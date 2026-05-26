@@ -480,8 +480,9 @@ keV = 17.0
 
 def test_example_single_config_loads():
     """configs/identification_single.toml parses and validates."""
-    repo_root = Path(__file__).resolve().parents[1]
-    cfg = load_identification_config(repo_root / "configs" / "identification_single.toml")
+    from dfxm_geo.data import configs_root
+
+    cfg = load_identification_config(configs_root() / "identification_single.toml")
     assert cfg.mode == "single"
     assert cfg.crystal.sweep_all_slip_planes is True
     assert cfg.crystal.exclude_invisibility is True
@@ -489,8 +490,9 @@ def test_example_single_config_loads():
 
 def test_example_multi_config_loads():
     """configs/identification_multi.toml parses and validates."""
-    repo_root = Path(__file__).resolve().parents[1]
-    cfg = load_identification_config(repo_root / "configs" / "identification_multi.toml")
+    from dfxm_geo.data import configs_root
+
+    cfg = load_identification_config(configs_root() / "identification_multi.toml")
     assert cfg.mode == "multi"
     assert cfg.multi is not None
     assert cfg.multi.n_samples == 1000
@@ -915,8 +917,9 @@ keV = 17.0
 
 def test_example_zscan_config_loads():
     """configs/identification_zscan.toml parses and validates."""
-    repo_root = Path(__file__).resolve().parents[1]
-    cfg = load_identification_config(repo_root / "configs" / "identification_zscan.toml")
+    from dfxm_geo.data import configs_root
+
+    cfg = load_identification_config(configs_root() / "identification_zscan.toml")
     assert cfg.mode == "z-scan"
     assert cfg.zscan is not None
     assert len(cfg.zscan.z_offsets_um) >= 1
