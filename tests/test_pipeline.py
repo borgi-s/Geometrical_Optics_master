@@ -323,7 +323,9 @@ class TestRunPostprocess:
             assert "/1.1/dfxm_geo/analysis/phi_list" in f
             assert "/1.1/dfxm_geo/analysis/chi_list" in f
             assert "/1.1/dfxm_geo/analysis/qi_field" in f
-            assert "/1.1/dfxm_geo/analysis/chi_shift_rad" in f
+            # chi_shift_rad is no longer written: the χ axis is read off the
+            # nominal grid with no runtime calibration (compute_chi_shift dropped).
+            assert "/1.1/dfxm_geo/analysis/chi_shift_rad" not in f
         # Figures still on disk (F1 decision)
         fig_dir = output_dir / "figures"
         assert (fig_dir / "mosaicity_maps.svg").exists()
@@ -331,7 +333,7 @@ class TestRunPostprocess:
         # Return dict carries the expected keys
         assert "phi_list" in result
         assert "chi_list" in result
-        assert "chi_shift" in result
+        assert "chi_shift" not in result
         assert "qi_field" in result
         assert "h5_path" in result
         assert "figures_dir" in result

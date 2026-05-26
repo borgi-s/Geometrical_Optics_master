@@ -37,13 +37,13 @@ The central black cloud is the angular/energy acceptance in the imaging coordina
 
 ## How it works — direct space → detector
 
-After the kernel is built, the forward stage rocks the sample through the Bragg condition and renders the expected detector image at each angle. Below, a single edge dislocation is imaged as the goniometer tilt ϕ sweeps from −150 to +150 µrad (χ = 0): the matrix brightens through ϕ = 0 (strong beam), while the dislocation's strain field casts a characteristic weak-beam contrast whose lobes invert across the rocking curve.
+After the kernel is built, the forward stage rocks the sample through the Bragg condition over a (ϕ, χ) grid and renders the expected detector image at each angle. Taking the per-pixel center of mass of each pixel's rocking curve yields a *mosaicity map* — the local lattice tilt in ϕ and χ. The geometrical-optics model also predicts this field directly, as the projection `qi` of the deformation onto the imaging axes, so the two should agree. The figure below makes that comparison for a low-angle wall of edge dislocations:
 
 <p align="center">
-  <img src="docs/img/rocking_single_dislocation.gif" alt="Animated DFXM forward model of a single edge dislocation as the sample rocks in phi from -150 to +150 microradians; the matrix brightens through phi=0 and the weak-beam dislocation contrast inverts across the rocking curve" width="650" />
+  <img src="docs/img/com_qi_comparison.png" alt="Four-panel comparison of DFXM mosaicity maps against the geometric-optics qi field for a wall of five edge dislocations. Top row: the negated phi and chi center-of-mass maps. Bottom row: the qi_1 and qi_2 fields at the z=0 sample plane. Each top panel matches the panel below it." width="620" />
 </p>
 
-Single centered dislocation (canonical FCC primary), Al 111 @ 17 keV, Npixels = 360. Each frame is one forward-model evaluation at the labelled ϕ, sharing a fixed (γ-corrected) color scale so the rocking-curve brightness change is faithful.
+Top row: the (negated) ϕ and χ center-of-mass mosaicity maps extracted from the rocking stack. Bottom row: the geometrical-optics `qi₁` / `qi₂` fields at the z = 0 sample plane. Wall of five edge dislocations, Al 111 @ 17 keV, computed with the v2.1.0 closed-form (analytic) resolution backend; all panels share a fixed ±10⁻⁴ rad color scale. The `−COM ≈ qi` correspondence — each top panel reproducing the one beneath it — recovers the result of [Borgi et al. (2024)](https://doi.org/10.1107/S1600576724001183).
 
 ## Stack
 

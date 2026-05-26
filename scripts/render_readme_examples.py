@@ -5,8 +5,9 @@ Outputs (default destination is ``docs/img/``; override with the
 
 - ``example_dislocs_frame.png`` -- single (phi=0, chi=0) frame from
   the dislocs stack at a scaled-down rocking grid.
-- ``example_mosaicity.png`` -- phi-COM mosaicity map from the
-  post-processing stage.
+- ``com_qi_comparison.png`` -- 2x2 panel comparing the φ/χ centre-of-mass
+  mosaicity maps (top) against the geometric-optics qi_1/qi_2 fields
+  (bottom). The COM↔qi correspondence of Borgi et al. (2024).
 
 This script is *not* part of CI:
 
@@ -155,29 +156,67 @@ def main(argv: list[str] | None = None) -> int:
             out_dir / "example_dislocs_frame.png",
         )
 
-        # 2. The README needs PNG, not SVG, for portable embedding. Re-render the
-        # mosaicity figure as PNG from the COM maps returned by run_postprocess.
+        # 2. The README needs PNG, not SVG, for portable embedding. Render the
+        # COM↔qi comparison as a 2x2 PNG from the maps returned by
+        # run_postprocess. Top row: the φ/χ centre-of-mass mosaicity maps. Bottom
+        # row: the geometric-optics qi_1/qi_2 fields at the z=0 sample plane. The
+        # COM maps are negated + transposed (the plot_mosaicity_maps convention)
+        # so that −COM_φ ≈ qi_1 and −COM_χ ≈ qi_2 — the correspondence reported in
+        # Borgi et al. (2024) reads off directly as top↔bottom column matches.
+        import dfxm_geo.direct_space.forward_model as fm
+
         phi_list = res["phi_list"]
         chi_list = res["chi_list"]
+        qi_field = res["qi_field"]
         import matplotlib
 
         matplotlib.use("Agg", force=True)
         import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib.ticker import ScalarFormatter
 
-        fig, (axp, axc) = plt.subplots(1, 2, figsize=(8, 4), dpi=144)
-        # Fixed ±1e-4 rad color range — the same scale used for the qi/COM maps
-        # in Borgi et al. (2024), where the COM↔qi correspondence reads as an
-        # excellent match. Autoscaling per-panel would exaggerate small residuals.
-        for ax, data, title in (
-            (axp, phi_list, "phi COM (mosaicity)"),
-            (axc, chi_list, "chi COM (mosaicity)"),
-        ):
-            im = ax.imshow(data, origin="lower", cmap="RdBu_r", vmin=-1e-4, vmax=1e-4)
-            ax.set_title(title)
-            ax.set_axis_off()
-            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        fig.tight_layout()
-        fig.savefig(out_dir / "example_mosaicity.png", bbox_inches="tight")
+        # µm rulers and the symmetric image extent shared by both rows.
+        X = np.linspace(-fm.xl_start, fm.xl_start, fm.xl_steps) * 1e6
+        Y = np.linspace(-fm.yl_start, fm.yl_start, fm.yl_steps) * 1e6
+        com_extent = [fm.xl_start * 1e6, -fm.xl_start * 1e6, fm.yl_start * 1e6, -fm.yl_start * 1e6]
+        qi_extent = [Y.min(), Y.max(), X.min(), X.max()]
+        zmid = fm.zl_steps // 2
+
+        # Fixed ±1e-4 rad color scale across all four panels — the scale used for
+        # the qi/COM maps in Borgi et al. (2024). Autoscaling per-panel would
+        # exaggerate small residuals and break the visual top↔bottom comparison.
+        vmin, vmax = -1e-4, 1e-4
+        panels = [
+            ((phi_list * -1).T, com_extent, r"$-\mathrm{COM}_\phi$"),
+            ((chi_list * -1).T, com_extent, r"$-\mathrm{COM}_\chi$"),
+            (qi_field[0, :, :, zmid].squeeze(), qi_extent, r"$q_{i,1}$ (geometric optics)"),
+            (qi_field[1, :, :, zmid].squeeze(), qi_extent, r"$q_{i,2}$ (geometric optics)"),
+        ]
+
+        fig, axs = plt.subplots(2, 2, figsize=(8.5, 8), dpi=144, constrained_layout=True)
+        im = None
+        for ax, (data, extent, title) in zip(axs.ravel(), panels, strict=True):
+            im = ax.imshow(
+                data,
+                origin="lower",
+                extent=extent,
+                cmap="viridis",
+                vmin=vmin,
+                vmax=vmax,
+                interpolation="none",
+            )
+            ax.set_aspect("equal")
+            ax.set_title(title, fontsize=12)
+            ax.set_xlabel(r"$y_{\ell}$ ($\mu$m)", fontsize=11)
+            ax.set_ylabel(r"$x_{\ell}$ ($\mu$m)", fontsize=11)
+            ax.grid(False)
+
+        # Single shared colorbar (radians) down the right edge.
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((-2, 2))
+        cbar = fig.colorbar(im, ax=axs, fraction=0.046, pad=0.02, format=formatter, label="radians")
+        cbar.update_ticks()
+        fig.savefig(out_dir / "com_qi_comparison.png", bbox_inches="tight")
         plt.close(fig)
 
         # 3. (Optional) the coordinate-frame diagram if a static asset exists.

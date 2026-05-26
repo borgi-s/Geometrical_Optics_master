@@ -42,7 +42,7 @@ DEFAULT_DETECTOR = "dfxm_sim_detector"
 # when darling is absent — keeping this module importable in a darling-free
 # environment (darling is an optional, interop-only dependency).
 try:  # pragma: no cover - trivial import shim
-    from darling.io.reader import Reader as _ReaderBase  # type: ignore[import-untyped]
+    from darling.io.reader import Reader as _ReaderBase
 except Exception:  # pragma: no cover - darling not installed
     _ReaderBase = object
 

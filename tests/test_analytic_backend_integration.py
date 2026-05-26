@@ -18,6 +18,17 @@ from dfxm_geo.reciprocal_space.kernel import _validate_reflection  # noqa: E402
 from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func  # noqa: E402
 
 
+def _require_kernel() -> None:
+    """Skip unless a bootstrapped (-1,1,-1) 17 keV kernel npz is on disk.
+
+    Tests that load the MC kernel (for geometry or the MC dispatch path) cannot
+    run on a bare checkout (CI), where no kernel has been bootstrapped.
+    """
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
+
+
 def test_reciprocal_config_backend_defaults():
     cfg = ReciprocalConfig.from_dict(None)
     assert cfg.backend == "auto"
@@ -48,6 +59,7 @@ def test_reciprocal_config_rejects_bad_backend():
 
 def test_forward_uses_analytic_when_registered():
     # Load any kernel for geometry/Hg/q_hkl, then register the analytic eval.
+    _require_kernel()
     cfg = ReciprocalConfig.from_dict(None)
     _lookup_and_load_kernel(cfg.hkl, cfg.keV)  # sets Hg, q_hkl, geometry
     try:
@@ -70,6 +82,7 @@ def test_dispatch_auto_no_beamstop_selects_analytic():
 
 
 def test_dispatch_auto_beamstop_selects_mc():
+    _require_kernel()
     cfg = ReciprocalConfig.from_dict({"beamstop": True})  # auto + beamstop on
     fm._analytic_eval = None
     _load_resolution(cfg)
