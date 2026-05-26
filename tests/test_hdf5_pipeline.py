@@ -16,6 +16,14 @@ from dfxm_geo.pipeline import ScanFrames
 
 @pytest.fixture
 def _kernel_loaded() -> None:
+    # These integration tests need a real bootstrapped (-1,1,-1) 17 keV kernel
+    # on disk: write_simulation_h5 writes resolution-backend provenance, which
+    # requires a kernel to have been loaded. On a bare checkout (CI) none exists,
+    # so skip. The fm.Hg check alone is not enough — earlier tests can leave a
+    # non-None fm.Hg (e.g. via Find_Hg) without ever loading a kernel.
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip(f"no kernel npz found in {kernel_dir}")
     if fm.Hg is None:
         pytest.skip("forward_model kernel not auto-loaded; run dfxm-bootstrap.")
 
