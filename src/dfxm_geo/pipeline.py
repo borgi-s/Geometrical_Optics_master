@@ -511,6 +511,12 @@ class IdentificationZScanConfig:
     # `default_rng(seed).spawn(2)[1]` in `_maybe_apply_poisson_noise`).
     # Bump to a different value only if a future RNG split needs slot 0.
     secondary_rng_offset: int = 0
+    # When True (requires include_secondary), each scan dir also writes
+    # `dfxm_sim_detector_primary` / `_secondary` files: the primary and the
+    # secondary dislocation rendered in isolation. Noiseless by design (they
+    # bypass the post-write Poisson pass) — ground-truth instance labels, the
+    # z-scan analogue of multi mode's `render_per_dislocation`.
+    render_per_dislocation: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -546,6 +552,17 @@ class IdentificationConfig:
         if self.mode == "z-scan" and self.scan.is_scanned("z"):
             raise ValueError(
                 "mode='z-scan' uses [zscan].z_offsets_um for the z dimension; [scan.z] is forbidden"
+            )
+        # Per-dislocation rendering needs a secondary to render in isolation;
+        # with a single primary it would just duplicate the combined detector.
+        if (
+            self.zscan is not None
+            and self.zscan.render_per_dislocation
+            and not self.zscan.include_secondary
+        ):
+            raise ValueError(
+                "zscan.render_per_dislocation=True requires include_secondary=True "
+                "(nothing to separate from a single primary dislocation)"
             )
         # Validate the slip plane against the {111} family (also used in 'multi'
         # mode as the starting / fallback plane).
@@ -1240,6 +1257,7 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
             f"z_offsets_um = {list(cfg.zscan.z_offsets_um)}",
             f"include_secondary = {str(cfg.zscan.include_secondary).lower()}",
             f"secondary_rng_offset = {cfg.zscan.secondary_rng_offset}",
+            f"render_per_dislocation = {str(cfg.zscan.render_per_dislocation).lower()}",
         ]
     return "\n".join(lines) + "\n"
 
@@ -1709,6 +1727,7 @@ def _iter_identification_zscan(
                         },
                     }
 
+                    detectors: dict[str, list[tuple[int, np.ndarray, float, float, float]]] = {}
                     if zscan.include_secondary:
                         sec = _draw_dislocation(secondary_rng, pos_std_um=0.0)
                         secondary_spec = MixedDislocSpec(
@@ -1723,6 +1742,35 @@ def _iter_identification_zscan(
                             fm.Theta,
                         )
                         sample["secondary"] = _build_dislocation_sample_entry(sec)
+
+                        if zscan.render_per_dislocation:
+                            # Primary + secondary each rendered alone (noiseless
+                            # ground-truth instance labels). Bypass the Poisson
+                            # pass, which only touches `dfxm_sim_detector`.
+                            Fg_primary = Fd_find_mixed(
+                                rl_shifted,
+                                fm.Us,
+                                Ud_mix=Ud_primary,
+                                rotation_deg=float(alpha),
+                                Theta=fm.Theta,
+                            )
+                            Hg_primary = np.transpose(
+                                fast_inverse2(Fg_primary), [0, 2, 1]
+                            ) - np.identity(3)
+                            Fg_secondary = Fd_find_mixed(
+                                rl_shifted,
+                                fm.Us,
+                                Ud_mix=sec["Ud"],
+                                rotation_deg=sec["alpha_deg"],
+                                Theta=fm.Theta,
+                            )
+                            Hg_secondary = np.transpose(
+                                fast_inverse2(Fg_secondary), [0, 2, 1]
+                            ) - np.identity(3)
+                            prim_args, _ = _scan_frames_args(Hg_primary, frames_at_z, config.scan)
+                            sec_args, _ = _scan_frames_args(Hg_secondary, frames_at_z, config.scan)
+                            detectors["dfxm_sim_detector_primary"] = prim_args
+                            detectors["dfxm_sim_detector_secondary"] = sec_args
                     else:
                         Fg = Fd_find_mixed(
                             rl_shifted,
@@ -1734,6 +1782,7 @@ def _iter_identification_zscan(
 
                     Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
                     args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan)
+                    detectors["dfxm_sim_detector"] = args_list
 
                     yield ScanSpec(
                         title=_identify_title(scan_mode, n_frames, config.scan),
@@ -1746,7 +1795,7 @@ def _iter_identification_zscan(
                             "psize": float(fm.psize),
                             "zl_rms": float(fm.zl_rms),
                         },
-                        detectors={"dfxm_sim_detector": args_list},
+                        detectors=detectors,
                         attrs={
                             "scan_mode": scan_mode,
                             "scanned_axes": scanned_axes,
@@ -1762,8 +1811,8 @@ def _run_identification_zscan(
     """Dispatcher: feed ``_iter_identification_zscan`` into write_identification_h5.
 
     After the master + per-scan detector files are written, applies the
-    post-write Poisson / intensity-scale pass (combined detector only;
-    no per-dislocation files are produced in z-scan mode).
+    post-write Poisson / intensity-scale pass to the combined detector only;
+    any per-dislocation files (`render_per_dislocation=True`) stay noiseless.
     """
     assert config.zscan is not None  # validated in __post_init__
     output_dir.mkdir(parents=True, exist_ok=True)
