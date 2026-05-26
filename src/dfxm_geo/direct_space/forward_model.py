@@ -476,7 +476,7 @@ def forward_from_static(
         raise RuntimeError(
             "forward_model state is not initialized. Load a kernel "
             "(_lookup_and_load_kernel) or register the analytic backend "
-            "(_load_analytic_resolution) before calling forward()."
+            "(_load_analytic_resolution) before computing the forward model."
         )
 
     if TwoDeltaTheta != 0:
@@ -610,7 +610,7 @@ def forward(
         raise RuntimeError(
             "forward_model state is not initialized. Load a kernel "
             "(_lookup_and_load_kernel) or register the analytic backend "
-            "(_load_analytic_resolution) before calling forward()."
+            "(_load_analytic_resolution) before computing the forward model."
         )
     base_qc = precompute_forward_static(Hg)
     return forward_from_static(
