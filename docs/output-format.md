@@ -63,7 +63,7 @@ out_dir/
         title, start_time, end_time
         dfxm_sim_detector/
           @NX_class = "NXdetector"
-          image  (N_frames, H, W) float64
+          image  (N_frames, H, W) float32
             chunks=(1, H, W), gzip-4 + shuffle
             @interpretation = "image"
         plot/  @NX_class="NXdata", @signal="image"
@@ -251,7 +251,7 @@ scan0001/dfxm_sim_detector_0000.h5
     @NX_class = "NXentry"
     dfxm_sim_detector/
       @NX_class = "NXdetector"
-      image  (N_frames, H, W) float64
+      image  (N_frames, H, W) float32
         chunks=(1, H, W), gzip-4 + shuffle
         @interpretation = "image"
     plot/
@@ -465,7 +465,9 @@ case darling targets). For >2 scanned axes use `load_h5_scan` or silx directly.
 ## Compression
 
 Image data is chunked `(1, H, W)` (one frame per chunk) with gzip-4 plus
-the shuffle filter. The dtype is `float64`. Typical compression ratio is
+the shuffle filter. Detector images are stored as `float32` — lossless for
+the simulated intensities, and it halves file size; the forward model
+computes in `float64`. Typical compression ratio is
 ~3-5× for simulated images (which are sparse — most pixels are near
 zero); read latency for one full stack on a laptop SSD is ~1-2 seconds.
 

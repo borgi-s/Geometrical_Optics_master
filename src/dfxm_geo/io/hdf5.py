@@ -37,6 +37,12 @@ from dfxm_geo.direct_space import forward_model as _fm
 # re-exported here so the HDF5 writers and the legacy npy writer share one cap.
 from dfxm_geo.io.images import _auto_max_workers
 
+# Detector image storage dtype. float32 is lossless-enough for the simulated
+# intensities (the forward model computes in float64; the ~7 significant
+# decimal digits of float32 are well below shot-noise) and halves on-disk size
+# vs float64. Phase 2a of the forward-throughput arc.
+DETECTOR_DTYPE = np.float32
+
 # Output layout constants (v1.2.0).
 MASTER_FORWARD = "dfxm_geo.h5"
 MASTER_IDENTIFY = "dfxm_identify.h5"
@@ -150,6 +156,7 @@ def _create_detector_skeleton(
         img = det.create_dataset(
             "image",
             data=data,
+            dtype=DETECTOR_DTYPE,
             chunks=(1, height, width),
             compression="gzip",
             compression_opts=4,
@@ -159,7 +166,7 @@ def _create_detector_skeleton(
         img = det.create_dataset(
             "image",
             shape=(n_frames, height, width),
-            dtype=np.float64,
+            dtype=DETECTOR_DTYPE,
             chunks=(1, height, width),
             compression="gzip",
             compression_opts=4,

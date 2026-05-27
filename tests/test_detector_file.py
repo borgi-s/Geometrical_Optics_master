@@ -95,7 +95,15 @@ def test_compute_and_write_detector_file_parallel_roundtrip(tmp_path: Path) -> N
             idx, im = _compute_frame(a)
             ref[idx] = im
         with h5py.File(out, "r") as f:
-            np.testing.assert_array_equal(f[DETECTOR_INTERNAL_PATH][...], ref)
+            # float32 detector storage (Phase 2a): the stored stack is float32
+            # while `ref` is the float64 forward() output, so compare at
+            # float32 tolerance (~1e-7 relative).
+            np.testing.assert_allclose(
+                f[DETECTOR_INTERNAL_PATH][...].astype(np.float64),
+                ref,
+                rtol=1e-6,
+                atol=1e-6,
+            )
     finally:
         # Restore the pre-test "nothing loaded" sentinels so downstream tests
         # whose skip guards check `fm.Hg is None` keep skipping as they did
