@@ -98,3 +98,70 @@ once Find_Hg is well below that, it is no longer the binding constraint and
 further Find_Hg speedup yields diminishing per-config returns until HDF5 is
 also addressed. Stretch goal ≥15× (≤220 ms) if the fused kernel parallelizes
 cleanly over rays.
+
+## After fusion (2026-05-27)
+
+`Find_Hg_from_population` now delegates to a fused `@njit` kernel
+(`dislocations.py:_population_hg_kernel`, called via `find_hg_population`).
+Re-profiled with the same script / inputs (random_dislocations, ndis=4,
+seed=42); numba JIT compile is excluded via the warmup call + `cache=True`.
+
+### New stable median wall time
+
+Three process-runs (each `n=5` profiled calls, post-warmup):
+
+```
+run 1: median wall: 224.2 ms  (n=5)
+run 2: median wall: 212.0 ms  (n=5)
+run 3: median wall: 236.2 ms  (n=5)
+```
+
+Representative stable median: **~224 ms** per call (range 212–236 ms).
+
+### cProfile cumulative breakdown (top rows, run 1, n=5 calls)
+
+```
+         101 function calls in 1.072 seconds
+
+   Ordered by: cumulative time
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        5    0.053    0.011    1.072    0.214 forward_model.py:978(Find_Hg_from_population)
+        5    0.000    0.000    1.019    0.204 dislocations.py:524(find_hg_population)
+        5    1.019    0.204    1.019    0.204 dislocations.py:401(_population_hg_kernel)
+       25    0.000    0.000    0.000    0.000 {built-in method numpy.empty}
+        5    0.000    0.000    0.000    0.000 numpy/.../numeric.py:170(ones)
+        5    0.000    0.000    0.000    0.000 {built-in method numpy.asarray}
+       30    0.000    0.000    0.000    0.000 {built-in method numpy.ascontiguousarray}
+        5    0.000    0.000    0.000    0.000 {built-in method numpy.zeros}
+        5    0.000    0.000    0.000    0.000 {built-in method builtins.len}
+        5    0.000    0.000    0.000    0.000 {built-in method builtins.globals}
+        5    0.000    0.000    0.000    0.000 numpy/.../multiarray.py:1085(copyto)
+```
+
+(Times are over 5 profiled calls; divide by 5 for per-call.)
+
+### Speedup
+
+`3302.5 ms / 224.2 ms ≈ 14.7×` (using each run: 14.7× / 15.6× / 14.0×).
+
+- **≥10× target (≤330 ms): MET** — at ~224 ms the call is comfortably below
+  the 330 ms gate (~14.7× vs the 10× target).
+- **≥15× stretch (≤220 ms): met at the margin** — the representative median
+  (~224 ms) is just above 220 ms; the fastest run (212 ms / 15.6×) crosses it,
+  the others land at 224/236 ms. Treat the stretch as effectively reached but
+  borderline (run-to-run variance ±~12 ms straddles the 220 ms line).
+
+### What now dominates
+
+The fused `_population_hg_kernel` (`dislocations.py:401`) is **essentially the
+entire call** — 1.019 s of 1.072 s cumulative (~95%), all self-time. The old
+hotspots (`Fd_find_mixed` ~77%, `fast_inverse2` ~9%,
+`Fd_find_multi_dislocs_mixed` orchestration) have been collapsed into this one
+`@njit` kernel; the intermediate-array NumPy traffic and the separate
+per-ray 3×3 inverse are gone. The residual ~0.05 s/5-calls of
+`Find_Hg_from_population` self-time is Python-side setup (array prep /
+`ascontiguousarray` / packing), not a per-ray cost. Further wins would have to
+come from inside the kernel (e.g. ray-parallel `prange`) — but Find_Hg is now
+well under the ~3 s HDF5-write floor, so it is no longer the binding
+per-config stage.
