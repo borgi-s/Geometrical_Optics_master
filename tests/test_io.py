@@ -251,6 +251,50 @@ def test_auto_max_workers_env_var_overrides(monkeypatch):
     assert isinstance(val, int) and val >= 1  # zero/negative falls back
 
 
+def _fake_vm(available_gb):
+    """A psutil.virtual_memory() stand-in reporting `available_gb` free."""
+    from types import SimpleNamespace
+
+    return lambda: SimpleNamespace(available=int(available_gb * (1024**3)))
+
+
+def test_auto_max_workers_uses_all_cpus_when_memory_ample(monkeypatch):
+    """With abundant RAM the cap is CPU-bound, not memory-throttled."""
+    import psutil
+
+    from dfxm_geo.io import images
+
+    monkeypatch.delenv("DFXM_MAX_WORKERS", raising=False)
+    monkeypatch.setattr(images.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(psutil, "virtual_memory", _fake_vm(64.0))
+    assert images._auto_max_workers() == 8
+
+
+def test_auto_max_workers_ray_proportional_beats_fixed_slab(monkeypatch):
+    """At Nsub=1 a modest RAM budget still permits several workers.
+
+    The old fixed 1 GiB/worker reservation collapsed to a single worker at
+    ~2 GiB usable; the ray-proportional estimate (~0.13 GiB/worker at
+    px510/Nsub=1) permits more, which is the whole point of the change.
+    """
+    import psutil
+
+    from dfxm_geo.io import images
+
+    monkeypatch.delenv("DFXM_MAX_WORKERS", raising=False)
+    monkeypatch.setattr(images.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(psutil, "virtual_memory", _fake_vm(2.0))
+    workers = images._auto_max_workers()
+    assert 2 <= workers <= 8  # old slab logic returned 1 here
+
+
+def test_auto_max_workers_shared_between_io_modules():
+    """hdf5 re-exports the single images definition (no divergent copy)."""
+    from dfxm_geo.io import hdf5, images
+
+    assert hdf5._auto_max_workers is images._auto_max_workers
+
+
 def test_save_image_does_not_misunpack_forward(tmp_path, monkeypatch):
     """save_image unpacked forward() as a 2-tuple; this regression pins the single-array contract.
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib as _hashlib
-import os
 import socket as _socket
 import subprocess as _subprocess
 import sys as _sys
@@ -33,6 +32,10 @@ import numpy as np
 from tqdm import tqdm
 
 from dfxm_geo.direct_space import forward_model as _fm
+
+# Single source of truth for the memory-aware worker cap lives in io/images.py;
+# re-exported here so the HDF5 writers and the legacy npy writer share one cap.
+from dfxm_geo.io.images import _auto_max_workers
 
 # Output layout constants (v1.2.0).
 MASTER_FORWARD = "dfxm_geo.h5"
@@ -104,45 +107,6 @@ def _sha256_of(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def _auto_max_workers() -> int:
-    """Cap thread-pool workers by both CPU count and free memory.
-
-    The ``base_qc`` array (``qs.squeeze().T``, ~270 MiB float64 at the default
-    510-pixel detector) is now precomputed once per scan and shared read-only
-    across workers, so it no longer counts toward per-worker footprint. The
-    dominant per-worker intermediate is ``qi`` (~270 MiB float64), plus the
-    ``prob``/``pro``/``index`` arrays — roughly half the previous per-worker
-    estimate. We still aim for ~1 GiB headroom per worker as a conservative
-    margin.
-
-    Resolution order (highest precedence wins):
-      1. ``DFXM_MAX_WORKERS`` env var, if set to a positive int.
-      2. ``min(cpu_count, max(1, available_memory_gb - 2))`` if psutil is
-         installed (subtracting ~2 GiB reserved for persistent forward_model
-         state + OS).
-      3. ``min(cpu_count, 4)`` fixed conservative cap when psutil is missing.
-    """
-    env = os.environ.get("DFXM_MAX_WORKERS")
-    if env is not None:
-        try:
-            n = int(env)
-            if n >= 1:
-                return n
-        except ValueError:
-            pass  # fall through to auto-detect
-
-    cpu = os.cpu_count() or 1
-    try:
-        import psutil
-    except ImportError:
-        return min(cpu, 4)
-
-    avail_gb = psutil.virtual_memory().available / (1024**3)
-    usable_gb = max(1.0, avail_gb - 2.0)  # reserve 2 GiB for persistent state + OS
-    mem_cap = max(1, int(usable_gb // 1))
-    return min(cpu, mem_cap)
 
 
 def _compute_frame(args: _FrameArgs) -> tuple[int, np.ndarray]:
