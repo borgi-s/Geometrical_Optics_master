@@ -536,6 +536,12 @@ def find_hg_population(
 
     Allocates the (X, 3, 3) output and ensures C-contiguous float64 inputs the
     kernel expects. ``rl_um`` is the lab-frame ray grid in MICROMETRES.
+
+    N=0 divergence: for an empty population (N=0) this kernel returns Hg=0
+    (Fg=I), whereas the NumPy ``Fd_find_multi_dislocs_mixed`` path raises
+    ValueError. N=0 is not reachable from ``build_dislocation_population``
+    (always >=1 dislocation), so the two paths are equivalent for all real
+    inputs.
     """
     X = rl_um.shape[1]
     Hg_out = np.empty((X, 3, 3), dtype=np.float64)
