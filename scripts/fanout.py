@@ -19,6 +19,7 @@ Each config writes to <output>/<config-stem>/ with its own log at
 
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -129,3 +130,47 @@ def run_manifest(
 
     with ThreadPoolExecutor(max_workers=n_workers) as ex:
         return list(ex.map(task, configs))
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--manifest",
+        type=Path,
+        required=True,
+        help="Directory of *.toml, a single .toml, or a .txt list of config paths.",
+    )
+    ap.add_argument("--output", type=Path, required=True, help="Output root directory.")
+    ap.add_argument("--n-workers", type=int, default=8, help="Concurrent config processes.")
+    ap.add_argument(
+        "--threads-per-worker",
+        type=int,
+        default=16,
+        help="DFXM_MAX_WORKERS per config (frame thread pool size).",
+    )
+    args = ap.parse_args(argv)
+
+    configs = discover_configs(args.manifest)
+    print(
+        f"fanout: {len(configs)} configs, {args.n_workers} workers x "
+        f"{args.threads_per_worker} threads -> {args.output}"
+    )
+    t0 = time.perf_counter()
+    results = run_manifest(
+        configs,
+        args.output,
+        n_workers=args.n_workers,
+        threads_per_worker=args.threads_per_worker,
+    )
+    wall = time.perf_counter() - t0
+
+    n_fail = sum(1 for r in results if r.returncode != 0)
+    for r in results:
+        status = "ok" if r.returncode == 0 else f"FAIL(rc={r.returncode})"
+        print(f"  {r.config.name:<30} {status:>12}  {r.wall_s:7.1f}s  log={r.log_path}")
+    print(f"fanout done: {len(results) - n_fail}/{len(results)} ok in {wall:.1f}s")
+    return 1 if n_fail else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
