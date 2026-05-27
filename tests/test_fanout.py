@@ -100,6 +100,28 @@ def test_run_manifest_reports_nonzero_returncode(tmp_path: Path) -> None:
     assert results[0].returncode == 3
 
 
+def test_run_manifest_survives_runner_exception(tmp_path: Path) -> None:
+    """A runner that raises (e.g. a config that can't spawn) is recorded as a
+    failed result with rc=-1 + a log, not allowed to abort the whole batch."""
+    good = tmp_path / "good.toml"
+    bad = tmp_path / "boom.toml"
+    good.write_text("")
+    bad.write_text("")
+
+    def flaky_runner(config, output_dir, env, log_path):
+        if config.stem == "boom":
+            raise RuntimeError("cannot spawn")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return 0
+
+    results = fanout.run_manifest([good, bad], tmp_path / "out", n_workers=2, runner=flaky_runner)
+    by_stem = {r.config.stem: r for r in results}
+    assert by_stem["good"].returncode == 0
+    assert by_stem["boom"].returncode == -1  # exception -> recorded failure
+    assert by_stem["boom"].log_path.is_file()  # traceback captured
+    assert "cannot spawn" in by_stem["boom"].log_path.read_text()
+
+
 def test_fanout_end_to_end_runs_two_configs(tmp_path: Path) -> None:
     """Real subprocess integration: two tiny centered configs via the actual
     dfxm-forward CLI, thread-capped, each producing a valid float32 HDF5."""

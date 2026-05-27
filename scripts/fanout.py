@@ -24,6 +24,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -125,7 +126,18 @@ def run_manifest(
         out_dir = output_root / config.stem
         log_path = output_root / f"{config.stem}.log"
         t0 = time.perf_counter()
-        rc = runner(config, out_dir, env, log_path)
+        # Batch resilience: a config that fails to even spawn (or any runner
+        # exception) is recorded as a failed result with rc=-1 rather than
+        # aborting the whole sweep — one bad config shouldn't kill a 100k run.
+        try:
+            rc = runner(config, out_dir, env, log_path)
+        except Exception:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(
+                f"fanout: runner raised for {config}\n\n{traceback.format_exc()}",
+                encoding="utf-8",
+            )
+            rc = -1
         return ConfigResult(config, out_dir, rc, time.perf_counter() - t0, log_path)
 
     with ThreadPoolExecutor(max_workers=n_workers) as ex:
