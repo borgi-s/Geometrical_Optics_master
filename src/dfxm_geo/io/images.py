@@ -19,10 +19,13 @@ from dfxm_geo.direct_space import forward_model as _fm
 def _auto_max_workers() -> int:
     """Cap thread-pool workers by both CPU count and free memory.
 
-    Each ``forward()`` call needs ~1 GiB of intermediates (``qs.squeeze().T``
-    and ``qi`` are each ~270 MiB float64 at the default 510-pixel detector,
-    plus the ``prob``/``pro``/``index`` arrays). We aim for ~1 GiB headroom
-    per worker.
+    The ``base_qc`` array (``qs.squeeze().T``, ~270 MiB float64 at the default
+    510-pixel detector) is now precomputed once per scan and shared read-only
+    across workers, so it no longer counts toward per-worker footprint. The
+    dominant per-worker intermediate is ``qi`` (~270 MiB float64), plus the
+    ``prob``/``pro``/``index`` arrays — roughly half the previous per-worker
+    estimate. We still aim for ~1 GiB headroom per worker as a conservative
+    margin.
 
     Resolution order (highest precedence wins):
       1. ``DFXM_MAX_WORKERS`` env var, if set to a positive int.
@@ -53,25 +56,14 @@ def _auto_max_workers() -> int:
 
 
 def save_image(args: tuple) -> None:
+    """Render one frame via forward_from_static and save it as .npy.
+
+    args = (base_qc, phi, chi, j, i, fpath, fn_prefix, ftype), where
+    base_qc = forward_model.precompute_forward_static(Hg) is shared across
+    all frames of the scan.
     """
-    Save an image with specified parameters.
-    ---------------------------------------------------------------------
-    Parameters:
-        args (tuple): A tuple containing the following elements:
-            Hg (float): A parameter.
-            phi (float): Angle in radians.
-            chi (float): Angle in radians.
-            j (int): Step in phi
-            i (int): Step in chi
-            fpath (str): Path to a folder where the image will be saved.
-            fn_prefix (str): Prefix for the image filename.
-            ftype (str): Filetype extension for the image (e.g., '.png').
-    ---------------------------------------------------------------------
-    Returns:
-        None: The function saves an image but does not return a value.
-    """
-    Hg, phi, chi, j, i, fpath, fn_prefix, ftype = args
-    im = _fm.forward(Hg, phi=phi, chi=chi)
+    base_qc, phi, chi, j, i, fpath, fn_prefix, ftype = args
+    im = _fm.forward_from_static(base_qc, phi=phi, chi=chi)
     fn_suffix = f"{i}".zfill(4) + "_" + f"{j}".zfill(4) + ftype
     np.save(os.path.join(fpath + fn_prefix + fn_suffix), im)
 
@@ -115,8 +107,9 @@ def save_images_parallel(
     if not os.path.exists(fpath):
         os.makedirs(fpath)
 
+    base_qc = _fm.precompute_forward_static(Hg)
     args_list = [
-        (Hg, Phi[j], Chi[i], j, i, fpath, fn_prefix, ftype)
+        (base_qc, Phi[j], Chi[i], j, i, fpath, fn_prefix, ftype)
         for i in range(chi_steps)
         for j in range(phi_steps)
     ]

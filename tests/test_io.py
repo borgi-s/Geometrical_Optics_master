@@ -161,9 +161,13 @@ def test_save_images_parallel_uses_explicit_max_workers(tmp_path, monkeypatch):
     import dfxm_geo.direct_space.forward_model as fm_mod
     import dfxm_geo.io.images as images_mod
 
-    # Mock forward() so we don't need the real kernel.
-    # save_image calls _fm.forward(...) — patch the source module attribute.
-    monkeypatch.setattr(fm_mod, "forward", lambda Hg, phi=0, chi=0: np.zeros((4, 4)))
+    # Mock the compute so we don't need the real kernel. save_images_parallel
+    # precomputes base_qc via precompute_forward_static(Hg) and save_image calls
+    # forward_from_static(base_qc, ...) — patch both source module attributes.
+    monkeypatch.setattr(fm_mod, "precompute_forward_static", lambda Hg: np.zeros((3, 1)))
+    monkeypatch.setattr(
+        fm_mod, "forward_from_static", lambda base_qc, phi=0, chi=0: np.zeros((4, 4))
+    )
 
     captured = {}
 
@@ -193,7 +197,10 @@ def test_save_images_parallel_falls_back_to_env_var(tmp_path, monkeypatch):
     import dfxm_geo.direct_space.forward_model as fm_mod
     import dfxm_geo.io.images as images_mod
 
-    monkeypatch.setattr(fm_mod, "forward", lambda Hg, phi=0, chi=0: np.zeros((4, 4)))
+    monkeypatch.setattr(fm_mod, "precompute_forward_static", lambda Hg: np.zeros((3, 1)))
+    monkeypatch.setattr(
+        fm_mod, "forward_from_static", lambda base_qc, phi=0, chi=0: np.zeros((4, 4))
+    )
 
     captured = {}
 
@@ -247,20 +254,20 @@ def test_auto_max_workers_env_var_overrides(monkeypatch):
 def test_save_image_does_not_misunpack_forward(tmp_path, monkeypatch):
     """save_image unpacked forward() as a 2-tuple; this regression pins the single-array contract.
 
-    Mocks forward() to return a single np.ndarray (the default) and confirms
-    save_image writes the file without raising ValueError.
+    Mocks forward_from_static() to return a single np.ndarray (the default) and
+    confirms save_image writes the file without raising ValueError.
     """
     import dfxm_geo.direct_space.forward_model as fm_mod
     import dfxm_geo.io.images as images_mod
 
     expected_array = np.arange(12, dtype=float).reshape(3, 4)
 
-    def fake_forward(Hg, phi=0.0, chi=0.0, *args, **kwargs):
+    def fake_forward_from_static(base_qc, phi=0.0, chi=0.0, *args, **kwargs):
         return expected_array
 
-    monkeypatch.setattr(fm_mod, "forward", fake_forward)
+    monkeypatch.setattr(fm_mod, "forward_from_static", fake_forward_from_static)
     args = (
-        np.zeros((1, 3, 3)),  # Hg (unused by fake_forward)
+        np.zeros((3, 1)),  # base_qc (unused by fake_forward_from_static)
         0.0,  # phi
         0.0,  # chi
         0,  # j

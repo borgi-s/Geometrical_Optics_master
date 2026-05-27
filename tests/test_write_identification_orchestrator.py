@@ -27,6 +27,7 @@ def _require_kernel() -> None:
 
 def _fake_scan_iter(Hg: np.ndarray) -> Iterator[ScanSpec]:
     # Two scan entries, each with one detector and one frame.
+    base_qc = fm.precompute_forward_static(Hg)
     for k in range(2):
         yield ScanSpec(
             title=f"single scan {k}",
@@ -38,7 +39,7 @@ def _fake_scan_iter(Hg: np.ndarray) -> Iterator[ScanSpec]:
             },
             positioners={"phi": 1.5e-4, "chi": 0.0},
             dfxm_geo={"Hg": Hg, "q_hkl": np.array([0.0, 0.0, 1.0])},
-            detectors={"dfxm_sim_detector": [(0, Hg, 1.5e-4, 0.0, 0.0)]},
+            detectors={"dfxm_sim_detector": [(0, base_qc, 1.5e-4, 0.0, 0.0)]},
             attrs={
                 "scan_mode": "single",
                 "scanned_axes": [],
