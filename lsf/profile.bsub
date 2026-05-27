@@ -1,0 +1,73 @@
+#!/bin/bash
+# ==============================================================================
+# DTU HPC (LSF) — cluster profiling run for the ML-data pipeline
+# ==============================================================================
+# Submit with:   bsub < lsf/profile.bsub
+# Monitor with:  bjobs -l <JOBID>
+# See docs/cluster-profiling.md for the full walkthrough.
+# ==============================================================================
+#
+# >>> EDIT THESE >>>
+#BSUB -J dfxm-profile
+#BSUB -q hpc                           # DTU HPC default queue
+#BSUB -W 02:00                         # Walltime HH:MM
+#BSUB -n 32                            # CPU slots — set to a full node; query
+                                       # `lshosts`/`bhosts hpc` first. The sweep
+                                       # auto-detects actual usable cores, so an
+                                       # over-estimate here is harmless.
+#BSUB -R "rusage[mem=4GB]"
+#BSUB -R "span[hosts=1]"               # single host (thread parallelism). With
+                                       # -n 32 this reserves all 32 slots on one
+                                       # host, so on a 32-core node nothing else
+                                       # fits — near-exclusive without -x (the hpc
+                                       # queue rejects -x EXCLUSIVE jobs).
+#BSUB -o logs/profile-%J.out
+#BSUB -e logs/profile-%J.err
+# <<< EDIT THESE <<<
+
+set -euo pipefail
+
+WORKDIR="${PWD}"
+OUTROOT="${WORKDIR}/output/profile_${LSB_JOBID:-local}"
+mkdir -p "${OUTROOT}" logs
+
+# --- Node info: recorded so artifacts say exactly what we ran on. ---
+echo "===== NODE INFO ====="
+echo "host: $(hostname)"
+nproc || true
+lscpu || true
+echo "====================="
+
+# --- conda activation (mirrors lsf/forward_single.bsub) ---
+CONDA_BASE="${CONDA_BASE:-$(dirname "$(dirname "$(command -v conda 2>/dev/null || true)")")}"
+if [ ! -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]; then
+    for cand in "${HOME}/miniforge3" "${HOME}/miniconda3"; do
+        [ -f "${cand}/etc/profile.d/conda.sh" ] && CONDA_BASE="${cand}" && break
+    done
+fi
+if [ ! -f "${CONDA_BASE:-}/etc/profile.d/conda.sh" ]; then
+    echo "ERROR: could not locate a conda install. Set CONDA_BASE explicitly above." >&2
+    exit 1
+fi
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate dfxm-geo
+
+# Stage 0 — ensure the resolution kernel exists (idempotent). We bootstrap from
+# profile_rocking.toml: its [reciprocal] block is identical to the packaged
+# default config, and unlike `configs/default.toml` it actually exists at the
+# repo root (the canonical default lives under src/dfxm_geo/data/configs/).
+dfxm-bootstrap --if-missing --config "${WORKDIR}/configs/profile_rocking.toml"
+
+# Stage 1 — single-thread cProfile for both crystal variants.
+python scripts/profile_forward.py --config configs/profile_rocking.toml        --output "${OUTROOT}/centered"
+python scripts/profile_forward.py --config configs/profile_rocking_random.toml --output "${OUTROOT}/random"
+
+# Stage 2 — worker-scaling sweep + 100k extrapolation (centered variant).
+python scripts/scaling_sweep.py --config configs/profile_rocking.toml --output "${OUTROOT}/scaling" --repeats 3
+
+# Stage 3 — bundle artifacts (drop the heavy HDF5 outputs; keep summaries+prof).
+find "${OUTROOT}" -name '*.h5' -delete
+find "${OUTROOT}" -type d -name 'scan*' -exec rm -rf {} + 2>/dev/null || true
+TARBALL="${WORKDIR}/profile_${LSB_JOBID:-local}.tar.gz"
+tar -czf "${TARBALL}" -C "$(dirname "${OUTROOT}")" "$(basename "${OUTROOT}")"
+echo "Done. Artifacts in ${TARBALL}"
