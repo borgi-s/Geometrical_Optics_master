@@ -23,10 +23,13 @@ conda-forge lint + build bots in a `staged-recipes` PR.
 
 ## Source pin
 
-- PyPI project: `dfxm-geo`; sdist filename (PEP 625): `dfxm_geo-2.1.0.tar.gz`
-- **sha256:** `8dc4385ead462b2716c47b1c154b89ebc6e12f14b3ba42257b5e10c1ec993083`
-- v2.1.0 is live on PyPI (confirmed 2026-05-26), so the staged-recipes build
-  bot can fetch the tarball.
+- PyPI project: `dfxm-geo`; sdist filename (PEP 625): `dfxm_geo-2.1.2.tar.gz`
+- **sha256:** `a29846a09834cee59da4cce62baa4252bc7cb2f73306e7859769d7a77e90cc20`
+- The recipe tracks the latest PyPI release. Bumped 2.1.0 → 2.1.2 on
+  2026-05-26 (2.1.1 was never published to PyPI; 2.1.2 superseded it).
+  v2.1.2 is live on PyPI, so the staged-recipes build bot can fetch the
+  tarball. Recipe also picked up the new `dfxm-init` console script and
+  the `dfxm_geo.data` subpackage added between 2.1.0 and 2.1.2.
 
 ## Recipe content
 

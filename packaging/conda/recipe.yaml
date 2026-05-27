@@ -2,7 +2,7 @@ schema_version: 1
 
 context:
   name: dfxm-geo
-  version: "2.1.0"
+  version: "2.1.2"
   # requires-python = ">=3.11"; override conda-forge's lower global python_min.
   python_min: "3.11"
 
@@ -12,7 +12,7 @@ package:
 
 source:
   url: https://pypi.org/packages/source/${{ name[0] }}/${{ name }}/dfxm_geo-${{ version }}.tar.gz
-  sha256: 8dc4385ead462b2716c47b1c154b89ebc6e12f14b3ba42257b5e10c1ec993083
+  sha256: a29846a09834cee59da4cce62baa4252bc7cb2f73306e7859769d7a77e90cc20
 
 build:
   number: 0
@@ -48,6 +48,7 @@ tests:
         - dfxm_geo
         - dfxm_geo.analysis
         - dfxm_geo.crystal
+        - dfxm_geo.data
         - dfxm_geo.direct_space
         - dfxm_geo.io
         - dfxm_geo.reciprocal_space
@@ -58,6 +59,7 @@ tests:
       - dfxm-forward --help
       - dfxm-identify --help
       - dfxm-bootstrap --help
+      - dfxm-init --help
 
 about:
   homepage: https://github.com/borgi-s/Geometrical_Optics_master
