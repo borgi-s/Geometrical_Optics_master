@@ -103,17 +103,21 @@ def test_run_manifest_reports_nonzero_returncode(tmp_path: Path) -> None:
 def test_fanout_end_to_end_runs_two_configs(tmp_path: Path) -> None:
     """Real subprocess integration: two tiny centered configs via the actual
     dfxm-forward CLI, thread-capped, each producing a valid float32 HDF5."""
+    # Only the on-disk LUT npz is required: each config runs in its own
+    # subprocess, which loads the LUT and computes Hg itself (centered crystal),
+    # so the parent's `fm.Hg` global is irrelevant here.
     kernel_dir = Path(fm.pkl_fpath)
-    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")) or fm.Hg is None:
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
         pytest.skip("No bootstrapped kernel npz found; skipping integration run.")
 
     import h5py
     import numpy as np
 
+    # Omit [crystal] entirely so it cascades to the default centered crystal
+    # (b=(1,0,-1), n, t) — a partial [crystal.centered] would require b/n/t.
     cfg_text = (
         "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n\n"
         "[scan.phi]\nrange = 0.001\nsteps = 2\n\n"
-        '[crystal]\nmode = "centered"\n[crystal.centered]\n\n'
         "[io]\ninclude_perfect_crystal = false\n\n"
         "[postprocess]\nenabled = false\n"
     )
