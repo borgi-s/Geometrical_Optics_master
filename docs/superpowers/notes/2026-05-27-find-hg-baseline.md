@@ -165,3 +165,80 @@ per-ray 3×3 inverse are gone. The residual ~0.05 s/5-calls of
 come from inside the kernel (e.g. ray-parallel `prange`) — but Find_Hg is now
 well under the ~3 s HDF5-write floor, so it is no longer the binding
 per-config stage.
+
+## Phase 2 (float32 + fan-out, 2026-05-27)
+
+Branch: `feature/hdf5-float32-and-fanout`. Detector is 510×170, 21 frames
+(rocking), `centered` / ndis=1 (the `configs/profile_rocking.toml` sweep
+config). Storage measured with
+`scripts/scaling_sweep.py --config configs/profile_rocking.toml --repeats 1
+--max-workers 4` (loads the existing resolution LUT, does not regenerate it).
+
+### Deliverables
+
+- **`DETECTOR_DTYPE = np.float32`** in `src/dfxm_geo/io/hdf5.py:44`, applied to
+  every detector dataset (`io/hdf5.py:159,169`). Verified end-to-end: detector
+  datasets in both the master and per-scan files now have dtype `float32`
+  (was `float64`), finite, sum > 0.
+- **`scripts/fanout.py`** — config-level fan-out orchestrator + CLI. Runs N
+  configs concurrently with bounded per-worker threads (caps `OMP`/`numba`
+  thread env per child so M configs × K threads stays within node cores).
+- **`lsf/fanout.bsub`** — DTU HPC batch template for the fan-out run + cluster
+  docs.
+
+### Measured storage (scaling_sweep, float32, gzip)
+
+| quantity | float32 (Phase 2) | float64 baseline |
+|---|---|---|
+| per-config on disk | **106.30 MB** | ~106 MB |
+| total for 100k images | **0.51 TB** | ~0.51 TB |
+| configs needed | 4,762 (= 100k / 21) | — |
+
+**The headline per-config number did NOT move — but this is expected, not a
+regression.** Breaking the 106 MB master file (`one_config/dfxm_geo.h5`) down
+by dataset stored-size reveals the dominant cost was never the detector image:
+
+```
+106.12 MB  /1.1/dfxm_geo/Hg                       float64 (1473900, 3, 3)  comp=None
+  0.13 MB  /1.1/measurement/dfxm_sim_detector     float32 (21, 510, 170)   comp=gzip
+  0.13 MB  /1.1/instrument/dfxm_sim_detector/data float32 (21, 510, 170)   comp=gzip
+```
+
+- The **detector image stack** is the dataset Phase 2 converted to float32. Its
+  raw size halved (7.28 MB → 3.64 MB per frame-stack worth of float64→float32),
+  and with the existing gzip filter it compresses to **0.13 MB** — the per-scan
+  detector file is only **0.14 MB total**. The float32 change is real and
+  effective for the detector data; it is simply a rounding error against the
+  master file.
+- The **106 MB per config is the `/1.1/dfxm_geo/Hg` provenance array** — the
+  per-ray deformation-gradient field, `float64 (1473900, 3, 3)`, stored
+  uncompressed in the master `dfxm_geo.h5`. This matches the original cluster
+  profiling note's flag to "slim the 106 MB/config HDF5" — that 106 MB was
+  always `Hg`, not the image. Detector-dtype was a cheap lossless win on the
+  image path but does not touch the `Hg` dump.
+- **Next storage lever (not in Phase 2 scope):** the 0.51 TB / 100k figure is
+  dominated by `Hg`. To actually shrink it, either (a) gzip-compress `Hg`
+  (it has structure; likely 2–4× on disk), (b) store it float32 (halves to
+  ~53 MB raw), or (c) stop dumping the full per-ray `Hg` into every config's
+  master file (it is provenance, regenerable from the population + LUT). Any of
+  these would dwarf the detector-dtype win. Recommend revisiting under a
+  dedicated HDF5-slim task before committing to the 100k-image run.
+
+### Fan-out validation
+
+`scripts/fanout.py` runs N configs concurrently with bounded threads,
+validated by the `test_fanout_end_to_end_runs_two_configs` integration test
+(`tests/test_fanout.py`) — 2 configs fanned out → 2 valid float32 detector
+HDF5 outputs, each with a finite, positive-sum image. The full suite (560
+passed / 1 skipped / 12 deselected) and `mypy src/dfxm_geo/` +
+`mypy scripts/fanout.py` (both clean) confirm no regressions.
+
+> Note: `tests/test_detector_dtype_float32.py::test_detector_image_is_float32`
+> SKIPS under the in-process suite because its guard requires both an on-disk
+> LUT npz **and** `fm.Hg is not None`; `fm.Hg` is a module global only populated
+> as a side effect of a prior in-process forward run, so at clean import it is
+> `None` and the guard trips. The float32 detector deliverable was instead
+> verified directly by an out-of-band `run_simulation` (dtype `float32`,
+> finite, sum > 0) and by the dataset dump above. The guard is the known
+> `fm.Hg` global-pollution pattern (see auto-memory CI kernel-skip note); the
+> on-disk-glob half of the guard already passes.
