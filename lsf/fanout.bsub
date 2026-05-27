@@ -1,0 +1,61 @@
+#!/bin/bash
+# ==============================================================================
+# DTU HPC (LSF) — config fan-out batch for the ML-data pipeline (Phase 2b)
+# ==============================================================================
+# Submit with:   bsub < lsf/fanout.bsub
+# Monitor with:  bjobs -l <JOBID>
+# Edit MANIFEST + the BSUB resource lines for your node + sweep.
+# See docs/cluster-profiling.md (Fan-out batch section) for the walkthrough.
+# ==============================================================================
+#
+# >>> EDIT THESE >>>
+#BSUB -J dfxm-fanout
+#BSUB -q hpc
+#BSUB -W 04:00                          # Walltime HH:MM (size to your sweep)
+#BSUB -n 128                            # full node; query `bhosts hpc` first
+#BSUB -R "rusage[mem=4GB]"
+#BSUB -R "span[hosts=1]"                # single host — in-node fan-out
+#BSUB -o logs/fanout-%J.out
+#BSUB -e logs/fanout-%J.err
+MANIFEST="configs/sweep"                # dir of *.toml, a .toml, or a .txt list
+N_WORKERS=8                             # concurrent config processes
+THREADS_PER_WORKER=16                   # DFXM_MAX_WORKERS per config
+# <<< EDIT THESE <<<
+
+set -euo pipefail
+
+WORKDIR="${PWD}"
+OUTROOT="${WORKDIR}/output/fanout_${LSB_JOBID:-local}"
+mkdir -p "${OUTROOT}" logs
+
+echo "===== NODE INFO ====="
+echo "host: $(hostname)"
+nproc || true
+echo "manifest: ${MANIFEST}  workers: ${N_WORKERS} x ${THREADS_PER_WORKER} threads"
+echo "====================="
+
+# --- conda activation (mirrors lsf/profile.bsub) ---
+CONDA_BASE="${CONDA_BASE:-$(dirname "$(dirname "$(command -v conda 2>/dev/null || true)")")}"
+if [ ! -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]; then
+    for cand in "${HOME}/miniforge3" "${HOME}/miniconda3"; do
+        [ -f "${cand}/etc/profile.d/conda.sh" ] && CONDA_BASE="${cand}" && break
+    done
+fi
+if [ ! -f "${CONDA_BASE:-}/etc/profile.d/conda.sh" ]; then
+    echo "ERROR: could not locate a conda install. Set CONDA_BASE explicitly above." >&2
+    exit 1
+fi
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate dfxm-geo
+
+# Stage 0 — ensure the resolution kernel exists (idempotent).
+dfxm-bootstrap --if-missing --config "${WORKDIR}/configs/profile_rocking.toml"
+
+# Stage 1 — fan out the configs across the node.
+python scripts/fanout.py \
+    --manifest "${MANIFEST}" \
+    --output "${OUTROOT}" \
+    --n-workers "${N_WORKERS}" \
+    --threads-per-worker "${THREADS_PER_WORKER}"
+
+echo "Done. Per-config outputs under ${OUTROOT}"

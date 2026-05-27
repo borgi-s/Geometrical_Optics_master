@@ -89,3 +89,26 @@ node-hours/TB extrapolation.
   next optimization target, not the kernel.
 - **Extrapolation** — `total storage` TB is the feasibility gate for 100k
   rocking scans; `node-hours` sizes the fan-out.
+
+## Fan-out batch (Phase 2b)
+
+Profiling showed the threaded scan plateaus ~16 cores (memory-bandwidth bound),
+so a big node is best used as config-level fan-out: many configs in parallel,
+each thread-capped, rather than one over-threaded scan.
+
+1. **Build a manifest.** Drop your per-config TOMLs in a directory (e.g.
+   `configs/sweep/`) — one config per DFXM image/scan you want generated. The
+   manifest can be that directory, a single `.toml`, or a `.txt` listing config
+   paths (one per line; `#` comments and blanks ignored).
+2. **Submit.** Edit `MANIFEST`, the `#BSUB` resource lines, `N_WORKERS`, and
+   `THREADS_PER_WORKER` in `lsf/fanout.bsub`, then:
+
+   ```bash
+   bsub < lsf/fanout.bsub
+   bjobs -l <JOBID>
+   ```
+3. **Size workers × threads.** `N_WORKERS × THREADS_PER_WORKER` should ≈ node
+   cores. On a 128-core node, `8 × 16` is the sweet spot — since one scan
+   plateaus ~16 cores, prefer more concurrent configs over more threads/scan.
+4. **Outputs.** Each config writes `output/fanout_<JOBID>/<config-stem>/` with a
+   float32 HDF5 plus its own log at `output/fanout_<JOBID>/<config-stem>.log`.
