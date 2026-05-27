@@ -19,6 +19,7 @@ from pprint import pprint
 from typing import TYPE_CHECKING
 
 import numpy as np
+from numba import njit
 
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
@@ -458,6 +459,57 @@ def precompute_forward_static(Hg: np.ndarray) -> np.ndarray:
     return qs.squeeze().T
 
 
+@njit(cache=True, nogil=True, fastmath=False)
+def _mc_lut_scatter(
+    qi: np.ndarray,
+    prob_z: np.ndarray,
+    flat_indices: np.ndarray,
+    Resq_flat: np.ndarray,
+    im_flat: np.ndarray,
+    qi1_start: float,
+    qi1_step: float,
+    qi2_start: float,
+    qi2_step: float,
+    qi3_start: float,
+    qi3_step: float,
+    np1: int,
+    np2: int,
+    np3: int,
+    stride1: int,
+    stride2: int,
+) -> None:
+    """Fused floor + bounds + Resq_i gather + scatter for the MC LUT path.
+
+    Single-pass replacement for the numpy chain ``np.floor(...).astype(int16)``
+    (x3) → in-bounds mask → ``Resq_i[i1,i2,i3] * prob_z`` gather →
+    ``np.bincount(weights=prob.astype(float32))``. ~7x faster at px510/Nsub=1
+    because it never materializes the per-ray index/mask/prob arrays (the bulk
+    of the per-frame memory traffic) and avoids the random gather into a
+    122 MB LUT being a separate pass.
+
+    Bit-identical to the numpy chain by construction:
+      * ``np.int16`` casts mirror ``astype(np.int16)`` exactly, including the
+        wrap/INT16_MIN behaviour on NaN/inf core rays (which then fail the
+        ``0 <= i < npoints`` bounds test and are dropped, same as the mask);
+      * contributions are float32-quantized then accumulated into a float64
+        image in ascending ray order, exactly as ``np.bincount`` does.
+
+    Kept single-threaded (``range``, not ``prange``) so the accumulation order
+    is deterministic and bit-exact; ``nogil=True`` lets the per-frame
+    ThreadPoolExecutor in the writers parallelize across frames instead.
+    ``Resq_flat`` is the C-order ravel of ``Resq_i``; stride1 = npoints2*npoints3,
+    stride2 = npoints3.
+    """
+    n_rays = qi.shape[1]
+    for r in range(n_rays):
+        i1 = np.int16(np.floor((qi[0, r] - qi1_start) / qi1_step))
+        i2 = np.int16(np.floor((qi[1, r] - qi2_start) / qi2_step))
+        i3 = np.int16(np.floor((qi[2, r] - qi3_start) / qi3_step))
+        if 0 <= i1 < np1 and 0 <= i2 < np2 and 0 <= i3 < np3:
+            gathered = Resq_flat[np.int64(i1) * stride1 + np.int64(i2) * stride2 + np.int64(i3)]
+            im_flat[flat_indices[r]] += np.float32(gathered * prob_z[r])
+
+
 def forward_from_static(
     base_qc: np.ndarray,
     phi: float = 0,
@@ -530,49 +582,34 @@ def forward_from_static(
     # guarantees Resq_i is loaded. Assert re-narrows it for the type checker
     # (the guard now only requires that *one* of Resq_i / _analytic_eval is set).
     assert Resq_i is not None
+    # A loaded kernel sets all the grid metadata together; narrow for mypy.
+    assert npoints1 is not None and npoints2 is not None and npoints3 is not None
 
-    # Calculate indices for Resq_i that pass through the mask
-    index1 = np.floor((qi[0] - qi1_start) / qi1_step).astype(np.int16)
-    index2 = np.floor((qi[1] - qi2_start) / qi2_step).astype(np.int16)
-    index3 = np.floor((qi[2] - qi3_start) / qi3_step).astype(np.int16)
-    # In the qi_return path we need `qi` again to build qi_field; in the
-    # common (non-return) path it is unused after the index1/2/3 floors.
-    if not qi_return:
-        del qi
-
-    # Calculate index of values within bounds and extract corresponding values from Resq_i
-    idx = (
-        (index3 >= 0)
-        * (index2 >= 0)
-        * (index1 >= 0)
-        * (index1 < npoints1)
-        * (index2 < npoints2)
-        * (index3 < npoints3)
+    # Fused floor + in-bounds mask + Resq_i gather + float32 scatter, all in a
+    # single nogil numba pass that scatters directly into `im_1`'s flat view.
+    # This replaces the numpy chain (3x np.floor.astype(int16) -> bool mask ->
+    # fancy-index gather -> np.bincount), avoiding materialization of the
+    # per-ray index/mask/prob arrays — the bulk of the per-frame memory traffic
+    # — for ~7x at px510/Nsub=1. Output is bit-identical (see _mc_lut_scatter).
+    _mc_lut_scatter(
+        qi,
+        prob_z,
+        _flat_indices,
+        Resq_i.reshape(-1),
+        im_1.reshape(-1),
+        qi1_start,
+        qi1_step,
+        qi2_start,
+        qi2_step,
+        qi3_start,
+        qi3_step,
+        npoints1,
+        npoints2,
+        npoints3,
+        npoints2 * npoints3,
+        npoints3,
     )
-    prob = Resq_i[index1[idx], index2[idx], index3[idx]] * prob_z[idx]
-    del index1, index2, index3  # only `idx` and `prob` are needed below
-
-    # Scatter-accumulate the probability into the (chi, phi)-rocking image.
-    # np.bincount on the precomputed flat indices is ~10x faster than the
-    # previous np.add.at(im_1, tuple(indices.T), pro) at production sizes
-    # (the np.add.at scatter-iterator is famously slow). Restricting to the
-    # idx-mask subset is exact: invalid positions contribute zero, which
-    # adds nothing under either algorithm.
-    # The pre-cleanup code went through a float32 `pro` array; we preserve
-    # that float32 quantization on the way into bincount so output bytes
-    # match the np.add.at era bit-for-bit. Using float64 prob directly here
-    # would be more accurate (~1e-8 rel) but would not be a bit-equivalent
-    # change.
-    contribution = np.bincount(
-        _flat_indices[idx],
-        weights=prob.astype(np.float32),
-        minlength=im_1.size,
-    )
-    del idx, prob
-    im_1 += contribution.reshape(im_1.shape)
-    del contribution
     if qi_return:
-        # qi was kept alive above; build qi_field only when actually returned.
         qi_field = qi.reshape(3, NN1, NN2, NN3)
         return im_1, qi_field
     return im_1

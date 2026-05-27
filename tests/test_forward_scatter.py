@@ -75,6 +75,67 @@ def test_bincount_scatter_empty_input() -> None:
     assert np.all(im == 0.0)
 
 
+def test_mc_lut_scatter_matches_numpy_chain() -> None:
+    """The numba _mc_lut_scatter is bit-identical to the numpy chain it
+    replaced: 3x np.floor().astype(int16) -> in-bounds mask -> Resq_i gather ->
+    np.bincount(weights=float32). Exercises in-bounds rays plus every flavour
+    of out-of-bounds (negative index and index >= npoints on each axis), which
+    must be dropped exactly as the bool mask dropped them.
+    """
+    import dfxm_geo.direct_space.forward_model as fm
+
+    rng = np.random.default_rng(20260527)
+    np1, np2, np3 = 7, 5, 4
+    Resq = rng.standard_normal((np1, np2, np3))  # synthetic float64 LUT
+    H, W = 6, 3
+
+    qi1_start, qi1_step = -0.5, 0.1
+    qi2_start, qi2_step = -0.3, 0.07
+    qi3_start, qi3_step = -0.2, 0.05
+    # Draw finite qi spanning well past the grid on both ends so a healthy
+    # fraction of rays are rejected (index < 0 and index >= npoints).
+    n_rays = 8000
+    qi = np.empty((3, n_rays))
+    qi[0] = rng.uniform(qi1_start - 0.3, qi1_start + np1 * qi1_step + 0.3, n_rays)
+    qi[1] = rng.uniform(qi2_start - 0.3, qi2_start + np2 * qi2_step + 0.3, n_rays)
+    qi[2] = rng.uniform(qi3_start - 0.3, qi3_start + np3 * qi3_step + 0.3, n_rays)
+    prob_z = rng.uniform(0.1, 1.0, n_rays)
+    flat_indices = rng.integers(0, H * W, size=n_rays, dtype=np.int64)
+
+    # numpy reference: the exact chain forward_from_static used to run.
+    i1 = np.floor((qi[0] - qi1_start) / qi1_step).astype(np.int16)
+    i2 = np.floor((qi[1] - qi2_start) / qi2_step).astype(np.int16)
+    i3 = np.floor((qi[2] - qi3_start) / qi3_step).astype(np.int16)
+    idx = (i1 >= 0) * (i2 >= 0) * (i3 >= 0) * (i1 < np1) * (i2 < np2) * (i3 < np3)
+    assert 0 < idx.sum() < n_rays, "test should have both in- and out-of-bounds rays"
+    prob = Resq[i1[idx], i2[idx], i3[idx]] * prob_z[idx]
+    ref = np.bincount(flat_indices[idx], weights=prob.astype(np.float32), minlength=H * W).reshape(
+        H, W
+    )
+
+    # numba kernel scatters directly into a flat image view.
+    im_flat = np.zeros(H * W)
+    fm._mc_lut_scatter(
+        qi,
+        prob_z,
+        flat_indices,
+        np.ascontiguousarray(Resq.reshape(-1)),
+        im_flat,
+        qi1_start,
+        qi1_step,
+        qi2_start,
+        qi2_step,
+        qi3_start,
+        qi3_step,
+        np1,
+        np2,
+        np3,
+        np2 * np3,
+        np3,
+    )
+    np.testing.assert_array_equal(im_flat.reshape(H, W), ref)
+
+
 def test_forward_model_flat_indices_match_indices_2d() -> None:
     """The precomputed _flat_indices module constant is just C-order
     flattening of the existing (ZI, YI) `indices` array."""
