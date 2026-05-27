@@ -658,6 +658,7 @@ def write_simulation_h5(
     scanned_axes: list[str] | None = None,
     positioners: dict[str, np.ndarray | float] | None = None,
     Hg_provider: Callable[[float], tuple[np.ndarray, np.ndarray]] | None = None,
+    write_strain_provenance: bool = True,
 ) -> None:
     """One-call entry point for forward mode, v1.2.0 layout.
 
@@ -796,6 +797,14 @@ def write_simulation_h5(
             # mode; centered/random_dislocations pass None and omit the key.
             if sample_dis is not None:
                 sample["dis"] = float(sample_dis)
+            dfxm_geo_meta: dict = {
+                "q_hkl": q_hkl,
+                "theta": float(_fm.theta),
+                "psize": float(_fm.psize),
+                "zl_rms": float(_fm.zl_rms),
+            }
+            if write_strain_provenance:
+                dfxm_geo_meta["Hg"] = Hg_for_scan
             master.add_scan(
                 scan_id=f"{scan_idx}.1",
                 title=title,
@@ -810,12 +819,6 @@ def write_simulation_h5(
                         DETECTOR_INTERNAL_PATH,
                     )
                 },
-                dfxm_geo={
-                    "Hg": Hg_for_scan,
-                    "q_hkl": q_hkl,
-                    "theta": float(_fm.theta),
-                    "psize": float(_fm.psize),
-                    "zl_rms": float(_fm.zl_rms),
-                },
+                dfxm_geo=dfxm_geo_meta,
                 attrs=attrs_1_1,
             )

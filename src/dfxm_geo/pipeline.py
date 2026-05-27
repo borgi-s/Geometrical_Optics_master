@@ -345,6 +345,11 @@ class IOConfig:
     perfect_dirname: str = "images10_perf_crystal"
     include_perfect_crystal: bool = True
     max_workers: int | None = None
+    # When False, omit the large per-ray Hg displacement-gradient array from
+    # the master HDF5 /N.1/dfxm_geo group (keeps the tiny q_hkl/theta/psize/
+    # zl_rms scalars). The Hg dump dominates per-config size (~106 MB); drop
+    # it for batch/ML runs that don't need per-ray strain provenance.
+    write_strain_provenance: bool = True
 
 
 @dataclass
@@ -783,6 +788,7 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         scanned_axes=list(config.scan.scanned_axes()),
         positioners=positioners,
         Hg_provider=Hg_provider,
+        write_strain_provenance=config.io.write_strain_provenance,
     )
     return {
         "h5_path": h5_path,

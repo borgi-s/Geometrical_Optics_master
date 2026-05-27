@@ -132,6 +132,12 @@ sibling scan directory's LIMA file, not an inline dataset. Readers that
 walk `f["/1.1/instrument/dfxm_sim_detector/data"][...]` continue to work
 unchanged because h5py follows external links transparently.
 
+The per-scan `/N.1/dfxm_geo/` subgroup carries the strain provenance
+(`Hg`, `q_hkl`, `theta`, `psize`, `zl_rms`). `/N.1/dfxm_geo/Hg` (the large
+per-ray displacement-gradient array, ~106 MB/config) is written only when
+`io.write_strain_provenance` is true (default); disable it for batch/ML runs
+to drop ~106 MB/config — the tiny scalars are always kept.
+
 ## Per-`/N.1` attrs
 
 Each scan entry carries attributes that summarize the scan mode and
