@@ -17,6 +17,11 @@
                                        # over-estimate here is harmless.
 #BSUB -R "rusage[mem=4GB]"
 #BSUB -R "span[hosts=1]"               # single host (thread parallelism)
+#BSUB -x                               # EXCLUSIVE node — no co-tenants. Critical
+                                       # for a profiling run: shared cores pollute
+                                       # the memory-bandwidth / scaling signal we
+                                       # are measuring. Drop it if the queue wait
+                                       # is too long and you only need the cProfile.
 #BSUB -o logs/profile-%J.out
 #BSUB -e logs/profile-%J.err
 # <<< EDIT THESE <<<
