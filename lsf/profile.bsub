@@ -16,12 +16,11 @@
                                        # auto-detects actual usable cores, so an
                                        # over-estimate here is harmless.
 #BSUB -R "rusage[mem=4GB]"
-#BSUB -R "span[hosts=1]"               # single host (thread parallelism)
-#BSUB -x                               # EXCLUSIVE node — no co-tenants. Critical
-                                       # for a profiling run: shared cores pollute
-                                       # the memory-bandwidth / scaling signal we
-                                       # are measuring. Drop it if the queue wait
-                                       # is too long and you only need the cProfile.
+#BSUB -R "span[hosts=1]"               # single host (thread parallelism). With
+                                       # -n 32 this reserves all 32 slots on one
+                                       # host, so on a 32-core node nothing else
+                                       # fits — near-exclusive without -x (the hpc
+                                       # queue rejects -x EXCLUSIVE jobs).
 #BSUB -o logs/profile-%J.out
 #BSUB -e logs/profile-%J.err
 # <<< EDIT THESE <<<
