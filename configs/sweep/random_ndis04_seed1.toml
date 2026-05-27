@@ -1,0 +1,40 @@
+[reciprocal]
+hkl         = [-1, 1, -1]
+keV         = 17.0
+Nrays       = 100_000_000
+npoints1    = 400
+npoints2    = 200
+npoints3    = 200
+qi1_range   = 5e-4
+qi2_range   = 7.5e-3
+qi3_range   = 7.5e-3
+zeta_v_fwhm = 5.3e-4
+zeta_h_fwhm = 0.0
+NA_rms      = 3.1106382978723403e-4
+eps_rms     = 6.0e-5
+D           = 0.000565685424949238
+d1          = 0.274
+beamstop    = true
+bs_height   = 25e-3
+aperture    = true
+knife_edge  = false
+dphi_range  = 0.0
+
+[scan.phi]
+range = 6e-4
+steps = 21
+
+[crystal]
+mode = "random_dislocations"
+[crystal.random_dislocations]
+ndis = 4
+sigma = 5.0
+min_distance = 4.0
+seed = 1
+
+[io]
+include_perfect_crystal = false
+write_strain_provenance = false
+
+[postprocess]
+enabled = false
