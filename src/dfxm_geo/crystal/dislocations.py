@@ -8,12 +8,13 @@ Public functions:
     multi_dislocs_parallel — internal worker for parallel ndis>100 path.
 """
 
+import math
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
 from joblib import cpu_count
-from numba import jit
+from numba import jit, njit
 
 from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
 
@@ -395,3 +396,158 @@ def Fd_find_multi_dislocs_mixed(
         Fg_sum += Fg_one - I
 
     return Fg_sum + I
+
+
+@njit(cache=True, nogil=True, fastmath=False)
+def _population_hg_kernel(
+    rl_um: np.ndarray,  # (3, X) float64, MICROMETRES
+    M: np.ndarray,  # (N, 3, 3) float64 = Ud.T @ Us.T @ S.T @ Theta
+    offset: np.ndarray,  # (N, 3) float64, micrometres
+    Ud: np.ndarray,  # (N, 3, 3) float64
+    cos_rot: np.ndarray,  # (N,) float64
+    sin_rot: np.ndarray,  # (N,) float64
+    b: float,
+    ny: float,
+    Hg_out: np.ndarray,  # (X, 3, 3) float64  (written in place)
+) -> None:
+    """Fused population displacement-gradient kernel: rl -> Hg, in one pass.
+
+    Replaces the NumPy composition
+        Fd_find_multi_dislocs_mixed (per-dislocation field + Ud rotation + sum)
+        -> fast_inverse2 -> transpose - I.
+    Looping dislocations *inside* the ray loop keeps it flat in memory whether
+    N (ndis) is 4 or 200 (a NumPy broadcast would materialize (N,X,3,3)).
+    fastmath=False keeps reassociation tame so parity holds at rtol=1e-12.
+    See math reference in the Phase 1 plan
+    (docs/superpowers/plans/2026-05-27-find-hg-numba-fusion.md).
+    """
+    X = rl_um.shape[1]
+    N = M.shape[0]
+    alpha = 1e-20
+    bf = b / (4.0 * math.pi * (1.0 - ny))
+    bf1 = b / (2.0 * math.pi)
+
+    # Per-ray scratch reused across iterations (no per-ray heap allocation).
+    G = np.zeros((3, 3))
+    Tmp = np.zeros((3, 3))
+
+    for x in range(X):
+        rx = rl_um[0, x]
+        ry = rl_um[1, x]
+        rz = rl_um[2, x]
+
+        # Fg accumulator = I + sum_d Ud_d @ G_d @ Ud_d.T
+        f00 = 1.0
+        f01 = 0.0
+        f02 = 0.0
+        f10 = 0.0
+        f11 = 1.0
+        f12 = 0.0
+        f20 = 0.0
+        f21 = 0.0
+        f22 = 1.0
+
+        for d in range(N):
+            dx = rx - offset[d, 0]
+            dy = ry - offset[d, 1]
+            dz = rz - offset[d, 2]
+            rd0 = M[d, 0, 0] * dx + M[d, 0, 1] * dy + M[d, 0, 2] * dz
+            rd1 = M[d, 1, 0] * dx + M[d, 1, 1] * dy + M[d, 1, 2] * dz
+            rd2 = M[d, 2, 0] * dx + M[d, 2, 1] * dy + M[d, 2, 2] * dz
+
+            sqx = rd0 * rd0
+            sqy = rd1 * rd1
+            sqz = rd2 * rd2
+            denom = (sqx + sqy) * (sqx + sqy) + alpha
+            nyf = 2.0 * ny * (sqx + sqy)
+            c = cos_rot[d]
+            s = sin_rot[d]
+            denom1 = sqz + sqy + alpha
+
+            # Pure-field gradient G (= Fdd - I); only 5 entries are nonzero.
+            G[0, 0] = -rd1 * (3.0 * sqx + sqy - nyf) / denom * bf * c
+            G[0, 1] = rd0 * (3.0 * sqx + sqy - nyf) / denom * bf * c + (-rd2 / denom1) * bf1 * s
+            G[0, 2] = (rd1 / denom1) * bf1 * s
+            G[1, 0] = -rd0 * (3.0 * sqy + sqx - nyf) / denom * bf * c
+            G[1, 1] = rd1 * (sqx - sqy + nyf) / denom * bf * c
+            G[1, 2] = 0.0
+            G[2, 0] = 0.0
+            G[2, 1] = 0.0
+            G[2, 2] = 0.0
+
+            # Tmp = G @ Ud_d.T  ; Tmp[a,col] = sum_j G[a,j] * Ud[d,col,j]
+            for a in range(3):
+                for col in range(3):
+                    acc = 0.0
+                    for j in range(3):
+                        acc += G[a, j] * Ud[d, col, j]
+                    Tmp[a, col] = acc
+
+            # contribution = Ud_d @ Tmp ; accumulate into Fg
+            f00 += Ud[d, 0, 0] * Tmp[0, 0] + Ud[d, 0, 1] * Tmp[1, 0] + Ud[d, 0, 2] * Tmp[2, 0]
+            f01 += Ud[d, 0, 0] * Tmp[0, 1] + Ud[d, 0, 1] * Tmp[1, 1] + Ud[d, 0, 2] * Tmp[2, 1]
+            f02 += Ud[d, 0, 0] * Tmp[0, 2] + Ud[d, 0, 1] * Tmp[1, 2] + Ud[d, 0, 2] * Tmp[2, 2]
+            f10 += Ud[d, 1, 0] * Tmp[0, 0] + Ud[d, 1, 1] * Tmp[1, 0] + Ud[d, 1, 2] * Tmp[2, 0]
+            f11 += Ud[d, 1, 0] * Tmp[0, 1] + Ud[d, 1, 1] * Tmp[1, 1] + Ud[d, 1, 2] * Tmp[2, 1]
+            f12 += Ud[d, 1, 0] * Tmp[0, 2] + Ud[d, 1, 1] * Tmp[1, 2] + Ud[d, 1, 2] * Tmp[2, 2]
+            f20 += Ud[d, 2, 0] * Tmp[0, 0] + Ud[d, 2, 1] * Tmp[1, 0] + Ud[d, 2, 2] * Tmp[2, 0]
+            f21 += Ud[d, 2, 0] * Tmp[0, 1] + Ud[d, 2, 1] * Tmp[1, 1] + Ud[d, 2, 2] * Tmp[2, 1]
+            f22 += Ud[d, 2, 0] * Tmp[0, 2] + Ud[d, 2, 1] * Tmp[1, 2] + Ud[d, 2, 2] * Tmp[2, 2]
+
+        # Analytic 3x3 inverse of Fg (mirrors fast_inverse2), then Hg = inv.T - I.
+        c00 = f11 * f22 - f12 * f21
+        c10 = -(f10 * f22 - f12 * f20)
+        c20 = f10 * f21 - f11 * f20
+        idet = 1.0 / (f00 * c00 + f01 * c10 + f02 * c20)
+        i00 = c00 * idet
+        i01 = -idet * (f01 * f22 - f02 * f21)
+        i02 = idet * (f01 * f12 - f02 * f11)
+        i10 = c10 * idet
+        i11 = idet * (f00 * f22 - f02 * f20)
+        i12 = -idet * (f00 * f12 - f02 * f10)
+        i20 = c20 * idet
+        i21 = -idet * (f00 * f21 - f01 * f20)
+        i22 = idet * (f00 * f11 - f01 * f10)
+
+        # Hg = transpose(inv) - I  =>  Hg[i,j] = inv[j,i] - (i==j)
+        Hg_out[x, 0, 0] = i00 - 1.0
+        Hg_out[x, 0, 1] = i10
+        Hg_out[x, 0, 2] = i20
+        Hg_out[x, 1, 0] = i01
+        Hg_out[x, 1, 1] = i11 - 1.0
+        Hg_out[x, 1, 2] = i21
+        Hg_out[x, 2, 0] = i02
+        Hg_out[x, 2, 1] = i12
+        Hg_out[x, 2, 2] = i22 - 1.0
+
+
+def find_hg_population(
+    rl_um: np.ndarray,
+    M: np.ndarray,
+    offset: np.ndarray,
+    Ud: np.ndarray,
+    cos_rot: np.ndarray,
+    sin_rot: np.ndarray,
+    *,
+    b: float = BURGERS_VECTOR,
+    ny: float = POISSON_RATIO,
+) -> np.ndarray:
+    """NumPy-facing wrapper around ``_population_hg_kernel``.
+
+    Allocates the (X, 3, 3) output and ensures C-contiguous float64 inputs the
+    kernel expects. ``rl_um`` is the lab-frame ray grid in MICROMETRES.
+    """
+    X = rl_um.shape[1]
+    Hg_out = np.empty((X, 3, 3), dtype=np.float64)
+    _population_hg_kernel(
+        np.ascontiguousarray(rl_um, dtype=np.float64),
+        np.ascontiguousarray(M, dtype=np.float64),
+        np.ascontiguousarray(offset, dtype=np.float64),
+        np.ascontiguousarray(Ud, dtype=np.float64),
+        np.ascontiguousarray(cos_rot, dtype=np.float64),
+        np.ascontiguousarray(sin_rot, dtype=np.float64),
+        float(b),
+        float(ny),
+        Hg_out,
+    )
+    return Hg_out
