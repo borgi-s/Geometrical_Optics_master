@@ -1,21 +1,24 @@
 #!/usr/bin/env python
-"""Generate a starter config sweep for the in-node fan-out launcher.
+"""Generate a representative config sweep for the in-node fan-out launcher.
 
 Emits forward-config TOMLs into ``configs/sweep/`` for ``scripts/fanout.py`` /
-``lsf/fanout.bsub`` (which default to ``MANIFEST=configs/sweep``). This first
-sweep varies ``random_dislocations`` ndis x seed; every config sets
+``lsf/fanout.bsub`` (which default to ``MANIFEST=configs/sweep``). The sweep
+varies ``random_dislocations`` ndis x seed; every config sets
 ``write_strain_provenance = false`` (drops the ~106 MB/config Hg dump -> slim
-HDF5) and a modest rocking phi scan. The ``[reciprocal]`` block mirrors
+HDF5) and a 2D phi x chi "mosa" scan (PHI_STEPS x CHI_STEPS frames per config) so
+per-config wall time is representative of a real DFXM mosaicity stack (and
+amortizes the one-time numba JIT/import cost, which dominated the 21-frame
+first-light run). The ``[reciprocal]`` block mirrors
 ``configs/profile_rocking.toml`` so the bootstrapped Al 111 @ 17 keV kernel
 applies (run ``dfxm-bootstrap --if-missing --config configs/profile_rocking.toml``
 first on a fresh machine).
 
 Run:  python scripts/gen_sweep_configs.py
 
-This is the *starter* for the 100k-image ML sweep — extend ``NDIS``/``SEEDS``
-(or add structure variation) to scale up. With 8 configs x 21 frames this is
-~168 images; the real run grows the grids until ``8 configs x frames`` per wave
-fills the node and the total reaches ~100k.
+Sizing run: 8 configs x (21x21=441) frames = ~3528 images. Run it at
+``-n 32`` / N_WORKERS=8 x THREADS_PER_WORKER=4 (full hpc node, warm cache) to
+measure steady-state per-config throughput, then extend ``NDIS``/``SEEDS`` (or
+add structure variation) until the total reaches ~100k.
 """
 
 from __future__ import annotations
@@ -25,6 +28,10 @@ from pathlib import Path
 # Sweep grid — extend these for the real 100k run.
 NDIS = [2, 4, 8, 16]
 SEEDS = [1, 2]
+
+# 2D phi x chi "mosa" scan: n_frames = PHI_STEPS * CHI_STEPS per config.
+PHI_STEPS = 21
+CHI_STEPS = 21
 
 # Mirrors configs/profile_rocking.toml [reciprocal] so the bootstrapped
 # Al 111 @ 17 keV kernel matches. beamstop=true -> MC kernel path.
@@ -57,7 +64,8 @@ def config_text(ndis: int, seed: int) -> str:
     """One forward-config TOML for the given dislocation count + seed."""
     return (
         _RECIPROCAL
-        + "\n[scan.phi]\nrange = 6e-4\nsteps = 21\n"
+        + f"\n[scan.phi]\nrange = 6e-4\nsteps = {PHI_STEPS}\n"
+        + f"\n[scan.chi]\nrange = 6e-4\nsteps = {CHI_STEPS}\n"
         + '\n[crystal]\nmode = "random_dislocations"\n'
         + "[crystal.random_dislocations]\n"
         + f"ndis = {ndis}\nsigma = 5.0\nmin_distance = 4.0\nseed = {seed}\n"

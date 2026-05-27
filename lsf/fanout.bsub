@@ -17,7 +17,9 @@
                                         # (near-exclusive). Do NOT add `-x` —
                                         # the hpc queue rejects EXCLUSIVE jobs.
                                         # Query `bhosts hpc` if node size differs.
-#BSUB -R "rusage[mem=4GB]"
+#BSUB -R "rusage[mem=2GB]"              # PER-SLOT on DTU LSF (-> 64 GB at -n 32);
+                                        # real peak ~1 GB total, so this is ample
+                                        # and schedules easier than 4 GB/slot.
 #BSUB -R "span[hosts=1]"                # single host — in-node fan-out
 #BSUB -o logs/fanout-%J.out
 #BSUB -e logs/fanout-%J.err

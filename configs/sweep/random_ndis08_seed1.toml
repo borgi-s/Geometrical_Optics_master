@@ -24,6 +24,10 @@ dphi_range  = 0.0
 range = 6e-4
 steps = 21
 
+[scan.chi]
+range = 6e-4
+steps = 21
+
 [crystal]
 mode = "random_dislocations"
 [crystal.random_dislocations]
