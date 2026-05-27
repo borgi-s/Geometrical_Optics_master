@@ -36,8 +36,11 @@ pip install -e ".[dev]"
 # Sanity: tests green before profiling.
 python -m pytest -q
 
-# Generate the resolution kernel once (login node, ~50 s).
-dfxm-bootstrap --if-missing --config configs/default.toml
+# Generate the resolution kernel once (login node, ~50 s). We use
+# profile_rocking.toml — its [reciprocal] block matches the packaged default,
+# and it exists at the repo root (configs/default.toml does not; the canonical
+# default lives under src/dfxm_geo/data/configs/).
+dfxm-bootstrap --if-missing --config configs/profile_rocking.toml
 ```
 
 ## 2. Submit

@@ -53,8 +53,11 @@ fi
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate dfxm-geo
 
-# Stage 0 — ensure the resolution kernel exists (idempotent).
-dfxm-bootstrap --if-missing --config "${WORKDIR}/configs/default.toml"
+# Stage 0 — ensure the resolution kernel exists (idempotent). We bootstrap from
+# profile_rocking.toml: its [reciprocal] block is identical to the packaged
+# default config, and unlike `configs/default.toml` it actually exists at the
+# repo root (the canonical default lives under src/dfxm_geo/data/configs/).
+dfxm-bootstrap --if-missing --config "${WORKDIR}/configs/profile_rocking.toml"
 
 # Stage 1 — single-thread cProfile for both crystal variants.
 python scripts/profile_forward.py --config configs/profile_rocking.toml        --output "${OUTROOT}/centered"
