@@ -37,6 +37,12 @@ from dfxm_geo.direct_space import forward_model as _fm
 # re-exported here so the HDF5 writers and the legacy npy writer share one cap.
 from dfxm_geo.io.images import _auto_max_workers
 
+# Detector image storage dtype. float32 is lossless-enough for the simulated
+# intensities (the forward model computes in float64; the ~7 significant
+# decimal digits of float32 are well below shot-noise) and halves on-disk size
+# vs float64. Phase 2a of the forward-throughput arc.
+DETECTOR_DTYPE = np.float32
+
 # Output layout constants (v1.2.0).
 MASTER_FORWARD = "dfxm_geo.h5"
 MASTER_IDENTIFY = "dfxm_identify.h5"
@@ -150,6 +156,7 @@ def _create_detector_skeleton(
         img = det.create_dataset(
             "image",
             data=data,
+            dtype=DETECTOR_DTYPE,
             chunks=(1, height, width),
             compression="gzip",
             compression_opts=4,
@@ -159,7 +166,7 @@ def _create_detector_skeleton(
         img = det.create_dataset(
             "image",
             shape=(n_frames, height, width),
-            dtype=np.float64,
+            dtype=DETECTOR_DTYPE,
             chunks=(1, height, width),
             compression="gzip",
             compression_opts=4,
@@ -651,6 +658,7 @@ def write_simulation_h5(
     scanned_axes: list[str] | None = None,
     positioners: dict[str, np.ndarray | float] | None = None,
     Hg_provider: Callable[[float], tuple[np.ndarray, np.ndarray]] | None = None,
+    write_strain_provenance: bool = True,
 ) -> None:
     """One-call entry point for forward mode, v1.2.0 layout.
 
@@ -789,6 +797,14 @@ def write_simulation_h5(
             # mode; centered/random_dislocations pass None and omit the key.
             if sample_dis is not None:
                 sample["dis"] = float(sample_dis)
+            dfxm_geo_meta: dict = {
+                "q_hkl": q_hkl,
+                "theta": float(_fm.theta),
+                "psize": float(_fm.psize),
+                "zl_rms": float(_fm.zl_rms),
+            }
+            if write_strain_provenance:
+                dfxm_geo_meta["Hg"] = Hg_for_scan
             master.add_scan(
                 scan_id=f"{scan_idx}.1",
                 title=title,
@@ -803,12 +819,6 @@ def write_simulation_h5(
                         DETECTOR_INTERNAL_PATH,
                     )
                 },
-                dfxm_geo={
-                    "Hg": Hg_for_scan,
-                    "q_hkl": q_hkl,
-                    "theta": float(_fm.theta),
-                    "psize": float(_fm.psize),
-                    "zl_rms": float(_fm.zl_rms),
-                },
+                dfxm_geo=dfxm_geo_meta,
                 attrs=attrs_1_1,
             )

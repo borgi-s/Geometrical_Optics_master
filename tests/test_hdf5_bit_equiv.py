@@ -71,8 +71,13 @@ def test_hdf5_writer_bit_equivalent_to_legacy_npy_golden(tmp_path: Path) -> None
     with h5py.File(out, "r") as f:
         actual_full = f["/entry_0000/dfxm_sim_detector/image"][...]
     actual_crop = actual_full[:, 322:330, 51:59]
-    np.testing.assert_array_equal(
-        actual_crop,
+    # float32 detector storage (Phase 2a): compare at float32 tolerance.
+    # The legacy golden is float64; the stored stack is now float32, so the
+    # only difference is float32 rounding (~1e-7 relative).
+    np.testing.assert_allclose(
+        actual_crop.astype(np.float64),
         expected,
+        rtol=1e-6,
+        atol=1e-6,
         err_msg="HDF5 writer output deviates from legacy .npy writer at 8x8 corner",
     )
