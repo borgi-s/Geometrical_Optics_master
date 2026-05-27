@@ -75,12 +75,13 @@ def test_bincount_scatter_empty_input() -> None:
     assert np.all(im == 0.0)
 
 
-def test_mc_lut_scatter_matches_numpy_chain() -> None:
-    """The numba _mc_lut_scatter is bit-identical to the numpy chain it
-    replaced: 3x np.floor().astype(int16) -> in-bounds mask -> Resq_i gather ->
-    np.bincount(weights=float32). Exercises in-bounds rays plus every flavour
-    of out-of-bounds (negative index and index >= npoints on each axis), which
-    must be dropped exactly as the bool mask dropped them.
+def test_mc_lut_forward_matches_numpy_chain() -> None:
+    """The numba _mc_lut_forward is bit-identical to the full numpy per-frame
+    chain it replaced: qc = base_qc + ang -> qi = Theta @ qc ->
+    3x np.floor().astype(int16) -> in-bounds mask -> Resq_i gather ->
+    np.bincount(weights=float32). Exercises the folded qc-add and Theta matmul
+    plus in-bounds rays and every flavour of out-of-bounds (negative index and
+    index >= npoints on each axis), which must drop exactly as the mask did.
     """
     import dfxm_geo.direct_space.forward_model as fm
 
@@ -92,17 +93,22 @@ def test_mc_lut_scatter_matches_numpy_chain() -> None:
     qi1_start, qi1_step = -0.5, 0.1
     qi2_start, qi2_step = -0.3, 0.07
     qi3_start, qi3_step = -0.2, 0.05
-    # Draw finite qi spanning well past the grid on both ends so a healthy
-    # fraction of rays are rejected (index < 0 and index >= npoints).
+
+    # A non-trivial (non-orthonormal) Theta so the folded 3-term matmul is
+    # genuinely exercised, plus a goniometer offset vector.
+    Theta = np.array([[0.9, 0.1, -0.2], [0.05, 1.1, 0.3], [-0.15, 0.2, 0.95]], dtype=np.float64)
+    ang0, ang1, ang2 = 0.013, -0.021, 0.007
+
+    # Draw base_qc so the resulting qi spans well past the grid on both ends
+    # (so a healthy fraction of rays are rejected: index < 0 and >= npoints).
     n_rays = 8000
-    qi = np.empty((3, n_rays))
-    qi[0] = rng.uniform(qi1_start - 0.3, qi1_start + np1 * qi1_step + 0.3, n_rays)
-    qi[1] = rng.uniform(qi2_start - 0.3, qi2_start + np2 * qi2_step + 0.3, n_rays)
-    qi[2] = rng.uniform(qi3_start - 0.3, qi3_start + np3 * qi3_step + 0.3, n_rays)
+    base_qc = rng.uniform(-0.8, 0.8, size=(3, n_rays))
     prob_z = rng.uniform(0.1, 1.0, n_rays)
     flat_indices = rng.integers(0, H * W, size=n_rays, dtype=np.int64)
 
     # numpy reference: the exact chain forward_from_static used to run.
+    qc = base_qc + np.asarray([[ang0], [ang1], [ang2]])
+    qi = Theta @ qc
     i1 = np.floor((qi[0] - qi1_start) / qi1_step).astype(np.int16)
     i2 = np.floor((qi[1] - qi2_start) / qi2_step).astype(np.int16)
     i3 = np.floor((qi[2] - qi3_start) / qi3_step).astype(np.int16)
@@ -115,8 +121,12 @@ def test_mc_lut_scatter_matches_numpy_chain() -> None:
 
     # numba kernel scatters directly into a flat image view.
     im_flat = np.zeros(H * W)
-    fm._mc_lut_scatter(
-        qi,
+    fm._mc_lut_forward(
+        np.ascontiguousarray(base_qc),
+        ang0,
+        ang1,
+        ang2,
+        Theta,
         prob_z,
         flat_indices,
         np.ascontiguousarray(Resq.reshape(-1)),

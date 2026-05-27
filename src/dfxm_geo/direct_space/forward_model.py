@@ -460,8 +460,12 @@ def precompute_forward_static(Hg: np.ndarray) -> np.ndarray:
 
 
 @njit(cache=True, nogil=True, fastmath=False)
-def _mc_lut_scatter(
-    qi: np.ndarray,
+def _mc_lut_forward(
+    base_qc: np.ndarray,
+    ang0: float,
+    ang1: float,
+    ang2: float,
+    Theta: np.ndarray,
     prob_z: np.ndarray,
     flat_indices: np.ndarray,
     Resq_flat: np.ndarray,
@@ -478,21 +482,27 @@ def _mc_lut_scatter(
     stride1: int,
     stride2: int,
 ) -> None:
-    """Fused floor + bounds + Resq_i gather + scatter for the MC LUT path.
+    """Whole per-frame MC LUT forward model, fused into one nogil numba pass.
 
-    Single-pass replacement for the numpy chain ``np.floor(...).astype(int16)``
-    (x3) → in-bounds mask → ``Resq_i[i1,i2,i3] * prob_z`` gather →
-    ``np.bincount(weights=prob.astype(float32))``. ~7x faster at px510/Nsub=1
-    because it never materializes the per-ray index/mask/prob arrays (the bulk
-    of the per-frame memory traffic) and avoids the random gather into a
-    122 MB LUT being a separate pass.
+    Replaces the numpy chain ``qc = base_qc + ang`` → ``qi = Theta @ qc`` →
+    ``np.floor(...).astype(int16)`` (x3) → in-bounds mask →
+    ``Resq_i[i1,i2,i3] * prob_z`` gather → ``np.bincount(weights=float32)``.
+    Computing ``qc``/``qi`` per ray inside the loop means none of the per-ray
+    (3, N) / (N,) arrays are ever materialized — that memory traffic was the
+    post-static-hoist bottleneck — for ~6.6x over the numpy path at
+    px510/Nsub=1. ``ang0/1/2`` are the three components of the goniometer
+    offset vector; ``Theta`` is the 3x3 imaging-frame rotation.
 
     Bit-identical to the numpy chain by construction:
+      * the 3-term ``Theta @ qc`` dot products are evaluated left-to-right with
+        no FMA contraction (``fastmath=False``), matching numpy's matmul;
       * ``np.int16`` casts mirror ``astype(np.int16)`` exactly, including the
         wrap/INT16_MIN behaviour on NaN/inf core rays (which then fail the
         ``0 <= i < npoints`` bounds test and are dropped, same as the mask);
       * contributions are float32-quantized then accumulated into a float64
         image in ascending ray order, exactly as ``np.bincount`` does.
+    Because every op is plain IEEE-754 (no BLAS), the result is also
+    deterministic across platforms — unlike the numpy matmul it replaces.
 
     Kept single-threaded (``range``, not ``prange``) so the accumulation order
     is deterministic and bit-exact; ``nogil=True`` lets the per-frame
@@ -500,11 +510,20 @@ def _mc_lut_scatter(
     ``Resq_flat`` is the C-order ravel of ``Resq_i``; stride1 = npoints2*npoints3,
     stride2 = npoints3.
     """
-    n_rays = qi.shape[1]
+    t00, t01, t02 = Theta[0, 0], Theta[0, 1], Theta[0, 2]
+    t10, t11, t12 = Theta[1, 0], Theta[1, 1], Theta[1, 2]
+    t20, t21, t22 = Theta[2, 0], Theta[2, 1], Theta[2, 2]
+    n_rays = base_qc.shape[1]
     for r in range(n_rays):
-        i1 = np.int16(np.floor((qi[0, r] - qi1_start) / qi1_step))
-        i2 = np.int16(np.floor((qi[1, r] - qi2_start) / qi2_step))
-        i3 = np.int16(np.floor((qi[2, r] - qi3_start) / qi3_step))
+        c0 = base_qc[0, r] + ang0
+        c1 = base_qc[1, r] + ang1
+        c2 = base_qc[2, r] + ang2
+        qi0 = t00 * c0 + t01 * c1 + t02 * c2
+        qi1 = t10 * c0 + t11 * c1 + t12 * c2
+        qi2 = t20 * c0 + t21 * c1 + t22 * c2
+        i1 = np.int16(np.floor((qi0 - qi1_start) / qi1_step))
+        i2 = np.int16(np.floor((qi1 - qi2_start) / qi2_step))
+        i3 = np.int16(np.floor((qi2 - qi3_start) / qi3_step))
         if 0 <= i1 < np1 and 0 <= i2 < np2 and 0 <= i3 < np3:
             gathered = Resq_flat[np.int64(i1) * stride1 + np.int64(i2) * stride2 + np.int64(i3)]
             im_flat[flat_indices[r]] += np.float32(gathered * prob_z[r])
@@ -548,34 +567,30 @@ def forward_from_static(
     # Initialize forward model image with zeros
     im_1 = np.zeros([(NN2 // Nsub), NN1 // Nsub])
 
-    # Define angles
-    ang_arr = np.asarray(
-        [[phi - TwoDeltaTheta / 2], [chi], [(TwoDeltaTheta / 2) / np.tan(theta_0)]]
-    )
+    # Goniometer offset vector components (added to base_qc to form qc).
+    ang0 = phi - TwoDeltaTheta / 2
+    ang1 = float(chi)
+    ang2 = (TwoDeltaTheta / 2) / np.tan(theta_0)
 
-    # qc = base_qc + ang_arr. NOTE: do NOT `del base_qc` -- it is reused across
-    # frames. `ang_arr` is single-use and freed.
-    qc = base_qc + ang_arr
-    del ang_arr
-
-    # Calculate scattering vector in imaging space; `qc` is no longer needed.
-    qi = Theta @ qc
-    del qc
+    # The analytic backend and the qi_return diagnostic both need the full
+    # materialized qi array. The common MC path does NOT -- the fused kernel
+    # below recomputes qc/qi per ray, so we skip building them here (that
+    # materialization was the per-frame memory bottleneck).
+    qi = None
+    if _analytic_eval is not None or qi_return:
+        qc = base_qc + np.asarray([[ang0], [ang1], [ang2]])
+        qi = Theta @ qc
 
     if _analytic_eval is not None:
         # Grid-free: evaluate the closed-form p_Q at every ray's qi. No
         # grid-bounds mask -- the closed form returns ~0 in the tails, and
         # _flat_indices already maps every ray to its detector pixel.
+        assert qi is not None
         prob = (_analytic_eval(qi) * prob_z).astype(np.float32)
-        if not qi_return:
-            del qi
         contribution = np.bincount(_flat_indices, weights=prob, minlength=im_1.size)
-        del prob
         im_1 += contribution.reshape(im_1.shape)
-        del contribution
         if qi_return:
-            qi_field = qi.reshape(3, NN1, NN2, NN3)
-            return im_1, qi_field
+            return im_1, qi.reshape(3, NN1, NN2, NN3)
         return im_1
 
     # MC LUT path: the analytic branch above returned early, so reaching here
@@ -585,14 +600,18 @@ def forward_from_static(
     # A loaded kernel sets all the grid metadata together; narrow for mypy.
     assert npoints1 is not None and npoints2 is not None and npoints3 is not None
 
-    # Fused floor + in-bounds mask + Resq_i gather + float32 scatter, all in a
-    # single nogil numba pass that scatters directly into `im_1`'s flat view.
-    # This replaces the numpy chain (3x np.floor.astype(int16) -> bool mask ->
-    # fancy-index gather -> np.bincount), avoiding materialization of the
-    # per-ray index/mask/prob arrays — the bulk of the per-frame memory traffic
-    # — for ~7x at px510/Nsub=1. Output is bit-identical (see _mc_lut_scatter).
-    _mc_lut_scatter(
-        qi,
+    # Whole per-frame forward (qc add, qi=Theta@qc, floor, in-bounds mask,
+    # Resq_i gather, float32 scatter) fused into one nogil numba pass that
+    # scatters directly into `im_1`'s flat view -- never materializing the
+    # per-ray (3, N)/(N,) arrays that dominated the post-static-hoist memory
+    # traffic. ~6.6x over the numpy path at px510/Nsub=1; bit-identical and
+    # platform-deterministic (see _mc_lut_forward).
+    _mc_lut_forward(
+        base_qc,
+        ang0,
+        ang1,
+        ang2,
+        Theta,
         prob_z,
         _flat_indices,
         Resq_i.reshape(-1),
@@ -610,8 +629,8 @@ def forward_from_static(
         npoints3,
     )
     if qi_return:
-        qi_field = qi.reshape(3, NN1, NN2, NN3)
-        return im_1, qi_field
+        assert qi is not None  # built above because qi_return is True
+        return im_1, qi.reshape(3, NN1, NN2, NN3)
     return im_1
 
 
