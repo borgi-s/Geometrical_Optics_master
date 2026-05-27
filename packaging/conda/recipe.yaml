@@ -18,10 +18,22 @@ build:
   number: 0
   noarch: python
   script: ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+  python:
+    # Declare the console scripts so rattler-build generates OS-specific
+    # launchers at install time. Without this, the auto-detected Windows
+    # .exe launcher is broken (exits 1 with no output); the package code
+    # itself is fine on Windows.
+    entry_points:
+      - dfxm-forward = dfxm_geo.pipeline:cli_main
+      - dfxm-identify = dfxm_geo.pipeline:cli_main_identify
+      - dfxm-bootstrap = dfxm_geo.reciprocal_space.kernel:cli_main
+      - dfxm-init = dfxm_geo.init_cmd:cli_main
+      - dfxm-migrate-output = dfxm_geo.io.migrate:cli_main_npy_to_h5
+      - dfxm-migrate-h5 = dfxm_geo.io.migrate:cli_main_h5_to_h5
 
 requirements:
   host:
-    - python ${{ python_min }}
+    - python ${{ python_min }}.*
     - pip
     - setuptools >=68
     - wheel
@@ -60,6 +72,11 @@ tests:
       - dfxm-identify --help
       - dfxm-bootstrap --help
       - dfxm-init --help
+    # Pin the script-test env to the minimum supported Python (3.11), matching
+    # the import test. dfxm-geo targets Python 3.11–3.12.
+    requirements:
+      run:
+        - python ${{ python_min }}.*
 
 about:
   homepage: https://github.com/borgi-s/Geometrical_Optics_master
