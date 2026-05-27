@@ -1005,4 +1005,27 @@ def Find_Hg_from_population(
     Returns:
         (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
     """
-    return _find_hg_from_population_numpy(population, h, k, l, S=S, rl=rl)
+    from dfxm_geo.crystal.dislocations import find_hg_population
+
+    rl_eff = rl if rl is not None else globals()["rl"]
+    Q_norm = np.sqrt(h * h + k * k + l * l)
+    q_hkl = np.asarray([h, k, l]) / Q_norm
+
+    n = len(population.positions_um)
+    # Collapse the per-dislocation transform to M_d = Ud_d.T @ Us.T @ S.T @ Theta.
+    base = Us.T @ S.T @ Theta  # (3, 3), shared across dislocations
+    M = np.empty((n, 3, 3))
+    Ud = np.empty((n, 3, 3))
+    offset = np.empty((n, 3))
+    for i in range(n):
+        Ud[i] = population.Ud[i]
+        M[i] = population.Ud[i].T @ base
+        offset[i] = population.positions_um[i]
+    # Population dislocations are pure edge (rotation_deg = 0): cos=1, sin=0.
+    cos_rot = np.ones(n)
+    sin_rot = np.zeros(n)
+
+    # rl is in metres; the field formula expects micrometres (b in µm) — *1e6,
+    # exactly as the NumPy path and the reference disloc_identify.py do.
+    Hg = find_hg_population(rl_eff * 1e6, M, offset, Ud, cos_rot, sin_rot)
+    return Hg, q_hkl
