@@ -918,35 +918,22 @@ def build_dislocation_population(
     raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
 
 
-def Find_Hg_from_population(
+def _find_hg_from_population_numpy(
     population: DislocationPopulation,
-    h: int = -1,
-    k: int = 1,
-    l: int = -1,
+    h: int,
+    k: int,
+    l: int,
     *,
-    S: np.ndarray = _S_IDENTITY,
-    rl: np.ndarray | None = None,
+    S: np.ndarray,
+    rl: np.ndarray | None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Compute Hg + q_hkl from an arbitrary DislocationPopulation.
+    """Reference NumPy implementation of the population Hg field.
 
-    For mode='centered' (1 dislocation) and 'random_dislocations' (N drawn
-    dislocations). Mirrors `Find_Hg` but takes explicit positions + Ud matrices
-    instead of the wall-layout (dis, ndis) parameters.
-
-    Hg convention: same as `load_or_generate_Hg` — Hg = transpose(Fg^-1) - I
-    (displacement gradient, not deformation gradient), consistent with
-    `forward()` which uses Hg to compute scattering vectors.
-
-    Args:
-        population: DislocationPopulation from `build_dislocation_population`.
-        h, k, l: Miller indices of the active reflection.
-        S: 3x3 sample-remount rotation (default identity).
-        rl: Detector ray grid to evaluate the strain on. Defaults to the
-            module-level `fm.rl`. Pass `Z_shift(z_um)` to evaluate at a
-            non-zero sample-depth offset (z-scan support).
-
-    Returns:
-        (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
+    Kept verbatim as the parity oracle for the fused numba kernel
+    (see docs/superpowers/plans/2026-05-27-find-hg-numba-fusion.md). Composes
+    Fd_find_multi_dislocs_mixed (Fg) with fast_inverse2 (Fg -> Hg). Do not
+    "optimize" this; its whole purpose is to be the slow, obviously-correct
+    truth the kernel is checked against at rtol=1e-12.
     """
     from dfxm_geo.crystal.dislocations import Fd_find_multi_dislocs_mixed, MixedDislocSpec
 
@@ -985,4 +972,60 @@ def Find_Hg_from_population(
     Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1])
     Hg -= np.identity(3)
 
+    return Hg, q_hkl
+
+
+def Find_Hg_from_population(
+    population: DislocationPopulation,
+    h: int = -1,
+    k: int = 1,
+    l: int = -1,
+    *,
+    S: np.ndarray = _S_IDENTITY,
+    rl: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute Hg + q_hkl from an arbitrary DislocationPopulation.
+
+    For mode='centered' (1 dislocation) and 'random_dislocations' (N drawn
+    dislocations). Mirrors `Find_Hg` but takes explicit positions + Ud matrices
+    instead of the wall-layout (dis, ndis) parameters.
+
+    Hg convention: same as `load_or_generate_Hg` — Hg = transpose(Fg^-1) - I
+    (displacement gradient, not deformation gradient), consistent with
+    `forward()` which uses Hg to compute scattering vectors.
+
+    Args:
+        population: DislocationPopulation from `build_dislocation_population`.
+        h, k, l: Miller indices of the active reflection.
+        S: 3x3 sample-remount rotation (default identity).
+        rl: Detector ray grid to evaluate the strain on. Defaults to the
+            module-level `fm.rl`. Pass `Z_shift(z_um)` to evaluate at a
+            non-zero sample-depth offset (z-scan support).
+
+    Returns:
+        (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
+    """
+    from dfxm_geo.crystal.dislocations import find_hg_population
+
+    rl_eff = rl if rl is not None else globals()["rl"]
+    Q_norm = np.sqrt(h * h + k * k + l * l)
+    q_hkl = np.asarray([h, k, l]) / Q_norm
+
+    n = len(population.positions_um)
+    # Collapse the per-dislocation transform to M_d = Ud_d.T @ Us.T @ S.T @ Theta.
+    base = Us.T @ S.T @ Theta  # (3, 3), shared across dislocations
+    M = np.empty((n, 3, 3))
+    Ud = np.empty((n, 3, 3))
+    offset = np.empty((n, 3))
+    for i in range(n):
+        Ud[i] = population.Ud[i]
+        M[i] = population.Ud[i].T @ base
+        offset[i] = population.positions_um[i]
+    # Population dislocations are pure edge (rotation_deg = 0): cos=1, sin=0.
+    cos_rot = np.ones(n)
+    sin_rot = np.zeros(n)
+
+    # rl is in metres; the field formula expects micrometres (b in µm) — *1e6,
+    # exactly as the NumPy path and the reference disloc_identify.py do.
+    Hg = find_hg_population(rl_eff * 1e6, M, offset, Ud, cos_rot, sin_rot)
     return Hg, q_hkl
