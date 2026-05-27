@@ -51,17 +51,19 @@ def main() -> None:
 
     # phi/chi half-ranges: 5e-5 rad each.  Small enough that both linspace
     # endpoints (i.e. ±5e-5 rad) fall inside the rocking curve.
+    # NOTE: `save_images_parallel` consumes ranges as RADIANS (project-wide
+    # convention), so we pass the radian value directly. This MUST match the
+    # `TINY_HALF_RANGE_RAD = 5e-5` used by the consuming test
+    # (tests/test_hdf5_bit_equiv.py) or the two writers render different grids.
     _PHI_RAD = 5e-5
     _CHI_RAD = 5e-5
-    PHI_RANGE_DEG = _PHI_RAD * 180 / np.pi  # ≈ 0.002865°
-    CHI_RANGE_DEG = _CHI_RAD * 180 / np.pi  # ≈ 0.002865°
 
     with tempfile.TemporaryDirectory() as tmp:
         save_images_parallel(
             Hg,
-            phi_range=PHI_RANGE_DEG,
+            phi_range=_PHI_RAD,
             phi_steps=2,
-            chi_range=CHI_RANGE_DEG,
+            chi_range=_CHI_RAD,
             chi_steps=2,
             fpath=str(Path(tmp) / "stack"),
             fn_prefix="/golden_",
