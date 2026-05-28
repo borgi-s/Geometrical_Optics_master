@@ -45,6 +45,35 @@ Kwarg adaptations from the plan template
 - AnalyticResolution.__call__ expects qi shape (3, N); the full 3D grid is
   built with np.meshgrid(..., indexing='ij') and evaluated in one vectorized
   call.
+
+Wrong-eta discrimination check (non-vacuousness guard)
+--------------------------------------------------------
+The spec reviewer empirically demonstrated that at zeta_h=0 (isotropic NA),
+qroll and q2th have nearly identical widths (~5.85e-4 vs ~6.91e-4), so a 20
+degree eta rotation causes only ~2% width change per axis -- well within the
+5e-3 marginal-RMS tolerance.  A buggy MC that silently used eta=0 instead of
+eta=20.233 deg would score Pearson r=0.9941 and marginal RMS<=0.0018, both
+passing the tolerance tests.  To prevent this class of silent no-op bug, each
+non-zero-eta case also runs a **wrong-eta cross-test** using the 2D
+cross-covariance <qroll * q2th> in the joint qroll-q2th marginal.
+
+The key physics: eta applies R_x(eta) which rotates q in the (qroll, q2th)
+plane.  At eta=0 qroll and q2th are driven by independent instrument
+variables (xi vs eps/zeta_v), so their joint distribution has zero
+cross-covariance.  At eta != 0 the rotation mixes them, producing a
+nonzero <qroll * q2th> ~ -sin(2*eta)/2 * sigma^2.  This cross-covariance
+is:
+  - analytically zero at eta=0  (< 1e-20 numerically)
+  - clearly nonzero at eta=20.233 deg  (~-6.3e-9, both MC and analytic)
+  - ratio |cov_correct / cov_zero| > 1e6 -- unambiguous even at eta=10 deg
+
+We assert that the MC LUT cross-covariance has the SAME sign and is within
+2x of the analytic cross-covariance.  A buggy MC@eta=0 would have near-zero
+cross-covariance and fail this test.  Empirically observed values:
+  eta=20.233 deg: MC/analytic ratio ~1.003 (0.3% agreement)
+  eta=10 deg:     ratio expected similarly close.
+The discrimination check is skipped for eta=0 (cross-covariance is zero
+for both correct and wrong cases).
 """
 
 import numpy as np
@@ -157,12 +186,12 @@ def test_mc_vs_analytic_marginal_rms(theta: float, eta: float, tmp_path) -> None
     # ---- Pearson correlation (full 3D) --------------------------------------
     corr = float(np.corrcoef(lut.ravel(), analytic.ravel())[0, 1])
     assert corr >= _CORRELATION_TOL, (
-        f"MC↔analytic Pearson r = {corr:.4f} < {_CORRELATION_TOL} "
-        f"at θ={theta:.4f} rad, η={eta:.4f} rad"
+        f"MC vs analytic Pearson r = {corr:.4f} < {_CORRELATION_TOL} "
+        f"at theta={theta:.4f} rad, eta={eta:.4f} rad"
     )
 
     # ---- Marginal RMS (per axis) --------------------------------------------
-    for ax_idx, ax_name in [(0, "qrock_prime"), (1, "qroll"), (2, "q2th")]:
+    for ax_idx, ax_name in enumerate(["qrock_prime", "qroll", "q2th"]):
         sum_axes = tuple(i for i in range(3) if i != ax_idx)
         m_lut = lut.sum(axis=sum_axes)
         m_an = analytic.sum(axis=sum_axes)
@@ -170,7 +199,71 @@ def test_mc_vs_analytic_marginal_rms(theta: float, eta: float, tmp_path) -> None
         m_an_n = m_an / m_an.max()
         rms = float(np.sqrt(np.mean((m_lut_n - m_an_n) ** 2)))
         assert rms <= _MARGINAL_RMS_TOL, (
-            f"MC↔analytic marginal-{ax_name} RMS = {rms:.6f} "
+            f"MC vs analytic marginal-{ax_name} RMS = {rms:.6f} "
             f"exceeds {_MARGINAL_RMS_TOL} "
-            f"at θ={theta:.4f} rad, η={eta:.4f} rad"
+            f"at theta={theta:.4f} rad, eta={eta:.4f} rad"
+        )
+
+    # ---- Wrong-eta discrimination check ------------------------------------
+    # Guard against a silent eta no-op bug.  At zeta_h=0 the 1D marginals are
+    # nearly insensitive to eta rotations in the (qroll, q2th) plane (Pearson r
+    # gap < 0.001, marginal-RMS ratio ~ 1.0 -- verified empirically).  Instead
+    # we use the cross-covariance <qroll * q2th> of the 2D joint marginal.
+    # See the module docstring "Wrong-eta discrimination check" section for the
+    # full physics rationale.  Skipped for eta=0.
+    if eta != 0.0:
+        ar_wrong = AnalyticResolution(
+            theta=theta,
+            eta=0.0,  # deliberately wrong eta
+            zeta_v_fwhm=_ZETA_V_FWHM,
+            zeta_h_fwhm=_ZETA_H_FWHM,
+            NA_rms=_NA_RMS,
+            eps_rms=_EPS_RMS,
+            zeta_v_clip=_ZETA_V_CLIP,
+        )
+        analytic_wrong: np.ndarray = ar_wrong(qi_flat).reshape(_NP1, _NP2, _NP3)
+
+        # 2D joint marginal in the qroll-q2th plane (sum over qrock_prime=axis 0).
+        joint_lut = lut.sum(axis=0)  # (NP2, NP3)
+        joint_correct = analytic.sum(axis=0)
+        joint_wrong = analytic_wrong.sum(axis=0)
+
+        # Normalize to probability distributions for moment computation.
+        joint_lut_p = joint_lut / joint_lut.sum()
+        joint_correct_p = joint_correct / joint_correct.sum()
+        joint_wrong_p = joint_wrong / joint_wrong.sum()
+
+        # <qroll * q2th> = weighted sum of c2[i] * c3[j] over the joint distribution.
+        c2_grid, c3_grid = np.meshgrid(c2, c3, indexing="ij")
+        cross_cov_mc = float((joint_lut_p * c2_grid * c3_grid).sum())
+        cross_cov_correct = float((joint_correct_p * c2_grid * c3_grid).sum())
+        cross_cov_wrong = float((joint_wrong_p * c2_grid * c3_grid).sum())
+
+        print(
+            f"\nWrong-eta cross-covariance discriminator at "
+            f"theta={theta:.4f} rad, eta={eta:.4f} rad:\n"
+            f"  MC <qroll*q2th>           = {cross_cov_mc:.4e}\n"
+            f"  Analytic@correct_eta      = {cross_cov_correct:.4e}\n"
+            f"  Analytic@eta=0 (wrong)    = {cross_cov_wrong:.4e}\n"
+            f"  |MC / analytic_correct|   = {abs(cross_cov_mc / cross_cov_correct):.4f}"
+        )
+
+        # At eta != 0, the analytic cross-covariance is clearly nonzero
+        # (observed ~-6.3e-9 at eta=20 deg, ~-1.9e-9 at eta=10 deg).
+        # Assert the MC has the same sign — wrong-eta MC would be near-zero.
+        assert (cross_cov_mc > 0) == (cross_cov_correct > 0), (
+            f"Wrong-eta discrimination FAILED: MC <qroll*q2th> = {cross_cov_mc:.4e} "
+            f"has opposite sign to analytic@correct_eta = {cross_cov_correct:.4e}.  "
+            f"This indicates the eta rotation is not applied correctly in the MC."
+        )
+
+        # Assert the MC cross-covariance magnitude is within 2x of the analytic.
+        # At eta=0 the ratio would be effectively undefined (analytic ~0) — this
+        # is the exact case where a buggy no-op MC would fail the sign check above.
+        mc_to_analytic_ratio = abs(cross_cov_mc / cross_cov_correct)
+        assert 0.5 < mc_to_analytic_ratio < 2.0, (
+            f"MC <qroll*q2th> = {cross_cov_mc:.4e} differs from analytic "
+            f"{cross_cov_correct:.4e} by more than 2x (ratio={mc_to_analytic_ratio:.3f}).  "
+            f"Expected ratio in (0.5, 2.0) — the test uses 20 M rays which "
+            f"gives ~0.3% agreement empirically."
         )
