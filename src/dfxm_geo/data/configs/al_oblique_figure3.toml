@@ -14,12 +14,10 @@ mount_z  = [0, 0, 1]
 mode = "oblique"
 eta  = 0.353140                # 20.233° in radians
 
-[reflection]
-hkl = [-1, -1, 3]
-keV = 19.1
-
 [reciprocal]
-Nrays       = 1e8
+hkl         = [-1, -1, 3]
+keV         = 19.1
+Nrays       = 100_000_000
 npoints1    = 400
 npoints2    = 200
 npoints3    = 200

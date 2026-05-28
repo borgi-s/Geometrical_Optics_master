@@ -77,12 +77,17 @@ def _validate_eta_against_compute_omega_eta(
     keV: float,
     config_eta: float,
     *,
-    tol: float = 1e-6,
+    tol: float = 1e-3,
 ) -> tuple[float, float]:
     """Cross-check the config's eta against compute_omega_eta(mount, hkl, keV).
 
     Returns (theta_rad, omega_rad) of the matching ω-solution. Raises
     ValueError with a diff if neither (η₁, η₂) matches.
+
+    Default tol = 1e-3 rad (~0.06°): strict enough to catch user typos
+    (a wrong-η-by-degree fails), loose enough to accept paper-quoting
+    precision (e.g. "20.233°" rounds to 0.353142 rad while the solver
+    returns 0.353125 rad — a 1.5e-5 gap that's well below physical relevance).
     """
     geom = compute_omega_eta(mount, hkl, keV)
     if np.isnan(geom.omega_1) and np.isnan(geom.omega_2):
@@ -345,6 +350,7 @@ def generate_kernel(
         aperture=aperture,
         knife_edge=knife_edge,
         dphi_range=dphi_range,
+        eta=eta,
         output_path=output_path,
         kernel_meta=kernel_meta,
         rng=rng,
@@ -544,7 +550,6 @@ def cli_main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         reciprocal_kwargs["theta"] = theta_validated
-        reciprocal_kwargs["eta"] = config_eta
         omega_for_meta = omega_validated
         theta = theta_validated
 
