@@ -105,3 +105,27 @@ def R_lab_to_image(eta: float, theta: float) -> np.ndarray:
     the diffracted-beam direction in the image frame.
     """
     return _R_x(eta) @ _R_y(-2.0 * theta)
+
+
+def _solve_quadratic_in_tan_half(α0: float, α1: float, α2: float) -> tuple[float, float]:
+    """Solve eq A.7: (α₂ - α₀)s² + 2α₁s + (α₀ + α₂) = 0 for s = tan(ω/2).
+
+    Returns (s1, s2). When the discriminant < 0 both are NaN; when the
+    quadratic degenerates (α₂ - α₀ = 0) the single root is in s1 and s2 is NaN.
+    """
+    A = α2 - α0
+    B = 2.0 * α1
+    C = α0 + α2
+
+    if abs(A) < 1e-15:
+        # Linear case: B s + C = 0
+        if abs(B) < 1e-15:
+            return float("nan"), float("nan")
+        return -C / B, float("nan")
+
+    disc = B * B - 4.0 * A * C
+    if disc < 0.0:
+        return float("nan"), float("nan")
+
+    sqrt_disc = float(np.sqrt(disc))
+    return (-B + sqrt_disc) / (2.0 * A), (-B - sqrt_disc) / (2.0 * A)
