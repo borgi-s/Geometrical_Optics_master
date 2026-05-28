@@ -211,21 +211,24 @@ def Find_Hg(
     Q_norm = np.sqrt(h * h + k * k + l * l)  # We have assumed B_0 = I
     q_hkl = np.asarray([h, k, l]) / Q_norm
 
-    # The cache key must include every parameter that affects the rl ray grid
-    # shape: dis/psize/zl_rms determine the physics, Npixels/Nsub determine the
-    # detector ray-grid dimensions. Without Npixels/Nsub, changing those
-    # module-level constants silently loaded a wrong-shape cache (see
-    # `load_or_generate_Hg`'s shape guard).
+    # The cache key must include every parameter that affects the cached Fg
+    # array. dis/psize/zl_rms determine the physics; Npixels/Nsub determine the
+    # detector ray-grid dimensions (without them, changing those module-level
+    # constants silently loaded a wrong-shape cache — see `load_or_generate_Hg`'s
+    # shape guard); and `ndis` sets how many bipolar dislocation walls are summed
+    # into the field. `ndis` does *not* change the array shape, so the shape
+    # guard cannot catch a collision — two runs with the same geometry but
+    # different `ndis` would otherwise silently reuse each other's strain field.
     Fg_dir = _REPO_ROOT / "direct_space" / "deformation_gradient_tensors"
     Fg_dir.mkdir(parents=True, exist_ok=True)
 
-    # z-aware cache filename. When z_offset_um == 0.0, identical to v1.2.0
-    # filename — non-z scans hit the same cache file as before.
+    # z-aware cache filename. When z_offset_um == 0.0, the z suffix is omitted.
     z_suffix = "" if z_offset_um == 0.0 else f"_z{round(z_offset_um * 1000)}nm"
     Fg_path = str(
         Fg_dir
-        / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}{}.npy".format(
+        / "Fg_{}_ndis{}_{}nm_{}nm_px{}_sub{}_remount{}{}.npy".format(
             str(dis).replace(".", ""),
+            ndis,
             int(psize * 1e9),
             int(zl_rms * 2.35e9),
             Npixels,

@@ -279,9 +279,16 @@ def reciprocal_res_func(
     # % If the range is set too narrow such that some points falls outside ranges,
     # %             the fraction of points outside is returned as ratio_outside
     Resq_i = np.zeros([npoints1, npoints2, npoints3])
-    index1 = (np.floor((qrock_prime + (qi1_range / 2)) / qi1_range * npoints1)).astype(np.int16)
-    index2 = (np.floor((qroll + (qi2_range / 2)) / qi2_range * npoints2)).astype(np.int16)
-    index3 = (np.floor((q2th + (qi3_range / 2)) / qi3_range * npoints3)).astype(np.int16)
+    # Bin indices must use a wide signed integer type. int16 (max 32767)
+    # silently *wraps* to a negative value for any index past 32767, which then
+    # either passes the `>= 0` filter as a bogus in-range bin or is dropped — a
+    # ray is silently mis-binned or lost. Widening `phys_aper`, lowering
+    # `theta`, or shrinking `qiN_range` can push indices past the int16 ceiling
+    # at the default npoints. `np.intp` is the platform integer and costs ~8 B
+    # vs 2 B per ray (negligible against the float64 q-arrays).
+    index1 = (np.floor((qrock_prime + (qi1_range / 2)) / qi1_range * npoints1)).astype(np.intp)
+    index2 = (np.floor((qroll + (qi2_range / 2)) / qi2_range * npoints2)).astype(np.intp)
+    index3 = (np.floor((q2th + (qi3_range / 2)) / qi3_range * npoints3)).astype(np.intp)
 
     idx = (
         (index3 >= 0)
