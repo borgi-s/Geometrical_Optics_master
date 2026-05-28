@@ -131,7 +131,7 @@ class TestForwardMultiReflection:
             "[reciprocal]\nhkl = [2, 0, 0]\nkeV = 17.0\n"
         )
         config = SimulationConfig.from_toml(cfg)
-        with pytest.raises(FileNotFoundError, match=r"no kernel found for hkl=\(2, 0, 0\)"):
+        with pytest.raises(KeyError, match=r"no kernel found for hkl=\(2, 0, 0\)"):
             p.run_simulation(config, tmp_path / "out")
 
     def test_metadata_mismatch_errors(

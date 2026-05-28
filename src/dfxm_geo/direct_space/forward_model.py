@@ -77,8 +77,8 @@ NN2 = int(Npixels * Nsub)
 NN3 = int(Npixels // 30 * Nsub)
 
 # Default directory for reciprocal-space resolution kernel files.
-# Kernel files are discovered via _lookup_kernel_path(hkl, keV, pkl_fpath)
-# which globs Resq_i_h{h}_k{k}_l{l}_{keV}keV_*.npz and picks the newest.
+# Kernel files are discovered via _lookup_kernel_path(directory=..., mode=..., hkl=..., keV=...)
+# which globs the appropriate pattern and picks the newest match.
 # There is no longer a module-level `pkl_fn` constant — sub-project D removed it.
 pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
 
@@ -279,9 +279,9 @@ def _load_default_kernel(
     """Load the reciprocal-space resolution kernel from disk into module state.
 
     Must be called with an explicit `pkl_path`. Use
-    `_lookup_kernel_path(hkl, keV, pkl_fpath)` to find the matching file,
-    or call via `pipeline._lookup_and_load_kernel(hkl, keV)` which composes
-    the lookup and load together.
+    `_lookup_kernel_path(directory=..., mode=..., hkl=..., keV=...)` to find
+    the matching file, or call via `pipeline._lookup_and_load_kernel(hkl, keV)`
+    which composes the lookup and load together.
 
     Sets module-level globals: `Resq_i`, `qi1_range`/`qi2_range`/`qi3_range`,
     `npoints1`/`npoints2`/`npoints3`, `qi1_start`/`qi1_step`/etc.,
@@ -290,7 +290,7 @@ def _load_default_kernel(
 
     Args:
         pkl_path: Path to the .npz kernel file. Required — pass the result
-            of `_lookup_kernel_path(hkl, keV, pkl_fpath)`.
+            of `_lookup_kernel_path(directory=..., mode=..., hkl=..., keV=...)`.
         expected_hkl: If given, verify that the kernel's bundled ``hkl``
             metadata matches. Raises ``KeyError`` if the metadata is absent
             (pre-sub-project-D bootstrap), ``ValueError`` on mismatch.
@@ -310,8 +310,8 @@ def _load_default_kernel(
     if pkl_path is None:
         raise ValueError(
             "_load_default_kernel requires an explicit `pkl_path` after sub-project D. "
-            "Use `_lookup_kernel_path(hkl, keV, pkl_fpath)` to find the matching kernel, "
-            "or call via `pipeline._lookup_and_load_kernel(hkl, keV)`."
+            "Use `_lookup_kernel_path(directory=..., mode=..., hkl=..., keV=...)` to find "
+            "the matching kernel, or call via `pipeline._lookup_and_load_kernel(hkl, keV)`."
         )
 
     if str(pkl_path).endswith(".pkl"):
@@ -378,46 +378,108 @@ def _load_default_kernel(
     _loaded_kernel_path = Path(pkl_path)
 
 
-def _lookup_kernel_path(
+def _lookup_legacy_simplified(
+    directory: Path,
     hkl: tuple[int, int, int],
     keV: float,
-    pkl_fpath: str | Path,
 ) -> Path:
-    """Find the newest kernel npz on disk matching the requested (hkl, keV).
+    """Find the newest simplified-mode kernel npz on disk matching (hkl, keV).
 
-    Globs ``<pkl_fpath>/Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_*.npz``, sorts by
+    Globs ``<directory>/Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_*.npz``, sorts by
     mtime descending, returns the newest. Emits a stderr WARN listing all
-    matches when more than one exists. Raises FileNotFoundError with a
+    matches when more than one exists. Raises KeyError with a
     ``dfxm-bootstrap`` instruction on zero matches.
 
     Sub-project D: replaces the previous ``pkl_fn``-constant lookup.
+    Internal helper — call via ``_lookup_kernel_path``.
     """
     import sys
 
     h, k, l = hkl
-    pkl_fpath = Path(pkl_fpath)
     pattern = f"Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_*.npz"
     matches = sorted(
-        pkl_fpath.glob(pattern),
+        directory.glob(pattern),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
     if not matches:
-        raise FileNotFoundError(
-            f"no kernel found for hkl={hkl} at {keV} keV in {pkl_fpath}/.\n"
+        raise KeyError(
+            f"no kernel found for hkl={hkl} at {keV} keV in {directory}/.\n"
             f"Run: dfxm-bootstrap --config <yourconfig.toml>\n"
             f"(produces Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_<date>.npz, "
             f"~50 s wall-clock at default Nrays=1e8)"
         )
     if len(matches) > 1:
         lines = [
-            f"warning: found {len(matches)} kernels matching hkl={hkl} keV={keV:g} in {pkl_fpath}:"
+            f"warning: found {len(matches)} kernels matching hkl={hkl} keV={keV:g} in {directory}:"
         ]
         for i, m in enumerate(matches):
             tag = "  (newest, will use)" if i == 0 else ""
             lines.append(f"  {m.name}{tag}")
         print("\n".join(lines), file=sys.stderr)
     return matches[0]
+
+
+def _lookup_kernel_path(
+    *,
+    directory: Path | str,
+    mode: str = "simplified",
+    hkl: tuple[int, int, int] | None = None,
+    keV: float,
+    theta: float | None = None,
+    eta: float | None = None,
+    tol: float = 1e-6,
+) -> Path:
+    """Resolve a LUT npz on disk.
+
+    simplified: glob the legacy pattern, verify (hkl, keV) in metadata.
+    oblique: glob the new pattern, verify (theta, eta, keV) in metadata
+        within ``tol``.
+    Raises KeyError with a dfxm-bootstrap hint when no match exists.
+
+    Args:
+        directory: Directory to search for kernel npz files.
+        mode: ``"simplified"`` (default) or ``"oblique"``.
+        hkl: Required for simplified mode.
+        keV: X-ray energy in keV. Required for both modes.
+        theta: Bragg angle in radians. Required for oblique mode.
+        eta: Azimuthal tilt angle in radians. Required for oblique mode.
+        tol: Absolute tolerance for float comparisons (theta, eta).
+    """
+    directory = Path(directory)
+
+    if mode == "simplified":
+        if hkl is None:
+            raise ValueError("simplified mode lookup requires hkl.")
+        return _lookup_legacy_simplified(directory, hkl, keV)
+
+    if mode == "oblique":
+        if theta is None or eta is None:
+            raise ValueError("oblique mode lookup requires theta and eta.")
+        glob_pattern = f"Resq_i_theta*_eta*_{keV:g}keV_*.npz"
+        candidates = sorted(
+            directory.glob(glob_pattern),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for path in candidates:
+            data = np.load(path)
+            try:
+                if (
+                    abs(float(data["theta"]) - theta) <= tol
+                    and abs(float(data["eta"]) - eta) <= tol
+                    and abs(float(data["keV"]) - keV) <= 1e-9
+                ):
+                    return path
+            except KeyError:
+                continue  # incomplete metadata; skip
+        raise KeyError(
+            f"No bootstrapped kernel matching "
+            f"(mode=oblique, theta={theta:.4f}, eta={eta:.4f}, keV={keV:g}) "
+            f"in {directory}. Run: dfxm-bootstrap --config <your-config>"
+        )
+
+    raise ValueError(f"unknown geometry mode: {mode!r}")
 
 
 def _load_analytic_resolution(config: "ReciprocalConfig") -> None:

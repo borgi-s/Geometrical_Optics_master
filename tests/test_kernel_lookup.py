@@ -52,7 +52,9 @@ class TestLookupKernelPath:
         from dfxm_geo.direct_space.forward_model import _lookup_kernel_path
 
         p = _make_kernel_npz(tmp_path / "Resq_i_h-1_k1_l-1_17keV_20260520_2014.npz")
-        result = _lookup_kernel_path((-1, 1, -1), 17.0, tmp_path)
+        result = _lookup_kernel_path(
+            directory=tmp_path, mode="simplified", hkl=(-1, 1, -1), keV=17.0
+        )
         assert result == p
 
     def test_multi_match_returns_newest_and_warns(
@@ -68,7 +70,9 @@ class TestLookupKernelPath:
         os.utime(middle, (2000, 2000))
         os.utime(newest, (3000, 3000))
 
-        result = _lookup_kernel_path((-1, 1, -1), 17.0, tmp_path)
+        result = _lookup_kernel_path(
+            directory=tmp_path, mode="simplified", hkl=(-1, 1, -1), keV=17.0
+        )
         assert result == newest
 
         err = capsys.readouterr().err
@@ -79,23 +83,28 @@ class TestLookupKernelPath:
     def test_zero_match_raises_file_not_found(self, tmp_path: Path) -> None:
         from dfxm_geo.direct_space.forward_model import _lookup_kernel_path
 
-        with pytest.raises(FileNotFoundError, match=r"no kernel found for hkl=\(2, 0, 0\)"):
-            _lookup_kernel_path((2, 0, 0), 17.0, tmp_path)
+        with pytest.raises(KeyError, match=r"no kernel found for hkl=\(2, 0, 0\)"):
+            _lookup_kernel_path(directory=tmp_path, mode="simplified", hkl=(2, 0, 0), keV=17.0)
 
     def test_glob_isolates_by_hkl(self, tmp_path: Path) -> None:
         from dfxm_geo.direct_space.forward_model import _lookup_kernel_path
 
         _make_kernel_npz(tmp_path / "Resq_i_h-1_k1_l-1_17keV_20260520_2014.npz")
         # Looking up a different reflection should not return the (-1,1,-1) file.
-        with pytest.raises(FileNotFoundError):
-            _lookup_kernel_path((2, 0, 0), 17.0, tmp_path)
+        with pytest.raises(KeyError):
+            _lookup_kernel_path(directory=tmp_path, mode="simplified", hkl=(2, 0, 0), keV=17.0)
 
     def test_keV_int_and_float_both_match_same_file(self, tmp_path: Path) -> None:
         from dfxm_geo.direct_space.forward_model import _lookup_kernel_path
 
         p = _make_kernel_npz(tmp_path / "Resq_i_h-1_k1_l-1_17keV_20260520_2014.npz")
-        assert _lookup_kernel_path((-1, 1, -1), 17, tmp_path) == p
-        assert _lookup_kernel_path((-1, 1, -1), 17.0, tmp_path) == p
+        assert (
+            _lookup_kernel_path(directory=tmp_path, mode="simplified", hkl=(-1, 1, -1), keV=17) == p
+        )
+        assert (
+            _lookup_kernel_path(directory=tmp_path, mode="simplified", hkl=(-1, 1, -1), keV=17.0)
+            == p
+        )
 
 
 class TestLoadDefaultKernelVerification:

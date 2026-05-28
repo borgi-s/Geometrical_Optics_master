@@ -634,7 +634,7 @@ def _lookup_and_load_kernel(
     """Pre-flight: look up the kernel npz matching (hkl, keV) and load it.
 
     Sub-project D replacement for `_ensure_kernel_loaded()`. Composes:
-    1. `fm._lookup_kernel_path(hkl, keV, fm.pkl_fpath)` — glob + newest pick.
+    1. `fm._lookup_kernel_path(directory=..., mode="simplified", hkl=hkl, keV=keV)` — glob + newest pick.
     2. `fm._load_default_kernel(path, expected_hkl=hkl, expected_keV=keV)` —
        load + bundled-metadata verification.
 
@@ -642,10 +642,10 @@ def _lookup_and_load_kernel(
     matches what we'd look up, skip the reload. (Helpful for test loops and
     interactive REPL.)
 
-    Raises FileNotFoundError on lookup miss, ValueError on metadata mismatch,
+    Raises KeyError on lookup miss, ValueError on metadata mismatch,
     KeyError on pre-sub-project-D legacy npz lacking metadata.
     """
-    target = fm._lookup_kernel_path(hkl, keV, fm.pkl_fpath)
+    target = fm._lookup_kernel_path(directory=fm.pkl_fpath, mode="simplified", hkl=hkl, keV=keV)
     if fm._loaded_kernel_path == target:
         return
     fm._load_default_kernel(
