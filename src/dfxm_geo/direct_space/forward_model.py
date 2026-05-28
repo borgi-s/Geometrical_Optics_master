@@ -495,8 +495,10 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> None:
     from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
     theta = _validate_reflection(config.hkl, config.keV, 4.0495e-10)
+    eta_val = float(getattr(config, "eta", 0.0))  # safe default for v2.2.0-era configs
     _analytic_eval = AnalyticResolution(
         theta=theta,
+        eta=eta_val,
         zeta_v_fwhm=config.zeta_v_fwhm,
         zeta_h_fwhm=config.zeta_h_fwhm,
         NA_rms=config.NA_rms,

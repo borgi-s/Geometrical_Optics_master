@@ -391,6 +391,7 @@ class ReciprocalConfig:
     NA_rms: float = 7.31e-4 / 2.35
     eps_rms: float = 1.41e-4 / 2.35
     zeta_v_clip: float = 1.4e-4
+    eta: float = 0.0  # Azimuthal tilt (rad); 0.0 = simplified geometry (v2.2.0 default)
 
     _VALID_BACKENDS = ("auto", "analytic", "mc")
 
@@ -423,7 +424,7 @@ class ReciprocalConfig:
                 kwargs[key] = str(data[key])
         if "beamstop" in data:
             kwargs["beamstop"] = bool(data["beamstop"])
-        for key in ("zeta_v_fwhm", "zeta_h_fwhm", "NA_rms", "eps_rms", "zeta_v_clip"):
+        for key in ("zeta_v_fwhm", "zeta_h_fwhm", "NA_rms", "eps_rms", "zeta_v_clip", "eta"):
             if key in data:
                 kwargs[key] = float(data[key])
         return cls(**kwargs)
