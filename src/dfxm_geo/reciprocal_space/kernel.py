@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from dfxm_geo.crystal.oblique import CrystalMount
+from dfxm_geo.crystal.oblique import CrystalMount, compute_omega_eta
 from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func
 
 _DEFAULT_AL_CRYSTAL = CrystalMount(
@@ -69,6 +69,40 @@ def _parse_geometry_block(data: dict | None) -> tuple[str, float]:
     if not math.isfinite(eta):
         raise ValueError(f"[geometry] eta must be finite, got {eta!r}.")
     return "oblique", eta
+
+
+def _validate_eta_against_compute_omega_eta(
+    mount: CrystalMount,
+    hkl: tuple[int, int, int],
+    keV: float,
+    config_eta: float,
+    *,
+    tol: float = 1e-6,
+) -> tuple[float, float]:
+    """Cross-check the config's eta against compute_omega_eta(mount, hkl, keV).
+
+    Returns (theta_rad, omega_rad) of the matching ω-solution. Raises
+    ValueError with a diff if neither (η₁, η₂) matches.
+    """
+    geom = compute_omega_eta(mount, hkl, keV)
+    if np.isnan(geom.omega_1) and np.isnan(geom.omega_2):
+        raise ValueError(
+            f"Laue condition unsatisfiable for hkl={hkl}, mount={mount}, keV={keV}. "
+            "Try a higher keV or a different mount; use 'dfxm-find-reflections' to "
+            "enumerate reachable reflections."
+        )
+    candidates = [
+        (geom.eta_1, geom.theta_1, geom.omega_1),
+        (geom.eta_2, geom.theta_2, geom.omega_2),
+    ]
+    for eta_i, theta_i, omega_i in candidates:
+        if not np.isnan(eta_i) and abs(eta_i - config_eta) <= tol:
+            return float(theta_i), float(omega_i)
+    raise ValueError(
+        f"Config [geometry] eta={config_eta:.6f} rad does not match the computed "
+        f"reflection geometry: (η₁={geom.eta_1:.6f}, η₂={geom.eta_2:.6f}) at "
+        f"hkl={hkl}, keV={keV}. Use 'dfxm-find-reflections' to find valid groups."
+    )
 
 
 def _default_theta_al_111(keV: float = 17) -> float:
