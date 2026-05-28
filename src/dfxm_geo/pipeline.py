@@ -39,6 +39,7 @@ from dfxm_geo.crystal.dislocations import (
     Fd_find_multi_dislocs_mixed,
     MixedDislocSpec,
 )
+from dfxm_geo.crystal.oblique import CrystalMount
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.hdf5 import (
@@ -431,6 +432,64 @@ class ReciprocalConfig:
 
 
 @dataclass
+class GeometryConfig:
+    """Diffraction-geometry mode + oblique-angle parameters (v2.3.0).
+
+    Populated from the TOML ``[geometry]`` block (``mode``, ``eta``) plus the
+    crystal-mount fields in ``[crystal]`` (``lattice``/``a``/``mount_x/y/z``).
+    For ``mode='oblique'`` the config ``eta`` is cross-checked against
+    ``compute_omega_eta(mount, hkl, keV)`` — the *same* solver the bootstrap
+    uses — and the matching ``(theta, omega)`` are stored. ``theta_validated``
+    therefore equals the value baked into the oblique LUT filename, so the
+    pipeline-side lookup resolves the bootstrapped kernel exactly.
+
+    ``mode='simplified'`` (the default, and any config without a ``[geometry]``
+    block) reproduces v2.2.0 behaviour: ``eta=0``, ``theta_validated=None``.
+    """
+
+    mode: str = "simplified"
+    eta: float = 0.0
+    theta_validated: float | None = None
+    omega: float = 0.0
+    mount: CrystalMount | None = None
+
+
+def _build_geometry_config(raw: dict, reciprocal: ReciprocalConfig) -> GeometryConfig:
+    """Build a GeometryConfig from raw TOML tables (``[geometry]`` + ``[crystal]``).
+
+    Mirrors ``reciprocal_space.kernel.cli_main``'s bootstrap-side parsing so the
+    consumer (forward/identify) and the producer (dfxm-bootstrap) agree on the
+    geometry. For oblique mode, validates ``eta`` against the reflection geometry
+    and resolves the Bragg ``theta`` / azimuthal ``omega`` from the solver.
+
+    Raises:
+        ValueError: on a malformed ``[geometry]`` block, a missing mount key, or
+            an ``eta`` that does not match any computed reflection geometry.
+    """
+    from dfxm_geo.reciprocal_space.kernel import (
+        _crystal_mount_from_toml,
+        _parse_geometry_block,
+        _validate_eta_against_compute_omega_eta,
+    )
+
+    mode, eta = _parse_geometry_block(raw.get("geometry"))
+    if mode == "simplified":
+        return GeometryConfig(mode="simplified")
+
+    mount = _crystal_mount_from_toml(raw.get("crystal"))
+    theta_validated, omega = _validate_eta_against_compute_omega_eta(
+        mount, reciprocal.hkl, reciprocal.keV, eta
+    )
+    return GeometryConfig(
+        mode="oblique",
+        eta=eta,
+        theta_validated=theta_validated,
+        omega=omega,
+        mount=mount,
+    )
+
+
+@dataclass
 class SimulationConfig:
     # Sub-project F: crystal cascades to canonical-centered default (was: required).
     crystal: CrystalConfig = field(default_factory=CrystalConfig.default)
@@ -439,6 +498,8 @@ class SimulationConfig:
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     # Sub-project F: reciprocal cascades to Al 111 @ 17 keV (was: Optional[None]).
     reciprocal: ReciprocalConfig = field(default_factory=ReciprocalConfig)
+    # v2.3.0: diffraction geometry (simplified vs oblique-angle).
+    geometry: GeometryConfig = field(default_factory=GeometryConfig)
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -450,8 +511,19 @@ class SimulationConfig:
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
         reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
+        geometry = _build_geometry_config(raw, reciprocal)
+        # The analytic backend reads eta off ReciprocalConfig (see
+        # forward_model._load_analytic_resolution). The user supplies it in
+        # [geometry], so surface it there for oblique runs.
+        if geometry.mode == "oblique":
+            reciprocal.eta = geometry.eta
         return cls(
-            crystal=crystal, scan=scan, io=io, postprocess=postprocess, reciprocal=reciprocal
+            crystal=crystal,
+            scan=scan,
+            io=io,
+            postprocess=postprocess,
+            reciprocal=reciprocal,
+            geometry=geometry,
         )
 
 
@@ -631,22 +703,45 @@ def load_identification_config(path: Path) -> IdentificationConfig:
 def _lookup_and_load_kernel(
     hkl: tuple[int, int, int],
     keV: float,
+    *,
+    geometry: GeometryConfig | None = None,
 ) -> None:
-    """Pre-flight: look up the kernel npz matching (hkl, keV) and load it.
+    """Pre-flight: look up the kernel npz for this geometry and load it.
 
-    Sub-project D replacement for `_ensure_kernel_loaded()`. Composes:
-    1. `fm._lookup_kernel_path(directory=..., mode="simplified", hkl=hkl, keV=keV)` — glob + newest pick.
-    2. `fm._load_default_kernel(path, expected_hkl=hkl, expected_keV=keV)` —
-       load + bundled-metadata verification.
+    Sub-project D replacement for `_ensure_kernel_loaded()`. Composes a lookup
+    and a load:
 
-    Idempotent for the same (hkl, keV): if `fm._loaded_kernel_path` already
-    matches what we'd look up, skip the reload. (Helpful for test loops and
-    interactive REPL.)
+    - simplified (default / `geometry=None`): glob the legacy
+      ``Resq_i_h{h}_k{k}_l{l}_{keV}keV_*.npz`` pattern by (hkl, keV).
+    - oblique (v2.3.0): glob the ``Resq_i_theta{θ}rad_eta{η}rad_{keV}keV_*.npz``
+      pattern by the validated (theta, eta, keV). ``geometry.theta_validated``
+      is the solver value baked into the bootstrap filename, so the match is
+      exact.
+
+    Both modes still verify the npz's bundled (hkl, keV) metadata on load — the
+    oblique bootstrap records them too.
+
+    Idempotent: if `fm._loaded_kernel_path` already matches the resolved target,
+    skip the reload. (Helpful for test loops and interactive REPL.)
 
     Raises KeyError on lookup miss, ValueError on metadata mismatch,
     KeyError on pre-sub-project-D legacy npz lacking metadata.
     """
-    target = fm._lookup_kernel_path(directory=fm.pkl_fpath, mode="simplified", hkl=hkl, keV=keV)
+    if geometry is not None and geometry.mode == "oblique":
+        if geometry.theta_validated is None:
+            raise ValueError(
+                "oblique kernel lookup requires geometry.theta_validated "
+                "(set by SimulationConfig.from_toml from the [geometry] block)."
+            )
+        target = fm._lookup_kernel_path(
+            directory=fm.pkl_fpath,
+            mode="oblique",
+            theta=geometry.theta_validated,
+            eta=geometry.eta,
+            keV=keV,
+        )
+    else:
+        target = fm._lookup_kernel_path(directory=fm.pkl_fpath, mode="simplified", hkl=hkl, keV=keV)
     if fm._loaded_kernel_path == target:
         return
     fm._load_default_kernel(
@@ -656,12 +751,17 @@ def _lookup_and_load_kernel(
     )
 
 
-def _load_resolution(config: ReciprocalConfig) -> None:
+def _load_resolution(config: ReciprocalConfig, geometry: GeometryConfig | None = None) -> None:
     """Select and load the resolution backend per config (spec sec. 5.4).
 
     auto     -> analytic if beamstop off, else MC
     analytic -> analytic; ValueError if beamstop on (cannot represent it)
     mc       -> MC
+
+    ``geometry`` routes the MC LUT lookup to the oblique pattern when
+    ``geometry.mode == 'oblique'``; the analytic backend reads ``eta`` straight
+    off ``config`` (already propagated from [geometry] by
+    SimulationConfig.from_toml). Defaults to simplified when omitted.
     """
     use_analytic = config.backend == "analytic" or (
         config.backend == "auto" and not config.beamstop
@@ -677,7 +777,7 @@ def _load_resolution(config: ReciprocalConfig) -> None:
         fm._load_analytic_resolution(config)
     else:
         fm._analytic_eval = None  # ensure forward() uses the LUT
-        _lookup_and_load_kernel(config.hkl, config.keV)
+        _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
 
 
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
@@ -688,7 +788,7 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
-    _load_resolution(config.reciprocal)
+    _load_resolution(config.reciprocal, config.geometry)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -790,8 +890,9 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         positioners=positioners,
         Hg_provider=Hg_provider,
         write_strain_provenance=config.io.write_strain_provenance,
-        geometry_mode="oblique" if config.reciprocal.eta != 0.0 else "simplified",
-        eta=config.reciprocal.eta,
+        geometry_mode=config.geometry.mode,
+        eta=config.geometry.eta,
+        mount=config.geometry.mount,
     )
     return {
         "h5_path": h5_path,
