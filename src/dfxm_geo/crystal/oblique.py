@@ -236,3 +236,53 @@ def compute_omega_eta(
         eta_2=η2,
         theta_2=θ2,
     )
+
+
+def find_reflections(
+    mount: CrystalMount,
+    keV: float,
+    *,
+    theta_range: tuple[float, float] = (0.0, float(np.deg2rad(16.25))),
+    hkl_max: int = 5,
+    eta_target: float | None = None,
+    eta_tol: float = 1e-6,
+) -> list[ReflectionGeometry]:
+    """Enumerate Laue-satisfying reflections within |h|,|k|,|l| ≤ hkl_max.
+
+    Returns a list sorted by primary η, then primary θ. When `eta_target` is
+    given, only reflections whose η₁ OR η₂ is within `eta_tol` of the target
+    are kept. NaN-filled rows (unreachable Laue at this keV) are dropped.
+
+    Phase A: implemented and unit-tested. Phase B wires this into config-load
+    validation and the dfxm-find-reflections CLI.
+    """
+    results: list[ReflectionGeometry] = []
+    for h in range(-hkl_max, hkl_max + 1):
+        for k in range(-hkl_max, hkl_max + 1):
+            for l in range(-hkl_max, hkl_max + 1):
+                if h == 0 and k == 0 and l == 0:
+                    continue
+                geom = compute_omega_eta(mount, (h, k, l), keV)
+                if np.isnan(geom.omega_1) and np.isnan(geom.omega_2):
+                    continue
+                # θ-range filter (use whichever solution exists)
+                theta = geom.theta_1 if not np.isnan(geom.theta_1) else geom.theta_2
+                if not (theta_range[0] <= theta <= theta_range[1]):
+                    continue
+                if eta_target is not None:
+                    e1 = geom.eta_1 if not np.isnan(geom.eta_1) else None
+                    e2 = geom.eta_2 if not np.isnan(geom.eta_2) else None
+                    match = any(e is not None and abs(e - eta_target) <= eta_tol for e in (e1, e2))
+                    if not match:
+                        continue
+                results.append(geom)
+
+    def _sort_key(g: ReflectionGeometry) -> tuple[float, float]:
+        eta = g.eta_1 if not np.isnan(g.eta_1) else g.eta_2
+        theta = g.theta_1 if not np.isnan(g.theta_1) else g.theta_2
+        return (
+            float(eta) if not np.isnan(eta) else np.inf,
+            float(theta) if not np.isnan(theta) else np.inf,
+        )
+
+    return sorted(results, key=_sort_key)
