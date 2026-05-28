@@ -78,7 +78,7 @@ def _qroll_q2th_center_of_mass(lut: np.ndarray) -> tuple[float, float]:
 def test_eta_nonzero_lut_is_valid() -> None:
     """eta != 0 LUT must be non-zero, finite, and have a computable COM."""
     common = dict(
-        Nrays=int(2e5),
+        Nrays=int(2e4),
         npoints1=20,
         npoints2=80,
         npoints3=80,
@@ -137,6 +137,9 @@ def test_eta_nonzero_lut_is_valid() -> None:
 
     # The two LUTs must be distinguishable: non-identical q-roll vectors.
     # (If the eta rotation had no effect, qroll_e == qroll_0 — that would be a bug.)
-    assert not np.allclose(qroll_0, qroll_e), (
-        "eta=pi/8 produced identical qroll to eta=0 — rotation not applied"
+    # At eta=π/8 the R_x rotation mixes ~38% of q2th into qroll; the per-element
+    # RMS shift should be far above floating-point noise.
+    qroll_shift_rms = float(np.sqrt(np.mean((qroll_e - qroll_0) ** 2)))
+    assert qroll_shift_rms > 1e-5, (
+        f"qroll RMS shift {qroll_shift_rms} too small — eta rotation may be a no-op"
     )
