@@ -74,3 +74,34 @@ class CrystalMount:
             v = np.array(m, dtype=float)
             cols.append(v / np.linalg.norm(v))
         return np.column_stack(cols)
+
+
+def _R_x(angle: float) -> np.ndarray:
+    """Rotation around lab x̂ (beam axis) by `angle` rad."""
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
+
+
+def _R_y(angle: float) -> np.ndarray:
+    """Rotation around lab ŷ by `angle` rad."""
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+
+
+def _R_z(angle: float) -> np.ndarray:
+    """Rotation around lab ẑ by `angle` rad."""
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+
+def R_lab_to_image(eta: float, theta: float) -> np.ndarray:
+    """Lab → image-detector-frame rotation.
+
+    Generalized from the v2.2.0 simplified-geometry implicit rotation R_y(-2θ)
+    to include the azimuthal rotation R_x(η) around the beam axis. At η=0
+    this collapses bit-identically to v2.2.0.
+
+    The image frame is defined such that the detector normal points along
+    the diffracted-beam direction in the image frame.
+    """
+    return _R_x(eta) @ _R_y(-2.0 * theta)
