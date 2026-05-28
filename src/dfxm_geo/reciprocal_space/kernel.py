@@ -18,7 +18,32 @@ from pathlib import Path
 
 import numpy as np
 
+from dfxm_geo.crystal.oblique import CrystalMount
 from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func
+
+_DEFAULT_AL_CRYSTAL = CrystalMount(
+    lattice="cubic",
+    a=4.0495e-10,  # legacy default (Al); paper §6.1 uses 4.0493
+    mount_x=(1, 0, 0),
+    mount_y=(0, 1, 0),
+    mount_z=(0, 0, 1),
+)
+
+
+def _crystal_mount_from_toml(data: dict | None) -> CrystalMount:
+    """Build a CrystalMount from a `[crystal]` TOML block (or None → default Al)."""
+    if data is None:
+        return _DEFAULT_AL_CRYSTAL
+    try:
+        return CrystalMount(
+            lattice=data["lattice"],
+            a=float(data["a"]),
+            mount_x=tuple(int(x) for x in data["mount_x"]),  # type: ignore[arg-type]
+            mount_y=tuple(int(x) for x in data["mount_y"]),  # type: ignore[arg-type]
+            mount_z=tuple(int(x) for x in data["mount_z"]),  # type: ignore[arg-type]
+        )
+    except KeyError as exc:
+        raise ValueError(f"[crystal] block missing key: {exc.args[0]}") from None
 
 
 def _default_theta_al_111(keV: float = 17) -> float:
