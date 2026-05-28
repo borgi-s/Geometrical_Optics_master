@@ -34,11 +34,13 @@ Thumbs.db
 *.h5
 *.edf
 *.mp4
+*_vars.txt          # Fg-cache sidecar metadata written next to Fg_*.npy
 output/
 results/
 rockingcurve*/
 mixed_ims*/
 final_figures/
+direct_space/deformation_gradient_tensors/
 
 # Project — keep small reference data
 !tests/data/golden/*.npy

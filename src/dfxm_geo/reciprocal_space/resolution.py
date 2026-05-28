@@ -16,6 +16,7 @@
 #   ratio_outside: The fraction of rays not within the range defined by
 #                                       qi1_range, qi2_range, qi3_range.
 
+import warnings
 from pathlib import Path
 from typing import Any, cast
 
@@ -298,10 +299,35 @@ def reciprocal_res_func(
         * (index2 < npoints2)
         * (index3 < npoints3)
     )
-    np.add.at(Resq_i, tuple([index1[idx], index2[idx], index3[idx]]), 1)
+    # Fraction of rays that fall outside the (qi1, qi2, qi3) grid. A nonzero
+    # value means the configured qiN_range is too narrow to contain the
+    # acceptance cloud — the kernel is being silently clipped.
+    n_rays_binned = int(idx.size)
+    ratio_outside = 1.0 - (float(idx.sum()) / n_rays_binned) if n_rays_binned else 1.0
+    if ratio_outside > 0.0:
+        warnings.warn(
+            f"{ratio_outside:.3%} of rays fell outside the Resq_i grid; the "
+            "qiN_range is too narrow to contain the acceptance cloud and the "
+            "kernel is being clipped. Widen qi1_range/qi2_range/qi3_range.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    # Bin via a raveled linear index + np.bincount (a tight C loop) rather than
+    # np.add.at (an unbuffered Python-level scatter, ~10-100x slower at 1e8
+    # rays). Weights are all 1, so this is a pure 3D histogram.
+    flat = (index1[idx] * npoints2 + index2[idx]) * npoints3 + index3[idx]
+    counts = np.bincount(flat, minlength=npoints1 * npoints2 * npoints3)
+    Resq_i = counts.reshape(npoints1, npoints2, npoints3).astype(np.float64)
     print("Resq_i filled")
 
-    normResq_i = Resq_i / Resq_i.max()  # normalise to 1 as max value
+    peak = Resq_i.max()
+    if peak == 0:
+        raise ValueError(
+            "Resq_i is all zeros: every ray fell outside the (qi1, qi2, qi3) "
+            "grid. Check that qi1_range/qi2_range/qi3_range and the beamline "
+            "geometry (theta, NA_rms, phys_aper) are consistent."
+        )
+    normResq_i = Resq_i / peak  # normalise to 1 as max value
     if plot_figs == 1:
         plt.plot(
             np.linspace(-qi1_range, qi1_range, npoints1),

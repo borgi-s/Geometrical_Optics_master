@@ -92,14 +92,27 @@ def _set_nx_class(grp: h5py.Group, cls: str) -> None:
 
 
 def _get_git_sha_and_dirty() -> tuple[str, bool]:
-    """Return (sha, dirty) for the current repo, or ("unknown", False)."""
+    """Return (sha, dirty) for the dfxm_geo source repo, or ("unknown", False).
+
+    The git commands run with ``cwd`` pinned to the package's own repo root
+    (``_fm._REPO_ROOT``), not the process working directory. Running them in
+    the process CWD recorded the wrong-but-plausible SHA of whatever unrelated
+    git repo the CLI happened to be launched from (or "unknown" when launched
+    outside any repo). When dfxm_geo is installed from a wheel, ``_REPO_ROOT``
+    is inside site-packages (not a git checkout), so git fails cleanly and we
+    honestly record "unknown".
+    """
+    repo_root = str(_fm._REPO_ROOT)
     try:
         sha = _subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], stderr=_subprocess.DEVNULL, text=True
+            ["git", "rev-parse", "HEAD"], stderr=_subprocess.DEVNULL, text=True, cwd=repo_root
         ).strip()
         dirty = bool(
             _subprocess.check_output(
-                ["git", "status", "--porcelain"], stderr=_subprocess.DEVNULL, text=True
+                ["git", "status", "--porcelain"],
+                stderr=_subprocess.DEVNULL,
+                text=True,
+                cwd=repo_root,
             ).strip()
         )
         return sha, dirty
@@ -519,8 +532,11 @@ def load_h5_scan(
             import tomllib
 
             cfg = tomllib.loads(f["/dfxm_geo/config_toml"][()].decode())
-            phi_steps = phi_steps or cfg["scan"]["phi_steps"]
-            chi_steps = chi_steps or cfg["scan"]["chi_steps"]
+            # Nested per-axis schema: [scan.phi]/[scan.chi] each carry `steps`.
+            # A fixed (or omitted) axis has no `steps` and contributes 1 frame.
+            scan = cfg.get("scan", {})
+            phi_steps = phi_steps or scan.get("phi", {}).get("steps") or 1
+            chi_steps = chi_steps or scan.get("chi", {}).get("steps") or 1
 
     n, h, w = data.shape
     if n != phi_steps * chi_steps:
@@ -532,8 +548,8 @@ def load_h5_scan(
     # data[k] for k = chi_idx * phi_steps + phi_idx. Reshaping to
     # (chi_steps, phi_steps, H, W) therefore lands chi on axis 0 and phi on
     # axis 1 directly (stack_reshape[chi_idx, phi_idx] == data[k]). This is
-    # the (chi, phi) layout the mosaicity COM functions consume
-    # (`compute_com_maps`, `compute_chi_shift`); do NOT transpose to (phi, chi)
+    # the (chi, phi) layout the mosaicity COM function consumes
+    # (`compute_com_maps`); do NOT transpose to (phi, chi)
     # — that silently swaps the φ and χ COM maps (every grid had φ↔χ swapped
     # until v2.0.2; only undetected because production used phi_steps==chi_steps).
     stack_reshape = data.reshape(chi_steps, phi_steps, h, w)

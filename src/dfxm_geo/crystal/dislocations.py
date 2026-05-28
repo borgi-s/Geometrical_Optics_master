@@ -23,7 +23,7 @@ from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
 _S_IDENTITY: np.ndarray = np.identity(3)
 
 
-@jit(nopython=True, fastmath=True, cache=True)
+@jit(nopython=True, fastmath=True, cache=True, nogil=True)
 def _accumulate_bipolar_walls(
     rd: np.ndarray, dis: float, i_start: int, i_end: int, ny: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:

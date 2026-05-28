@@ -260,7 +260,7 @@ def _fake_vm(available_gb):
 
 def test_auto_max_workers_uses_all_cpus_when_memory_ample(monkeypatch):
     """With abundant RAM the cap is CPU-bound, not memory-throttled."""
-    import psutil
+    psutil = pytest.importorskip("psutil")
 
     from dfxm_geo.io import images
 
@@ -277,7 +277,7 @@ def test_auto_max_workers_ray_proportional_beats_fixed_slab(monkeypatch):
     ~2 GiB usable; the ray-proportional estimate (~0.13 GiB/worker at
     px510/Nsub=1) permits more, which is the whole point of the change.
     """
-    import psutil
+    psutil = pytest.importorskip("psutil")
 
     from dfxm_geo.io import images
 

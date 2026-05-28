@@ -353,15 +353,30 @@ def cli_main(argv: list[str] | None = None) -> int:
 
         with args.config.open("rb") as f:
             raw = tomllib.load(f)
-        params = {
-            "phi_steps": int(raw["scan"]["phi_steps"]),
-            "chi_steps": int(raw["scan"]["chi_steps"]),
-            "phi_range_rad": float(raw["scan"]["phi_range"]),
-            "chi_range_rad": float(raw["scan"]["chi_range"]),
-            "dis": float(raw["crystal"]["dis"]),
-            "ndis": int(raw["crystal"]["ndis"]),
-            "sample_remount": str(raw["crystal"]["sample_remount"]),
-        }
+        # The current config schema is nested per-axis ([scan.phi]/[scan.chi]
+        # each with range+steps) and per-crystal-mode ([crystal.wall] with
+        # dis/ndis/sample_remount) — the same schema `migrate_npy_dir_to_h5`
+        # emits into config_toml. Migration targets the legacy 2D wall sim, so
+        # both phi and chi axes and a [crystal.wall] block are required.
+        try:
+            scan = raw["scan"]
+            wall = raw["crystal"]["wall"]
+            params = {
+                "phi_steps": int(scan["phi"]["steps"]),
+                "chi_steps": int(scan["chi"]["steps"]),
+                "phi_range_rad": float(scan["phi"]["range"]),
+                "chi_range_rad": float(scan["chi"]["range"]),
+                "dis": float(wall["dis"]),
+                "ndis": int(wall["ndis"]),
+                "sample_remount": str(wall["sample_remount"]),
+            }
+        except KeyError as exc:
+            raise SystemExit(
+                f"--config {args.config} is missing required key {exc}. Migration "
+                "expects the nested wall-scan schema: [scan.phi] and [scan.chi] "
+                "each with `range` and `steps`, and [crystal.wall] with `dis`, "
+                "`ndis`, and `sample_remount`."
+            ) from exc
 
     migrate_npy_dir_to_h5(npy_dir=args.input_dir, h5_path=out, **params)
     print(f"Wrote {out}")
