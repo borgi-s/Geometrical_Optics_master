@@ -13,6 +13,8 @@ Run as a script::
     python -m dfxm_geo.reciprocal_space.kernel
 """
 
+import math
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -44,6 +46,29 @@ def _crystal_mount_from_toml(data: dict | None) -> CrystalMount:
         )
     except KeyError as exc:
         raise ValueError(f"[crystal] block missing key: {exc.args[0]}") from None
+
+
+def _parse_geometry_block(data: dict | None) -> tuple[str, float]:
+    """Parse [geometry] block. Returns (mode, eta_rad)."""
+    if data is None:
+        return "simplified", 0.0
+    mode = data.get("mode", "simplified")
+    if mode not in ("simplified", "oblique"):
+        raise ValueError(f"[geometry] mode must be 'simplified' or 'oblique'; got {mode!r}.")
+    if mode == "simplified":
+        if "eta" in data and float(data["eta"]) != 0.0:
+            print(
+                f"warning: simplified mode forces eta=0; ignoring [geometry] eta={data['eta']}.",
+                file=sys.stderr,
+            )
+        return "simplified", 0.0
+    # oblique
+    if "eta" not in data:
+        raise ValueError("[geometry] mode='oblique' requires [geometry] eta (radians).")
+    eta = float(data["eta"])
+    if not math.isfinite(eta):
+        raise ValueError(f"[geometry] eta must be finite, got {eta!r}.")
+    return "oblique", eta
 
 
 def _default_theta_al_111(keV: float = 17) -> float:
