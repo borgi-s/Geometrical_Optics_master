@@ -36,13 +36,17 @@ npoints3    = 200
 qi1_range   = 5e-4
 qi2_range   = 7.5e-3
 qi3_range   = 7.5e-3
-zeta_v_fwhm = 5.3e-4
+zeta_v_fwhm = 0.027e-3        # 0.027 mrad vertical divergence FWHM (paper section 6.2)
 zeta_h_fwhm = 0.0
-NA_rms      = 3.112e-4         # 0.556 mrad FWHM CRL acceptance / 2.35
+NA_rms      = 2.366e-4         # 0.556 mrad FWHM CRL acceptance / 2.35
 eps_rms     = 6.0e-5
 beamstop    = false
 aperture    = false            # paper Fig 3B uses no beamstop / no aperture
 
+# NOTE: [detector] is the physical DETECTOR. dfxm's object-plane pixel =
+# psize / magnification(15.1) ~= 50 nm ~= the module default (40 nm). The
+# pipeline currently uses module-default detector geometry; this block is not
+# yet consumed (deferred: re-derive the ray grid from psize/Npixels at runtime).
 [detector]
 Npixels = 272
 psize   = 0.75e-6
@@ -52,17 +56,21 @@ thermal_mean    = 99.453
 thermal_std     = 2.317
 dynamic_range_bits = 16
 
-# Single detector image at the Fig 3 caption setpoint (NOT a scan):
-# AxisScanConfig fields are `value` (fixed setpoint) and optional
-# `range`+`steps` for a scan. Omit range/steps for fixed.
+# Single detector image at the Fig 3B caption setpoint (NOT a scan).
+# Paper Fig 3B caption: dtheta=-0.42, phi=+0.46, chi=+0.067 mrad. dfxm axis map:
+#   phi (rocking)  -> [scan.phi]
+#   chi (rolling)  -> [scan.chi]
+#   dtheta (Bragg) -> [scan.two_dtheta]   (code treats two_dtheta as dtheta directly)
+# (The earlier config had these three values scrambled onto the wrong axes.)
+# AxisScanConfig: `value` = fixed setpoint; omit range/steps for a single image.
 [scan.phi]
-value = -0.42e-3
-
-[scan.chi]
 value = 0.46e-3
 
-[scan.two_dtheta]
+[scan.chi]
 value = 0.067e-3
+
+[scan.two_dtheta]
+value = -0.42e-3
 
 [io]
 write_strain_provenance = true
