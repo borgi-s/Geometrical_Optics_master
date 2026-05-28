@@ -24,13 +24,16 @@ def _norm_cdf(x: float) -> float:
     return 0.5 * (1.0 + erf(x / np.sqrt(2.0)))
 
 
-def _build_M(theta: float) -> np.ndarray:
+def _build_M(theta: float, eta: float = 0.0) -> np.ndarray:
     """3x5 linear map from instrument variables to imaging-space q.
 
     Columns: [eps, zeta_v, zeta_h, delta_2theta, xi].
     Rows:    [qrock_prime, qroll, q2th].
     Built by applying the resolution.py:250-256 transform (dphi=0, no
     truncation) to the identity, since the map is linear: M[:, j] = transform(e_j).
+
+    At eta=0 this is the v2.1.0 closed form. At eta != 0, R_x(eta) is applied
+    AFTER the simplified-geometry transform (matches the MC LUT path).
     """
     s, c = np.sin(theta), np.cos(theta)
     cot = c / s
@@ -44,7 +47,13 @@ def _build_M(theta: float) -> np.ndarray:
         q2th = -s * qrock + c * qpar
         return np.array([qrock_prime, qroll, q2th])
 
-    return transform(np.eye(5))
+    M = transform(np.eye(5))
+
+    if eta != 0.0:
+        c_e, s_e = np.cos(eta), np.sin(eta)
+        R_x = np.array([[1.0, 0.0, 0.0], [0.0, c_e, -s_e], [0.0, s_e, c_e]])
+        M = R_x @ M
+    return M
 
 
 class AnalyticResolution:
@@ -65,6 +74,7 @@ class AnalyticResolution:
         self,
         *,
         theta: float,
+        eta: float = 0.0,
         zeta_v_fwhm: float,
         zeta_h_fwhm: float,
         NA_rms: float,
@@ -73,6 +83,7 @@ class AnalyticResolution:
         cond_max: float = 1e8,
     ) -> None:
         self.theta = float(theta)
+        self.eta = float(eta)
         self.c = float(zeta_v_clip)
         sig_eps = float(eps_rms)
         # Divisor asymmetry (zeta_v: 2.355, zeta_h: 2.35) is intentional and
@@ -82,7 +93,7 @@ class AnalyticResolution:
         sig_na = float(NA_rms)
         self.sig_zv = sig_zv
 
-        M = _build_M(theta)
+        M = _build_M(theta, eta)
         self.M = M
         self.m_u = M[:, 1]  # zeta_v column
         M_g = M[:, [0, 2, 3, 4]]  # eps, zeta_h, d2t, xi
