@@ -789,7 +789,19 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
     _load_resolution(config.reciprocal, config.geometry)
+    # Oblique reflections diffract at their own Bragg angle; run the body inside
+    # the theta context so the ray grid + imaging rotation use it (simplified
+    # mode is a no-op, preserving v2.2.0 geometry bit-for-bit).
+    with fm.reflection_theta_if_oblique(config.geometry.mode, config.geometry.theta_validated):
+        return _run_simulation_inner(config, output_dir)
 
+
+def _run_simulation_inner(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
+    """Body of ``run_simulation``, run inside the (optional) oblique-theta context.
+
+    Split out so the population build + forward both see the run's Bragg angle
+    (see ``forward_model.reflection_theta_if_oblique``).
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Build dislocation population (dispatches on crystal.mode).

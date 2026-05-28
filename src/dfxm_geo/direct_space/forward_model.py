@@ -12,7 +12,9 @@ in CI without any precomputed kernel present.
 Default geometry constants match ID06 at the ESRF; see `dfxm_geo.constants`.
 """
 
+import contextlib
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass as _dataclass
 from pathlib import Path
 from pprint import pprint
@@ -132,6 +134,49 @@ rl = np.vstack(  # type: ignore[call-overload]
 ).reshape(3, -1)
 
 prob_z = np.exp(-0.5 * (rl[2] / zl_rms) ** 2)
+
+
+@contextlib.contextmanager
+def reflection_theta_if_oblique(mode: str, theta_new: float | None) -> Iterator[None]:
+    """Temporarily set the forward Bragg angle for an oblique run, then restore.
+
+    ``theta_0`` (and the geometry it drives: ``Theta``, ``xl_start``, the ray
+    grid ``rl``, ``prob_z``) defaults to Al (1,1,1) @ 17 keV (8.98 deg). Oblique
+    reflections diffract at their own theta, so for ``mode == "oblique"`` this
+    rebuilds the theta-dependent globals at ``theta_new`` (radians) for the
+    duration of the ``with`` block and restores the defaults on exit (so
+    simplified-mode runs and other callers/tests are never polluted). For any
+    other mode, or ``theta_new is None``, it is a no-op.
+
+    Must wrap the population build + forward: the ray grid ``rl`` (which the
+    strain field is sampled on) and the imaging rotation ``Theta`` both depend
+    on theta.
+    """
+    global theta_0, theta, Theta, xl_start, xl_range, rl, prob_z
+    if mode != "oblique" or theta_new is None:
+        yield
+        return
+    saved = (theta_0, theta, Theta, xl_start, xl_range, rl, prob_z)
+    try:
+        theta_0 = float(theta_new)
+        theta = theta_0
+        Theta = np.array(
+            [[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]]
+        )
+        xl_start = yl_start / np.tan(2 * theta) / 3
+        xl_range = -xl_start
+        rl = np.vstack(  # type: ignore[call-overload]
+            np.mgrid[
+                -xl_range : xl_range : complex(xl_steps),
+                -yl_range : yl_range : complex(yl_steps),
+                -zl_range : zl_range : complex(zl_steps),
+            ]
+        ).reshape(3, -1)
+        prob_z = np.exp(-0.5 * (rl[2] / zl_rms) ** 2)
+        yield
+    finally:
+        theta_0, theta, Theta, xl_start, xl_range, rl, prob_z = saved
+
 
 # To avoid edge effects:
 # for dis 0.25, ndis >= 7501
