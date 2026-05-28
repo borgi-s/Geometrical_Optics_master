@@ -129,3 +129,110 @@ def _solve_quadratic_in_tan_half(α0: float, α1: float, α2: float) -> tuple[fl
 
     sqrt_disc = float(np.sqrt(disc))
     return (-B + sqrt_disc) / (2.0 * A), (-B - sqrt_disc) / (2.0 * A)
+
+
+@dataclass(frozen=True)
+class ReflectionGeometry:
+    """One Laue solution for a (mount, hkl, keV) triple.
+
+    Two ω-solutions per reflection per paper Appendix A; both stored.
+    All angles in radians. NaN when no real ω exists.
+    """
+
+    hkl: tuple[int, int, int]
+    keV: float
+    omega_1: float
+    eta_1: float
+    theta_1: float
+    omega_2: float
+    eta_2: float
+    theta_2: float
+
+
+def _skew(v: np.ndarray) -> np.ndarray:
+    """Skew-symmetric (cross-product) matrix K such that K @ u = v × u."""
+    x, y, z = v
+    return np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]])
+
+
+def _eta_from_k_out(k_out: np.ndarray) -> float:
+    """η = signed azimuth of k_out around lab x̂ (paper eq A.12, A.13).
+
+    Sign convention matches darkmod (laue.get_eta_angle): η = -sign(k_y) · arccos(k_z / √(k_y² + k_z²)).
+    Returns NaN when the y-z projection is zero (k_out parallel to x̂).
+    """
+    k_yz_norm = float(np.sqrt(k_out[1] ** 2 + k_out[2] ** 2))
+    if k_yz_norm < 1e-15:
+        return float("nan")
+    return -float(np.sign(k_out[1])) * float(np.arccos(k_out[2] / k_yz_norm))
+
+
+def compute_omega_eta(
+    mount: CrystalMount,
+    hkl: tuple[int, int, int],
+    keV: float,
+    *,
+    rotation_axis: np.ndarray | None = None,
+) -> ReflectionGeometry:
+    """Solve paper Appendix A for (ω, η) at the given (mount, hkl, keV).
+
+    Default rotation_axis = lab ẑ (paper §A: "selecting the rotation axis to be ẑ_l").
+    Returns two ω-solutions per reflection (paper Table A.2 shows ω₁, ω₂);
+    NaN-filled when no real ω solution exists at the keV.
+    """
+    if rotation_axis is None:
+        rotation_axis = np.array([0.0, 0.0, 1.0])
+
+    G_hkl = np.array(hkl, dtype=float)
+    C_s_inv_T = np.linalg.inv(mount.C_s).T
+    Q_s0 = 2.0 * np.pi * C_s_inv_T @ G_hkl  # paper eq 24, in 1/m
+    Q_lab_static = mount.U_mount @ Q_s0  # mount-rotated, pre-ω
+
+    wavelength = 1.239841984e-9 / keV  # m, hc/E
+    k_l = (2.0 * np.pi / wavelength) * np.array([1.0, 0.0, 0.0])
+
+    K = _skew(rotation_axis)
+    K2 = K @ K
+
+    α0 = float(-k_l @ K2 @ Q_lab_static)
+    α1 = float(k_l @ K @ Q_lab_static)
+    α2 = float(k_l @ (np.eye(3) + K2) @ Q_lab_static + (Q_lab_static @ Q_lab_static) / 2.0)
+
+    s1, s2 = _solve_quadratic_in_tan_half(α0, α1, α2)
+
+    results: list[tuple[float, float, float]] = []
+    for s in (s1, s2):
+        if np.isnan(s):
+            results.append((float("nan"), float("nan"), float("nan")))
+            continue
+        omega_raw = 2.0 * float(np.arctan(s))
+        omega = float(omega_raw % (2.0 * np.pi))  # wrap to [0, 2π)
+        # Rotate Q_lab_static by ω around rotation_axis (Rodrigues).
+        K_axis = K
+        K_axis2 = K2
+        R = np.eye(3) + np.sin(omega) * K_axis + (1.0 - np.cos(omega)) * K_axis2
+        Q_lab = R @ Q_lab_static
+        k_out = Q_lab + k_l
+        eta = _eta_from_k_out(k_out)
+        # θ from |Q| and wavelength: sin(θ) = |Q| · λ / (4π)
+        sin_theta = float(np.linalg.norm(Q_lab) * wavelength / (4.0 * np.pi))
+        theta = float("nan") if sin_theta > 1.0 else float(np.arcsin(sin_theta))
+        results.append((omega, eta, theta))
+
+    # Sort by ascending ω so that ω₁ < ω₂ (paper Table A.2 convention).
+    # NaN omegas sort last (nan comparisons are well-defined in this context
+    # because we use explicit checks; rely on Python's nan < x == False).
+    results.sort(
+        key=lambda t: t[0] if not (isinstance(t[0], float) and t[0] != t[0]) else float("inf")
+    )
+    (ω1, η1, θ1), (ω2, η2, θ2) = results
+    return ReflectionGeometry(
+        hkl=tuple(int(c) for c in hkl),  # type: ignore[arg-type]
+        keV=float(keV),
+        omega_1=ω1,
+        eta_1=η1,
+        theta_1=θ1,
+        omega_2=ω2,
+        eta_2=η2,
+        theta_2=θ2,
+    )
