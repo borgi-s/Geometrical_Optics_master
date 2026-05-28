@@ -1,0 +1,72 @@
+# Paper Figure 3B reproduction config (arXiv:2503.22022v1, §6.1 + §6.2 + Fig 3 caption)
+# Single-edge-dislocation Al phantom at the η=20.233°, θ=15.417° oblique reflection.
+# Uses reflection (-1, -1, 3); 3 other reflections in the same group are
+# {(-1, 1, 3), (1, -1, 3), (1, 1, 3)} — Phase B will iterate over the group.
+
+[crystal]
+lattice  = "cubic"
+a        = 4.0493e-10
+mount_x  = [1, 0, 0]
+mount_y  = [0, 1, 0]
+mount_z  = [0, 0, 1]
+
+[geometry]
+mode = "oblique"
+eta  = 0.353140                # 20.233° in radians
+
+[reflection]
+hkl = [-1, -1, 3]
+keV = 19.1
+
+[reciprocal]
+Nrays       = 1e8
+npoints1    = 400
+npoints2    = 200
+npoints3    = 200
+qi1_range   = 5e-4
+qi2_range   = 7.5e-3
+qi3_range   = 7.5e-3
+zeta_v_fwhm = 5.3e-4
+zeta_h_fwhm = 0.0
+NA_rms      = 3.112e-4         # 0.556 mrad FWHM CRL acceptance / 2.35
+eps_rms     = 6.0e-5
+beamstop    = false
+aperture    = false            # paper Fig 3B uses no beamstop / no aperture
+# theta is derived from (hkl, keV, mount) via compute_omega_eta; do not set.
+
+[detector]
+Npixels = 272
+psize   = 0.75e-6
+psf_kernel_size = 9
+psf_sigma_px    = 1.0
+thermal_mean    = 99.453
+thermal_std     = 2.317
+dynamic_range_bits = 16
+
+[crystal_setup]
+mode = "centered"
+dis_um = 4.0
+ndis = 1
+b = [1, 1, 0]                  # Burgers vector direction (paper says [1,1,0] for edge)
+n = [1, 1, -1]                 # slip plane normal
+t = [1, 1, 2]                  # line direction
+b_magnitude_A = 2.86
+
+# Single detector image at the Fig 3 caption setpoint (NOT a scan):
+[scan.phi]
+center = -0.42e-3
+range  = 0.0
+npoints = 1
+
+[scan.chi]
+center = 0.46e-3
+range  = 0.0
+npoints = 1
+
+[scan.two_dtheta]
+center = 0.067e-3
+range  = 0.0
+npoints = 1
+
+[io]
+write_strain_provenance = true
