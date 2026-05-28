@@ -1,8 +1,16 @@
 """Colormap helpers for DFXM orientation visualizations.
 
-Provides :func:`inv_polefigure_colors`, an inverse-pole-figure colour gradient
-keyed to seven anchor points (white/cyan/green/orange/red/blue/magenta)
-interpolated by :func:`scipy.interpolate.griddata`.
+Provides :func:`inv_polefigure_colors`, a 2D mosaicity colour key keyed to
+seven anchor points (white/cyan/green/orange/red/blue/magenta) interpolated by
+:func:`scipy.interpolate.griddata`.
+
+.. note:: Not a crystallographic inverse pole figure
+
+    Despite the historical name, this is **not** a crystallographic
+    inverse-pole-figure mapping: there is no stereographic projection and no
+    cubic standard (001-011-111) triangle. It is a flat 2D colour gradient
+    over a ``(chi, diffry)`` plane — a legend/colour key for the two mosaicity
+    components. The name is retained for backward compatibility.
 """
 
 import numpy as np
@@ -14,11 +22,17 @@ def inv_polefigure_colors(
     test_grid: tuple[np.ndarray, np.ndarray],
     float_bit: type = np.float16,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Map an inverse-pole-figure RGB+alpha gradient onto a grid of points.
+    """Map a 2D mosaicity RGB+alpha colour key onto a grid of points.
 
     The colour gradient is anchored at seven points in ``(chi, diffry)`` space
     derived from the ``test_grid`` extents; RGBA values at the ``o_grid``
     sample points are interpolated from those anchors and clipped to ``[0, 1]``.
+    Sample points outside the convex hull of the seven anchors (where linear
+    interpolation is undefined) fall back to the nearest anchor's colour, so
+    the returned array never contains NaN.
+
+    .. note:: This is a flat 2D colour key, **not** a crystallographic inverse
+        pole figure — see the module docstring.
 
     Args:
         o_grid: ``(chi, diffry)`` tuple of 1D arrays defining the points to
@@ -72,11 +86,24 @@ def inv_polefigure_colors(
     # Create a 2D array of all coordinate combinations
     xydata: np.ndarray = np.array([(x, y) for x in o_chi for y in o_diffry], dtype=float_bit)
 
-    # Map the RGB values onto the 2D array of coordinates using griddata
-    reds = griddata(key_xy_points, key_xy_RGBs.T[0], xydata)
-    greens = griddata(key_xy_points, key_xy_RGBs.T[1], xydata)
-    blues = griddata(key_xy_points, key_xy_RGBs.T[2], xydata)
-    alphas = griddata(key_xy_points, key_xy_RGBs.T[3], xydata)
+    # Map the RGB values onto the 2D array of coordinates using griddata.
+    # Linear griddata returns NaN outside the convex hull of the seven anchor
+    # points (and the [0, 1] clip below does not catch NaN, since `NaN < 0` and
+    # `NaN > 1` are both False). Fall back to nearest-neighbour interpolation
+    # for any out-of-hull point so no NaN RGBA leaks to the caller.
+    def _interp(values: np.ndarray) -> np.ndarray:
+        linear = griddata(key_xy_points, values, xydata, method="linear")
+        outside = np.isnan(linear)
+        if outside.any():
+            linear[outside] = griddata(
+                key_xy_points, values, xydata[outside], method="nearest"
+            )
+        return linear
+
+    reds = _interp(key_xy_RGBs.T[0])
+    greens = _interp(key_xy_RGBs.T[1])
+    blues = _interp(key_xy_RGBs.T[2])
+    alphas = _interp(key_xy_RGBs.T[3])
     xy_colors_griddata = np.vstack((reds, greens, blues, alphas)).T
 
     # Force the RGB values to be within range [0, 1]

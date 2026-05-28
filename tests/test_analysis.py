@@ -1,6 +1,7 @@
 """Unit tests for dfxm_geo.analysis.moments and dfxm_geo.analysis.colormaps."""
 
 import numpy as np
+import pytest
 
 from dfxm_geo.analysis.colormaps import inv_polefigure_colors
 from dfxm_geo.analysis.moments import calc_moments
@@ -51,6 +52,22 @@ class TestCalcMoments:
         assert 0.3 < m["mean_u"] < 0.5
         assert abs(m["mean_v"]) < 0.05
 
+    def test_m00_is_total_intensity(self):
+        """m00 (zeroth raw moment) equals the summed intensity — no stray factor."""
+        image = np.full((10, 10), 3.0)
+        m = calc_moments(image, 1.0, 1.0, 10, 10)
+        assert m["m00"] == pytest.approx(np.sum(image))
+
+    def test_zero_intensity_image_raises(self):
+        """An all-zero image has no defined moments → ValueError, not silent NaN."""
+        with pytest.raises(ValueError, match="positive total intensity"):
+            calc_moments(np.zeros((8, 8)), 1.0, 1.0, 8, 8)
+
+    def test_negative_total_intensity_raises(self):
+        """A net-negative image is non-physical and would flip moment signs."""
+        with pytest.raises(ValueError, match="positive total intensity"):
+            calc_moments(np.full((8, 8), -1.0), 1.0, 1.0, 8, 8)
+
 
 class TestInvPolefigureColors:
     def test_returns_array_shapes(self):
@@ -67,7 +84,18 @@ class TestInvPolefigureColors:
         o_grid = (np.linspace(-0.5, 0.5, 4), np.linspace(-0.5, 0.5, 4))
         test_grid = (np.linspace(-1.0, 1.0, 4), np.linspace(-1.0, 1.0, 4))
         colors, _ = inv_polefigure_colors(o_grid, test_grid)
-        # NaNs may appear outside the convex hull of the key points; ignore those.
-        finite = colors[np.isfinite(colors)]
-        assert (finite >= 0).all()
-        assert (finite <= 1).all()
+        assert (colors >= 0).all()
+        assert (colors <= 1).all()
+
+    def test_no_nan_outside_anchor_hull(self):
+        """Sample points outside the 7-anchor hull fall back to nearest, not NaN.
+
+        With o_grid wider than test_grid, many points lie outside the convex
+        hull of the colour anchors — linear griddata returns NaN there, which
+        previously leaked past the [0, 1] clip. The nearest-neighbour fallback
+        must leave no NaN in the output.
+        """
+        o_grid = (np.linspace(-2.0, 2.0, 9), np.linspace(-2.0, 2.0, 9))
+        test_grid = (np.linspace(-1.0, 1.0, 5), np.linspace(-1.0, 1.0, 5))
+        colors, _ = inv_polefigure_colors(o_grid, test_grid)
+        assert not np.isnan(colors).any()

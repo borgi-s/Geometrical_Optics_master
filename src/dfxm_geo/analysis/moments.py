@@ -42,12 +42,25 @@ def calc_moments(
     """
     u, v = np.mgrid[-u_range : u_range : complex(u_steps), -v_range : v_range : complex(v_steps)]
 
-    moments = {}
-    moments["mean_v"] = np.sum(v * image) / np.sum(image)
-    moments["mean_u"] = np.sum(u * image) / np.sum(image)
+    # Total intensity is the normalizer for every moment below. Guard it: a
+    # zero- or negative-sum image has no well-defined centroid (the mean
+    # divisions and the nu0* power normalization would produce NaN/inf), and a
+    # negative total flips the sign of the standardized moments.
+    total = np.sum(image)
+    if total <= 0:
+        raise ValueError(
+            f"calc_moments requires an image with positive total intensity; "
+            f"got sum(image)={total!r}. (Empty, all-zero, or negative-intensity "
+            "images have no defined moments.)"
+        )
 
-    # raw or spatial moments
-    moments["m00"] = np.sum(image) * 2
+    moments = {}
+    moments["mean_v"] = np.sum(v * image) / total
+    moments["mean_u"] = np.sum(u * image) / total
+
+    # raw or spatial moments. m00 is the zeroth raw moment, i.e. the total
+    # intensity (the original MATLAB port carried a stray factor of 2 here).
+    moments["m00"] = total
     moments["m01"] = np.sum(u * image)
     moments["m10"] = np.sum(v * image)
     moments["m02"] = np.sum(u**2 * image)
@@ -60,6 +73,6 @@ def calc_moments(
     moments["mu30"] = np.sum((v - moments["mean_v"]) ** 3 * image)
 
     # central standardized or normalized or scale invariant moments
-    moments["nu03"] = moments["mu03"] / np.sum(image) ** (3 / 2 + 1)  # skewness
-    moments["nu30"] = moments["mu30"] / np.sum(image) ** (3 / 2 + 1)  # skewness
+    moments["nu03"] = moments["mu03"] / total ** (3 / 2 + 1)  # skewness
+    moments["nu30"] = moments["mu30"] / total ** (3 / 2 + 1)  # skewness
     return moments

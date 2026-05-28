@@ -44,11 +44,24 @@ def plot_slip_plane_3d(
         ) from exc
 
     n = np.asarray(slip_plane_normal, dtype=float)
+    n_norm = np.linalg.norm(n)
+    if n_norm == 0:
+        raise ValueError("slip_plane_normal must be a nonzero vector")
     fig = go.Figure()
 
-    # The plane (z = (-n_x x - n_y y) / n_z within a (-1, 1) box).
-    xx, yy = np.meshgrid(np.linspace(-1, 1, 21), np.linspace(-1, 1, 21))
-    zz = (-n[0] * xx - n[1] * yy) / n[2]
+    # Render the plane through the origin spanned by two in-plane basis vectors
+    # orthogonal to n. The earlier `z = (-n_x x - n_y y) / n_z` form divided by
+    # n_z and so produced inf/NaN for planes parallel to the z-axis — e.g. the
+    # common cubic (110)-type normals with n_z == 0. The basis-vector
+    # parameterization is well-defined for any orientation.
+    n_hat = n / n_norm
+    helper = np.array([1.0, 0.0, 0.0]) if abs(n_hat[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = np.cross(n_hat, helper)
+    e1 /= np.linalg.norm(e1)
+    e2 = np.cross(n_hat, e1)
+    s, t = np.meshgrid(np.linspace(-1, 1, 21), np.linspace(-1, 1, 21))
+    plane = s[..., None] * e1 + t[..., None] * e2  # (21, 21, 3)
+    xx, yy, zz = plane[..., 0], plane[..., 1], plane[..., 2]
     fig.add_trace(
         go.Surface(
             z=zz,
