@@ -177,17 +177,28 @@ def _validate_reflection(
 
 
 def _build_kernel_filename(
+    mode: str,
     hkl: tuple[int, int, int],
     keV: float,
+    *,
+    theta: float = 0.0,
+    eta: float = 0.0,
     date: str,
 ) -> str:
-    """Per-reflection kernel npz basename: `Resq_i_h{h}_k{k}_l{l}_{keV}keV_{date}.npz`.
+    """Per-mode kernel npz basename.
+
+    simplified: ``Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_{date}.npz`` (legacy, v2.2.0 pattern).
+    oblique:    ``Resq_i_theta{θ:.4f}rad_eta{η:.4f}rad_{keV:g}keV_{date}.npz``.
 
     `:g` formatting drops trailing zeros on keV (17.0 → "17", 17.5 → "17.5").
     Negative hkl components render naturally (-1 → "h-1").
     """
-    h, k, l = hkl
-    return f"Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_{date}.npz"
+    if mode == "simplified":
+        h, k, l = hkl
+        return f"Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_{date}.npz"
+    if mode == "oblique":
+        return f"Resq_i_theta{theta:.4f}rad_eta{eta:.4f}rad_{keV:g}keV_{date}.npz"
+    raise ValueError(f"unknown geometry mode: {mode!r}")
 
 
 def generate_kernel(
@@ -216,6 +227,10 @@ def generate_kernel(
     hkl: tuple[int, int, int] | None = None,
     keV: float | None = None,
     seed: int | None = None,
+    mode: str = "simplified",
+    eta: float = 0.0,
+    mount: CrystalMount | None = None,
+    omega: float = 0.0,
 ) -> Path:
     """Run the kernel-generation Monte Carlo and write the npz to ``pkl_files/``.
 
@@ -246,6 +261,15 @@ def generate_kernel(
             (useful for regression fixtures and reproducible cluster reruns).
             When None (default), an entropy-seeded `default_rng()` is used and
             the bundled `seed` metadata is recorded as the -1 sentinel.
+        mode: geometry mode — ``"simplified"`` (default, v2.2.0 behaviour) or
+            ``"oblique"`` (oblique-angle DFXM, v2.3.0+).  Preserved in npz
+            metadata as ``geometry_mode``.
+        eta: sample-tilt angle η (radians).  0.0 in simplified mode; set from
+            ``[geometry] eta`` in the TOML for oblique mode.
+        mount: :class:`CrystalMount` describing the crystal orientation.
+            ``None`` (default) falls back to :data:`_DEFAULT_AL_CRYSTAL`.
+        omega: azimuthal motor angle ω (radians) derived from the geometry
+            validation; 0.0 in simplified mode.
 
     Returns:
         The path the npz was written to.
@@ -258,6 +282,8 @@ def generate_kernel(
 
     if output_path is not None:
         output_path = Path(output_path)
+
+    _mount = mount if mount is not None else _DEFAULT_AL_CRYSTAL
 
     kernel_meta = {
         "Nrays": np.int64(Nrays),
@@ -286,6 +312,15 @@ def generate_kernel(
         "keV": np.float64(keV if keV is not None else 0.0),
         # MC seed provenance. -1 sentinel = unseeded (entropy) run.
         "seed": np.int64(seed if seed is not None else -1),
+        # Oblique-angle metadata (defaults preserve v2.2.0 LUT consumability).
+        "eta": np.float64(eta),
+        "geometry_mode": np.str_(mode),
+        "lattice": np.str_(_mount.lattice),
+        "a": np.float64(_mount.a),
+        "mount_x": np.array(_mount.mount_x, dtype=np.int64),
+        "mount_y": np.array(_mount.mount_y, dtype=np.int64),
+        "mount_z": np.array(_mount.mount_z, dtype=np.int64),
+        "omega": np.float64(omega),
     }
 
     reciprocal_res_func(
@@ -421,7 +456,10 @@ def cli_main(argv: list[str] | None = None) -> int:
     # `date` and `output_path` are CLI-managed kwargs, not TOML-driven.
     # `hkl` and `keV` are cli_main-scope reflection inputs, not
     # `generate_kernel` kwargs — added explicitly to the allow-list.
-    valid_recip_keys = (valid_params - {"date", "output_path"}) | {"hkl", "keV"}
+    # `mode`, `eta`, `mount`, `omega` come from [geometry]/[crystal] blocks,
+    # not from [reciprocal] — exclude them from the [reciprocal] key check.
+    cli_managed = {"date", "output_path", "mode", "eta", "mount", "omega"}
+    valid_recip_keys = (valid_params - cli_managed) | {"hkl", "keV"}
     unknown = set(data["reciprocal"]) - valid_recip_keys
     if unknown:
         print(
@@ -450,7 +488,27 @@ def cli_main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    a_lattice = 4.0495e-10  # Al lattice parameter, m
+    # Parse [crystal] and [geometry] blocks.
+    mount_block = data.get("crystal")
+    geometry_block = data.get("geometry")
+
+    # Spec §6: [crystal] without [geometry] is a configuration error — the user
+    # must be explicit about which geometry mode to use.
+    if mount_block is not None and geometry_block is None:
+        raise ValueError(
+            "[crystal] block requires [geometry] mode to be set explicitly. "
+            "Use mode='simplified' for v2.2.0 behavior, mode='oblique' for "
+            "oblique-angle geometry."
+        )
+
+    try:
+        mode, config_eta = _parse_geometry_block(geometry_block)
+        mount = _crystal_mount_from_toml(mount_block)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    a_lattice = mount.a
     if raw_hkl is not None and raw_keV is not None:
         try:
             hkl_tuple: tuple[int, int, int] = tuple(raw_hkl)
@@ -475,16 +533,38 @@ def cli_main(argv: list[str] | None = None) -> int:
     if "theta" not in reciprocal_kwargs:
         reciprocal_kwargs["theta"] = theta
 
+    # Oblique mode: cross-check eta, override theta, and record omega.
+    omega_for_meta = 0.0
+    if mode == "oblique":
+        try:
+            theta_validated, omega_validated = _validate_eta_against_compute_omega_eta(
+                mount, hkl_tuple, keV_for_filename, config_eta
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        reciprocal_kwargs["theta"] = theta_validated
+        reciprocal_kwargs["eta"] = config_eta
+        omega_for_meta = omega_validated
+        theta = theta_validated
+
     # Echo computed θ for sanity (Q4).
     theta_deg = float(np.degrees(theta))
     print(f"reflection: hkl={hkl_tuple}, keV={keV_for_filename:g} -> theta = {theta_deg:.4f} deg")
 
-    # Build output path.
+    # Build output path with the per-mode filename selector.
     if args.output is not None:
         output_path = args.output
     else:
         date = datetime.now().strftime("%Y%m%d_%H%M")
-        output_path = Path(fm.pkl_fpath) / _build_kernel_filename(hkl_tuple, keV_for_filename, date)
+        output_path = Path(fm.pkl_fpath) / _build_kernel_filename(
+            mode=mode,
+            hkl=hkl_tuple,
+            keV=keV_for_filename,
+            theta=reciprocal_kwargs.get("theta", 0.0),
+            eta=config_eta,
+            date=date,
+        )
 
     if output_path.exists():
         if args.if_missing:
@@ -503,7 +583,14 @@ def cli_main(argv: list[str] | None = None) -> int:
     # CLI --seed overrides any `seed` set in the TOML [reciprocal] block.
     if args.seed is not None:
         reciprocal_kwargs["seed"] = args.seed
-    written = generate_kernel(output_path=output_path, **reciprocal_kwargs)
+    written = generate_kernel(
+        output_path=output_path,
+        mode=mode,
+        eta=config_eta,
+        mount=mount,
+        omega=omega_for_meta,
+        **reciprocal_kwargs,
+    )
     print(f"wrote {written}")
     return 0
 
