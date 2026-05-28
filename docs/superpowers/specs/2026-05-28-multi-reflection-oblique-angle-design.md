@@ -196,7 +196,9 @@ mount_z  = [0, 0, 1]
 
 [geometry]
 mode = "oblique"            # multi-reflection requires oblique
-eta  = 0.2691               # rad — 15.417°, paper Table A.2 group 1
+eta  = 0.3531               # rad — η = 20.233°, paper Table A.2 group 1
+                            # (the shared Bragg angle θ = 15.417° = 0.2691 rad
+                            #  is derived from the reflections, not in config)
 keV  = 19.1                 # shared across all reflections in this run
 
 [[reflections]]
@@ -462,15 +464,41 @@ Science gates. Phase A ships when the first four pass; Phase B when the rest.
   Table A.2 numerically (Al, mount=(100,010,001), keV=19.1, θ ≤ 16.25°).
   Assert (ω₁, ω₂, η₁, η₂, θ) match to `1e-3 rad`. **Canonical paper-parity test.**
 - `test_find_reflections_matches_table_A2_grouping.py` — `find_reflections`
-  returns the same group structure (4 reflections at η=15.417°, θ=20.233°;
+  returns the same group structure (4 reflections at η=20.233°, θ=15.417°;
   4 at the second η; …).
 - `test_mc_vs_analytic_oblique_parity.py` — at 3 non-zero (η, θ) configs,
   MC LUT (200M rays) vs analytic closed-form agree to RMS ≤ 5e-4 in
   normalized intensity. Borrow `tools/mc_vs_analytic.py` infrastructure.
-- `test_oblique_single_reflection_reproduces_paper_figure.py` — reproduce
-  one specific single-reflection paper figure at non-zero η; compare RMS
-  to a vetted golden. **Phase A ships when this passes.** Paper-figure
-  number to be picked at implementation time.
+- `test_oblique_single_reflection_reproduces_paper_figure3B.py` — reproduce
+  **paper Figure 3B** (single detector image, described in caption + §6.1).
+  Setup pinned by the paper:
+
+  | Parameter | Value | Source |
+  |---|---|---|
+  | Crystal | Al, lattice `a = 4.0493 Å` | §6.1 |
+  | Mount | `(100)//x̂_l, (010)//ŷ_l, (001)//ẑ_l` | §6.1 |
+  | Reflection | one of `(1̄1̄3), (1̄13), (113), (11̄3)` (Phase A picks one) | §6.1, Table A.2 |
+  | Bragg angle | θ = 15.417° = 0.2691 rad | §6.1, Table A.2 |
+  | Azimuth | η = 20.233° = 0.3531 rad | §6.1, Table A.2 |
+  | Beam energy | 19.1 keV | §6.2 |
+  | Dislocation | single straight edge: b ∥ [11̄0] (\|b\| = 2.86 Å); n ∥ [111̄]; t ∥ [112] | §6.1, after Borgi et al. 2024 / Poulsen et al. 2021 |
+  | Sample | 25 µm³, voxel 37.878 nm, grid 265×265×27 | §6.1 |
+  | Goniometer image setpoint | φ = -0.42 mrad, χ = 0.46 mrad, 2θ = 0.067 mrad | Fig 3 caption |
+  | CRL | 69 lenses, separation 1600 µm, apex radius 50 µm; FWHM acceptance 0.556 mrad | §6.2 |
+  | Geometry distances | d₁ = 37.826 cm, d₂ = 650.899 cm (M = 15.1) | §6.2 |
+  | Beam profile | Gaussian in ẑ_l, FWHM = 236 nm; flat in x̂_l, ŷ_l | §6.2 |
+  | Energy bandwidth | Δk/k std = 6×10⁻⁵ | §6.2 |
+  | Vertical divergence | FWHM 0.027 mrad; horizontal 0 | §6.2 |
+  | Detector | 272×272 pixels, 0.75 µm/pixel, 16-bit unsigned, 9×9 PSF (Gaussian σ=1 px) | §6.2 |
+  | Noise | shot (Poisson) + thermal (Normal: µ=99.453, σ=2.317) | §6.2 |
+
+  Compare resulting image to a vetted golden (generated once at impl time
+  from the same parameters, verified by hand against the paper's Figure 3B).
+  Tolerance: per-pixel RMS ≤ 5e-3 of the maximum intensity, plus a structural
+  similarity gate (the dislocation contrast pattern must be visually
+  recognizable to a human reviewer in failure-mode reporting).
+
+  **Phase A ships when this passes.**
 - `test_multi_reflection_one_lut_shared.py` (Phase B) — `[[reflections]]`
   config bootstraps exactly ONE LUT for the group; forward consumes it
   for all reflections.
