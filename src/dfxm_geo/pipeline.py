@@ -790,6 +790,8 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         positioners=positioners,
         Hg_provider=Hg_provider,
         write_strain_provenance=config.io.write_strain_provenance,
+        geometry_mode="oblique" if config.reciprocal.eta != 0.0 else "simplified",
+        eta=config.reciprocal.eta,
     )
     return {
         "h5_path": h5_path,
