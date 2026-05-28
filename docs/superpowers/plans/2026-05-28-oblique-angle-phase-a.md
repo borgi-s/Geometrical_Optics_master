@@ -1,5 +1,7 @@
 # Oblique-angle DFXM — Phase A (v2.3.0) Implementation Plan
 
+> **BEFORE YOU START:** Read `docs/superpowers/context/2026-05-28-oblique-angle-execution-notes.md`. It carries the brainstorm context (scope decisions, η/θ gotcha, project conventions, cluster-vs-laptop command substitutions, deferred-feature list) that lived in the prior session's memory and isn't otherwise on this branch.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add `eta` (azimuthal-angle) support to `dfxm_geo` end-to-end (LUT bootstrap, MC + analytic backends, forward, identify, HDF5 provenance) so that a single oblique-angle DFXM reflection reproduces paper Figure 3B. Multi-reflection iteration is Phase B (separate plan, v2.4.0).
