@@ -808,6 +808,7 @@ def _load_resolution(config: ReciprocalConfig, geometry: GeometryConfig | None =
         _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
 
 
+@fm._forward_state_guard()
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
     """Execute a DFXM forward-simulation run from a config object.
 
@@ -1084,6 +1085,7 @@ def _resolve_postprocess_Hg(h5_path: Path, Hg: np.ndarray | None) -> np.ndarray:
     )
 
 
+@fm._forward_state_guard()
 def run_postprocess(
     output_dir: Path,
     config: SimulationConfig,
@@ -1124,6 +1126,8 @@ def run_postprocess(
         raise FileNotFoundError(
             f"Expected {h5_path}; run dfxm-forward without --postprocess-only first."
         )
+
+    _load_resolution(config.reciprocal, config.geometry)
 
     # Sanity-check that /2.1 exists (the perfect-crystal scan is still part of
     # the forward-output contract, even though postprocessing no longer reads it).
@@ -2065,6 +2069,7 @@ def _run_identification_zscan(
     }
 
 
+@fm._forward_state_guard()
 def run_identification(
     config: IdentificationConfig,
     output_dir: Path,

@@ -191,6 +191,55 @@ def reflection_theta_if_oblique(mode: str, theta_new: float | None) -> Iterator[
         theta_0, theta, Theta, xl_start, xl_range, rl, prob_z = saved
 
 
+_GUARDED_GLOBALS = (
+    "theta_0",
+    "theta",
+    "Theta",
+    "xl_start",
+    "xl_range",
+    "rl",
+    "prob_z",
+    "Resq_i",
+    "qi1_start",
+    "qi1_step",
+    "qi2_start",
+    "qi2_step",
+    "qi3_start",
+    "qi3_step",
+    "npoints1",
+    "npoints2",
+    "npoints3",
+    "qi_starts",
+    "qi_steps",
+    "_analytic_eval",
+    "Hg",
+    "q_hkl",
+    "_loaded_kernel_path",
+)
+
+
+@contextlib.contextmanager
+def _forward_state_guard() -> Iterator[None]:
+    """Snapshot every mutable forward-model global on entry; restore on exit.
+
+    Makes cross-config leakage on a persistent worker impossible: whatever a
+    run mutates (kernel load, oblique theta rebuild, strain field) is rolled
+    back when the run completes or raises. Subsumes
+    ``reflection_theta_if_oblique``'s restore responsibility.
+
+    Usable as a context manager OR a decorator (``@contextmanager`` produces a
+    ``ContextDecorator``): ``@_forward_state_guard()`` re-snapshots on each call.
+    ``globals()`` here is forward_model's module dict regardless of where the
+    decorator is applied.
+    """
+    g = globals()
+    saved = {n: g.get(n) for n in _GUARDED_GLOBALS}
+    try:
+        yield
+    finally:
+        g.update(saved)
+
+
 # To avoid edge effects:
 # for dis 0.25, ndis >= 7501
 # for dis 0.5, ndis >= 1151
