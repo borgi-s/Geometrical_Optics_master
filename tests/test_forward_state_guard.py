@@ -70,7 +70,9 @@ def _kernel_on_disk() -> None:
         pytest.skip("no (-1,1,-1) 17keV kernel npz on disk; run dfxm-bootstrap")
 
 
-def test_run_postprocess_self_loads_kernel_after_guarded_run_simulation(tmp_path, _kernel_on_disk):
+def test_run_postprocess_self_loads_kernel_after_guarded_run_simulation(
+    tmp_path, _kernel_on_disk, monkeypatch
+):
     from dfxm_geo.pipeline import (
         AxisScanConfig,
         CrystalConfig,
@@ -82,6 +84,13 @@ def test_run_postprocess_self_loads_kernel_after_guarded_run_simulation(tmp_path
         run_postprocess,
         run_simulation,
     )
+
+    # Reset kernel globals to None before the test so the guard snapshots None
+    # and restores None, regardless of what a prior test may have left loaded.
+    # Without this, the guard correctly restores the pre-call value (whatever
+    # the previous test loaded), making "is None" order-dependent.
+    monkeypatch.setattr(fm, "Resq_i", None)
+    monkeypatch.setattr(fm, "_loaded_kernel_path", None)
 
     cfg = SimulationConfig(
         crystal=CrystalConfig(

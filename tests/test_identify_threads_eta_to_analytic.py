@@ -107,6 +107,9 @@ def test_run_identification_threads_eta_for_each_sub_mode(
     We only need to verify that _load_resolution is called (and thus eta is
     threaded) before the sub-runner is ever reached — which is guaranteed by
     the code structure at pipeline.py line ~1841.
+
+    fm._analytic_eval is captured at sub-runner dispatch (inside the guard),
+    since the state guard restores fm._analytic_eval to None on exit.
     """
     _patch_fm_kernel(monkeypatch)
 
@@ -121,15 +124,23 @@ def test_run_identification_threads_eta_for_each_sub_mode(
         "z-scan": "dfxm_geo.pipeline._run_identification_zscan",
     }
 
+    captured: dict[str, Any] = {}
+
+    def _capture_stub(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        # Runs inside run_identification's state guard, AFTER _load_resolution
+        # has threaded eta → fm._analytic_eval and BEFORE the guard restores it.
+        captured["eval"] = fm._analytic_eval
+        return stub_result
+
     from dfxm_geo.pipeline import run_identification
 
-    with patch(runner_map[mode], return_value=stub_result):
+    with patch(runner_map[mode], side_effect=_capture_stub):
         run_identification(_make_identify_config(mode, eta=0.3), tmp_path)
 
-    assert fm._analytic_eval is not None, (
-        f"fm._analytic_eval is None after run_identification(mode={mode!r}, eta=0.3); "
-        "_load_resolution was not called or did not select the analytic path."
+    assert captured["eval"] is not None, (
+        f"fm._analytic_eval was None at sub-runner dispatch (mode={mode!r}); "
+        "_load_resolution did not run or did not select the analytic path."
     )
-    assert fm._analytic_eval.eta == pytest.approx(0.3), (
-        f"Expected eta=0.3 in _analytic_eval, got {fm._analytic_eval.eta} (mode={mode!r})"
+    assert captured["eval"].eta == pytest.approx(0.3), (
+        f"Expected eta=0.3 in _analytic_eval, got {captured['eval'].eta} (mode={mode!r})"
     )

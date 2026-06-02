@@ -374,12 +374,15 @@ class TestRunPostprocess:
         tiny_h5_simulation_output: tuple[Path, SimulationConfig],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """If fm.Hg is None (no run_simulation, no kernel load),
-        run_postprocess should fail fast with a clear error rather than
+        """When no Hg source exists (no explicit arg, no /1.1/dfxm_geo/Hg in the
+        file, fm.Hg None, and the kernel load supplies none), run_postprocess
+        fails fast via the _resolve_postprocess_Hg priority-4 guard rather than
         crashing inside fm.forward()."""
         output_dir, config = tiny_h5_simulation_output
+        # Neutralise the Task-3 self-load so it cannot fill fm.Hg from a kernel.
+        monkeypatch.setattr("dfxm_geo.pipeline._load_resolution", lambda *a, **k: None)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
-        with pytest.raises(RuntimeError, match="fm.Hg is not set"):
+        with pytest.raises(RuntimeError, match="Cannot postprocess"):
             run_postprocess(output_dir, config)
 
 

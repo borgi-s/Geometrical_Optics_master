@@ -84,10 +84,11 @@ class TestForwardMultiReflection:
         # called directly from pipeline.py post-Phase-9; the only remaining
         # heavy call site is write_simulation_h5.)
         monkeypatch.setattr(fm, "Find_Hg", lambda *a, **k: (np.zeros((4, 4, 4)), np.zeros(3)))
+        _captured: dict[str, object] = {}
         monkeypatch.setattr(
             p,
             "write_simulation_h5",
-            lambda *a, **k: None,
+            lambda *a, **k: _captured.__setitem__("path", fm._loaded_kernel_path),
         )
 
         cfg = tmp_path / "config.toml"
@@ -105,8 +106,9 @@ class TestForwardMultiReflection:
         config = SimulationConfig.from_toml(cfg)
         p.run_simulation(config, tmp_path / "out")
 
-        # Verify the actually-loaded path is the staged kernel.
-        assert fm._loaded_kernel_path == kernel_path
+        # Verify the actually-loaded path (captured during the guarded run, since
+        # the state guard restores fm._loaded_kernel_path to None on exit).
+        assert _captured["path"] == kernel_path
 
     def test_lookup_miss_errors_cleanly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
