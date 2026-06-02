@@ -56,38 +56,35 @@ Removes the persistent-worker-pool hazard *without* introducing `ForwardContext`
 
 - [ ] **Step 1: Write the failing test**
 
-`_iter_identification_multi` currently does `q_hkl = np.asarray(fm.q_hkl, dtype=float); fm.q_hkl = q_hkl` — the write is a no-op leftover that mutates a process global from inside a generator body. Test that advancing the generator does not mutate `fm.q_hkl`.
+`_iter_identification_multi` currently does `q_hkl = np.asarray(fm.q_hkl, dtype=float); fm.q_hkl = q_hkl` — the write is a no-op leftover (it assigns back the same float64 object) that mutates a process global from inside a generator body. **A purely behavioral test cannot distinguish pre/post deletion** (the written value equals the read value), and driving the generator to that line requires a full kernel + population stand-up. So the honest TDD-shaped guard is a static source assertion that the reassignment is gone — red before the edit, green after, and a permanent guard against reintroduction. The existing multi-identify integration tests provide the behavioral regression safety net.
 
 ```python
 # tests/test_forward_state_guard.py
+import inspect
 import numpy as np
 import pytest
 from dfxm_geo.direct_space import forward_model as fm
+from dfxm_geo import pipeline
 
 
-def test_multi_identify_generator_does_not_write_fm_q_hkl(tmp_path, monkeypatch):
-    """_iter_identification_multi must not mutate the fm.q_hkl global.
+def test_multi_identify_generator_does_not_assign_fm_q_hkl():
+    """_iter_identification_multi must not assign the fm.q_hkl global.
 
     Regression for #10: a generator writing a process global is a data race
-    on the planned persistent-worker pool.
+    on the planned persistent-worker pool. The original write was a no-op
+    (assigned back the value just read), so this guards the source directly.
     """
-    from dfxm_geo import pipeline
-
-    sentinel = object()
-    monkeypatch.setattr(fm, "q_hkl", sentinel, raising=False)
-    # Build a minimal multi config + advance one frame.
-    config = pipeline._minimal_multi_config_for_test()  # helper added in Step 3 setup
-    ctx_iter = pipeline._iter_identification_multi(config)
-    next(ctx_iter, None)
-    assert fm.q_hkl is sentinel, "generator wrote fm.q_hkl"
+    src = inspect.getsource(pipeline._iter_identification_multi)
+    # No assignment to fm.q_hkl in any spacing (reads `... = np.asarray(fm.q_hkl...)`
+    # are fine; only `fm.q_hkl = ...` is the forbidden write).
+    compact = src.replace(" ", "")
+    assert "fm.q_hkl=" not in compact, "generator still assigns fm.q_hkl"
 ```
-
-If a shared `_minimal_multi_config_for_test` helper does not already exist, reuse the smallest existing multi-mode fixture from `tests/test_pipeline.py` (grep `def test_*identification_multi`) and inline its config build instead of the helper call. Keep the grid tiny (5×5, Npixels 64) per the smoke-test scale-down rule.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `... -m pytest tests/test_forward_state_guard.py -v`
-Expected: FAIL — `assert fm.q_hkl is sentinel` fails because the generator overwrites it on the first `next()`.
+Expected: FAIL — `assert "fm.q_hkl=" not in compact` fails because the generator still contains the assignment at line 1675.
 
 - [ ] **Step 3: Delete the write**
 
