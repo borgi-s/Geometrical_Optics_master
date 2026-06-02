@@ -688,6 +688,65 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> None:
         Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
 
 
+def build_instrument_context() -> InstrumentContext:
+    """Snapshot the current instrument/detector globals into a frozen dataclass.
+
+    The returned object is immutable and thread-safe; pass it to
+    ``build_geometry_context`` to obtain the matching ``GeometryContext``.
+    """
+    return InstrumentContext(
+        psize=psize,
+        zl_rms=zl_rms,
+        Npixels=Npixels,
+        Nsub=Nsub,
+        NN1=NN1,
+        NN2=NN2,
+        NN3=NN3,
+        Ud=Ud,
+        Us=Us,
+        flat_indices=_flat_indices,
+        yl_start=yl_start,
+        xl_steps=xl_steps,
+        yl_steps=yl_steps,
+        zl_steps=zl_steps,
+    )
+
+
+def build_geometry_context(theta_0_: float, instrument: InstrumentContext) -> GeometryContext:
+    """Build a ``GeometryContext`` for the given Bragg angle.
+
+    Uses the same expressions as ``reflection_theta_if_oblique``'s rebuild
+    block so that the oblique path remains bit-for-bit identical when
+    constructed through this function.  ``yl_range`` and ``zl_range`` are
+    module-level constants (not in ``InstrumentContext``) and are referenced
+    directly.
+
+    Args:
+        theta_0_: Bragg angle in radians.
+        instrument: ``InstrumentContext`` that provides the detector/grid dims.
+    """
+    th = float(theta_0_)
+    Theta_ = np.array([[np.cos(th), 0, np.sin(th)], [0, 1, 0], [-np.sin(th), 0, np.cos(th)]])
+    xl_start_ = instrument.yl_start / np.tan(2 * th) / 3
+    xl_range_ = -xl_start_
+    rl_ = np.vstack(  # type: ignore[call-overload]
+        np.mgrid[
+            -xl_range_ : xl_range_ : complex(instrument.xl_steps),
+            -yl_range : yl_range : complex(instrument.yl_steps),
+            -zl_range : zl_range : complex(instrument.zl_steps),
+        ]
+    ).reshape(3, -1)
+    prob_z_ = np.exp(-0.5 * (rl_[2] / instrument.zl_rms) ** 2)
+    return GeometryContext(
+        theta_0=th,
+        Theta=Theta_,
+        xl_start=xl_start_,
+        xl_range=xl_range_,
+        rl=rl_,
+        prob_z=prob_z_,
+    )
+
+
 def precompute_forward_static(Hg: np.ndarray) -> np.ndarray:
     """Compute the phi/chi/2theta-independent part of the forward model.
 
