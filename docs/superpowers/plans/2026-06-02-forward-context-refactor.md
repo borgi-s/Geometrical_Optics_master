@@ -977,6 +977,13 @@ rg "fm\.(Hg|q_hkl|theta|theta_0|Theta|rl|prob_z|Resq_i|_analytic_eval|_loaded_ke
 rg "reflection_theta_if_oblique" src/
 rg "_context_from_globals" src/
 ```
+**CRITICAL — the `fm.` grep does NOT catch BARE-NAME readers inside `forward_model.py` itself** (it reads its own globals as `Theta`, `rl`, `theta_0`, … not `fm.Theta`). Slice 4's sweep already found the live intra-module readers of the to-be-deleted globals — handle each before deleting:
+  - `_find_hg_from_population_numpy` (~line 1414) reads `Theta` (and `Us`, which is kept) as bare globals — it's the test-only NumPy parity oracle for `find_hg_population`. Thread `ctx` into it (and update the parity test that calls it to pass `ctx=_context_from_globals()` *before* `_context_from_globals` is deleted, OR pass an explicitly-built `ForwardContext`), OR keep it reading via a small shim. Do NOT let it `NameError` after the deletion.
+  - `reflection_theta_if_oblique` reads/writes the deleted globals — it is itself deleted in this slice.
+  - `_context_from_globals` / `build_forward_context` read them intentionally (the snapshot source) — deleted with the shim here.
+  - `Find_Hg`, `Find_Hg_from_population`, `precompute_forward_static`, `forward_from_static`, `forward` already take `ctx` (Slices 3-4) — verify their callers always pass it once the fallback is removed.
+Re-grep `forward_model.py` for bare `\b(Theta|rl|prob_z|theta_0|Resq_i|qi1_start|_analytic_eval|Hg|q_hkl|_loaded_kernel_path)\b` reads in any function body before deleting, to be sure no other intra-module reader remains.
+
 Then delete: the per-reflection/per-resolution/strain module globals (`theta_0`, `theta`, `Theta`, `xl_start`, `xl_range`, `rl`, `prob_z`, `Resq_i`, `qi*`, `npoints*`, `qi_starts/steps`, `_analytic_eval`, `Hg`, `q_hkl`, `_loaded_kernel_path`), `reflection_theta_if_oblique`, `_context_from_globals`, and the `ctx=None` fallbacks in the three forward functions (make `ctx` a required positional). **Keep** the instrument constants (`psize`, `zl_rms`, `Npixels`, `Nsub`, `NN1/2/3`, `Us`, `Ud`, `_flat_indices`, `yl_start`, `xl/yl/zl_steps/range`) — `InstrumentContext` is built from them and they are reflection-independent (spec "Out of scope").
 
 - [ ] **Step 4: Update `io/migrate.py`**
