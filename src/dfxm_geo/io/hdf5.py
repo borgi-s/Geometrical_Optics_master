@@ -599,6 +599,13 @@ def write_identification_h5(
     ``zl_rms`` scalars are retained. The ``Hg`` dump dominates per-scan size,
     so disable it for batch/ML identification runs.
 
+    `ctx` is a forward-compat hook and is currently unused by this function:
+    the per-frame ``ForwardContext`` is already carried inside each
+    ``_FrameArgs`` tuple in ``spec.detectors`` (built upstream by
+    ``pipeline._scan_frames_args``), so frames render against the right context
+    without this param. Accepted so external callers can pass a ctx explicitly
+    once the globals shim is removed (Slice 5).
+
     Returns the count of scans written.
     """
 
