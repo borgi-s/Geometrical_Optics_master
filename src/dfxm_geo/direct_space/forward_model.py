@@ -340,6 +340,7 @@ def Find_Hg(
     S: np.ndarray = _S_IDENTITY,
     remount_name: str = "S1",
     z_offset_um: float = 0.0,
+    ctx: "ForwardContext | None" = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the displacement gradient field Hg and reciprocal vector q_hkl.
 
@@ -360,6 +361,9 @@ def Find_Hg(
             ``Z_shift(z_offset_um)`` and the cache filename gains a
             ``_z{round(z_offset_um*1000)}nm`` suffix so each z layer has its
             own Fg cache. When zero, behaviour is identical to v1.2.0.
+        ctx: Optional ForwardContext; when provided, geometry (rl/Theta/theta_0)
+            and kernel-path provenance are sourced from it instead of the module
+            globals (globals fallback for legacy callers).
 
     Returns:
         (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
@@ -403,21 +407,25 @@ def Find_Hg(
         )
     )
 
-    # Pick the rl grid: shifted if z_offset_um != 0, else the module-level rl.
-    rl_eff = Z_shift(z_offset_um) if z_offset_um != 0.0 else rl
-    Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta, dis, ndis, Fg_path, S=S)
+    # Pick the rl grid: shifted if z_offset_um != 0, else ctx or module-level rl.
+    rl_eff = (
+        Z_shift(z_offset_um) if z_offset_um != 0.0 else (ctx.geometry.rl if ctx is not None else rl)
+    )
+    Theta_ = ctx.geometry.Theta if ctx is not None else Theta
+    Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta_, dis, ndis, Fg_path, S=S)
 
     if not os.path.exists(Fg_path.replace(".npy", "_vars.txt")):
+        _lkp = ctx.resolution.loaded_kernel_path if ctx is not None else _loaded_kernel_path
         vars = {
-            "Resq_i": _loaded_kernel_path.name if _loaded_kernel_path else "<not loaded>",
+            "Resq_i": _lkp.name if _lkp else "<not loaded>",
             "psize [nm]": psize,
             "zl_rms": zl_rms,
-            "theta_0 [rad]": theta_0,
+            "theta_0 [rad]": (ctx.geometry.theta_0 if ctx is not None else theta_0),
             "Npixels": Npixels,
             "Nsub": Nsub,
             "Ud": Ud.tolist(),
             "Us": Us.tolist(),
-            "Theta": Theta.tolist(),
+            "Theta": Theta_.tolist(),
             "ndis": ndis,
             "dis [micrometer]": dis,
             "q_hkl": q_hkl.tolist(),

@@ -888,6 +888,7 @@ def _run_simulation_inner(config: SimulationConfig, output_dir: Path) -> dict[st
                 S=S,
                 remount_name=w.sample_remount,
                 z_offset_um=z,
+                ctx=ctx,
             )
 
         sample_dis = w.dis
