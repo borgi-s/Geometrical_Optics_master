@@ -22,31 +22,9 @@ def test_multi_identify_generator_does_not_assign_fm_q_hkl():
 
 
 def test_forward_state_guard_restores_all_mutable_globals():
-    names = [
-        "theta_0",
-        "theta",
-        "Theta",
-        "xl_start",
-        "xl_range",
-        "rl",
-        "prob_z",
-        "Resq_i",
-        "qi1_start",
-        "qi1_step",
-        "qi2_start",
-        "qi2_step",
-        "qi3_start",
-        "qi3_step",
-        "npoints1",
-        "npoints2",
-        "npoints3",
-        "qi_starts",
-        "qi_steps",
-        "_analytic_eval",
-        "Hg",
-        "q_hkl",
-        "_loaded_kernel_path",
-    ]
+    # Drive off the guard's own list so this test auto-covers any name added to
+    # (or removed from) _GUARDED_GLOBALS — no stale hardcoded copy to drift.
+    names = list(fm._GUARDED_GLOBALS)
     before = {n: getattr(fm, n, None) for n in names}
     with fm._forward_state_guard():
         fm.theta_0 = 1.2345

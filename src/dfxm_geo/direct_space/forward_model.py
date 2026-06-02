@@ -227,10 +227,11 @@ def _forward_state_guard() -> Iterator[None]:
     back when the run completes or raises. Subsumes
     ``reflection_theta_if_oblique``'s restore responsibility.
 
-    Usable as a context manager OR a decorator (``@contextmanager`` produces a
-    ``ContextDecorator``): ``@_forward_state_guard()`` re-snapshots on each call.
-    ``globals()`` here is forward_model's module dict regardless of where the
-    decorator is applied.
+    Usable as a context manager OR a decorator: calling ``_forward_state_guard()``
+    returns a ``_GeneratorContextManager`` (which is a ``ContextDecorator``), so
+    ``@_forward_state_guard()`` re-snapshots on each decorated call (via
+    ``_recreate_cm``). ``globals()`` here is forward_model's module dict
+    regardless of where the decorator is applied.
     """
     g = globals()
     saved = {n: g.get(n) for n in _GUARDED_GLOBALS}
