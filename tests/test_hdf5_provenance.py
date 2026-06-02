@@ -72,6 +72,40 @@ def test_write_provenance_kernel_subgroup(tmp_path: Path) -> None:
             )
 
 
+def test_write_provenance_kernel_string_metadata(tmp_path: Path) -> None:
+    """Oblique-arc kernels bundle string metadata (`geometry_mode`, `lattice`)
+    as numpy fixed-width-unicode (<U) arrays. h5py cannot serialize <U dtypes,
+    so _write_provenance must convert them to native variable-length strings.
+    Otherwise EVERY HDF5-writing run that loads a v2.3.0-branch kernel raises
+    'No conversion path for dtype <U..' (regression: the oblique arc added the
+    string fields without updating the provenance mirror)."""
+    npz_path = tmp_path / "Resq_i_oblique.npz"
+    np.savez(
+        npz_path,
+        Resq_i=np.zeros((4, 4, 4), dtype=np.float64),
+        qi1_range=1.0,
+        qi2_range=2.0,
+        qi3_range=3.0,
+        npoints1=4,
+        npoints2=4,
+        npoints3=4,
+        Nrays=int(1e6),
+        geometry_mode="simplified",  # numpy stores as <U10
+        lattice="cubic",  # <U5
+    )
+    out = tmp_path / "oblique.h5"
+    with h5py.File(out, "w") as f:
+        _write_provenance(f, cli="x", kernel_npz=npz_path)
+    with h5py.File(out, "r") as f:
+        k = f["/dfxm_geo/kernel"]
+
+        def _s(x: object) -> str:
+            return x.decode() if isinstance(x, bytes) else str(x)
+
+        assert _s(k["geometry_mode"][()]) == "simplified"
+        assert _s(k["lattice"][()]) == "cubic"
+
+
 def test_write_provenance_config_toml(tmp_path: Path) -> None:
     config_str = "[crystal]\ndis = 4.0\nndis = 151\n"
     out = tmp_path / "test.h5"

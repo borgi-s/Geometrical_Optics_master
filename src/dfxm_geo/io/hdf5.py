@@ -296,7 +296,13 @@ def _write_provenance(
                     continue  # the array itself, not metadata
                 if key in k:
                     del k[key]
-                k.create_dataset(key, data=arch[key])
+                val = arch[key]
+                # h5py cannot serialize numpy fixed-width-unicode (<U) arrays
+                # (the oblique-arc kernels bundle `geometry_mode`/`lattice` as
+                # <U strings); store them as native variable-length strings.
+                if val.dtype.kind == "U":
+                    val = val.item() if val.ndim == 0 else val.astype(object)
+                k.create_dataset(key, data=val)
 
     if config_toml is not None:
         if "config_toml" in g:
