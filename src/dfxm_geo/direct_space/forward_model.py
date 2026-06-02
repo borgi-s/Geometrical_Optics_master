@@ -15,6 +15,7 @@ Default geometry constants match ID06 at the ESRF; see `dfxm_geo.constants`.
 import contextlib
 import os
 from collections.abc import Iterator
+from dataclasses import dataclass
 from dataclasses import dataclass as _dataclass
 from pathlib import Path
 from pprint import pprint
@@ -34,6 +35,66 @@ if TYPE_CHECKING:
 # Module-level default for the sample-remount rotation matrix.
 # Defined here to avoid cross-module imports and satisfy ruff-B008.
 _S_IDENTITY: np.ndarray = np.identity(3)
+
+
+@dataclass(frozen=True)
+class InstrumentContext:
+    """Per-process, reflection-independent ray grid + detector geometry."""
+
+    psize: float
+    zl_rms: float
+    Npixels: int
+    Nsub: int
+    NN1: int
+    NN2: int
+    NN3: int
+    Ud: np.ndarray  # (3, 3)
+    Us: np.ndarray  # (3, 3)
+    flat_indices: np.ndarray  # (N,) int64, C-order scatter map
+    yl_start: float
+    xl_steps: int
+    yl_steps: int
+    zl_steps: int
+
+
+@dataclass(frozen=True)
+class GeometryContext:
+    """Per-reflection Bragg geometry + the ray grid it drives."""
+
+    theta_0: float
+    Theta: np.ndarray  # (3, 3)
+    xl_start: float
+    xl_range: float
+    rl: np.ndarray  # (3, N) metres
+    prob_z: np.ndarray  # (N,) beam profile weight
+
+
+@dataclass(frozen=True)
+class ResolutionContext:
+    """Per-reflection resolution backend (exactly one of the two is set)."""
+
+    Resq_i: "np.ndarray | None"
+    qi1_start: float
+    qi1_step: float
+    qi2_start: float
+    qi2_step: float
+    qi3_start: float
+    qi3_step: float
+    npoints1: "int | None"
+    npoints2: "int | None"
+    npoints3: "int | None"
+    analytic_eval: "AnalyticResolution | None"
+    loaded_kernel_path: "Path | None"
+
+
+@dataclass(frozen=True)
+class ForwardContext:
+    """Everything forward_from_static needs, bundled. Immutable + thread-safe."""
+
+    instrument: InstrumentContext
+    geometry: GeometryContext
+    resolution: ResolutionContext
+
 
 # Repo root: the directory containing pyproject.toml. Derived from this
 # file's location (src/dfxm_geo/direct_space/forward_model.py → 4 levels up).
