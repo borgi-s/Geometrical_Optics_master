@@ -1672,7 +1672,6 @@ def _iter_identification_multi(
     mc = config.multi
     noise_cfg = config.noise
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
-    fm.q_hkl = q_hkl
 
     # Split master rng → child streams. [0] = param draws (consumed here);
     # [1] = Poisson noise (consumed by _maybe_apply_poisson_noise, which
