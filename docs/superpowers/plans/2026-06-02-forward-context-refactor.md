@@ -277,6 +277,11 @@ def _forward_state_guard() -> Iterator[None]:
     run mutates (kernel load, oblique theta rebuild, strain field) is rolled
     back when the run completes or raises. Subsumes
     ``reflection_theta_if_oblique``'s restore responsibility.
+
+    Usable as a context manager OR a decorator (``@contextmanager`` produces a
+    ``ContextDecorator``): ``@_forward_state_guard()`` re-snapshots on each call.
+    ``globals()`` here is forward_model's module dict regardless of where the
+    decorator is applied, so it guards exactly these names.
     """
     g = globals()
     saved = {n: g.get(n) for n in _GUARDED_GLOBALS}
@@ -291,11 +296,65 @@ def _forward_state_guard() -> Iterator[None]:
 Run: `... -m pytest tests/test_forward_state_guard.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Wrap the run bodies**
+- [ ] **Step 5: Make `run_postprocess` self-load its kernel (decouple from `run_simulation`'s globals)**
 
-In `pipeline.py`, wrap the bodies of `run_simulation` and `run_identification` in `with fm._forward_state_guard():`. (Wrap from immediately after argument validation through the end of the function body, so kernel loading inside the run is also rolled back.) Keep `reflection_theta_if_oblique` where it is — the guard owns the *restore*, the CM still owns the geometry *rebuild* during the run.
+`run_postprocess` currently calls `fm.forward(...)` relying on `fm.Resq_i` being loaded by a prior `run_simulation` *in the same process* (`cli_main` line 1232-1234). It loads no kernel itself, so `dfxm-forward --postprocess-only` (cli_main line 1230) is already a latent crash on a fresh process (`fm.forward` → "forward_model state is not initialized"). Once `run_simulation` is guarded (Step 6), it restores `fm.Resq_i=None` on exit, breaking the *normal* flow too. Fix: make `run_postprocess` load its own resolution backend, exactly as `run_simulation` does at pipeline.py:819.
 
-- [ ] **Step 6: Slice-1 gate — full kernel-present verification**
+Add near the top of `run_postprocess`, right after the `h5_path` existence check:
+```python
+    _load_resolution(config.reciprocal, config.geometry)
+```
+This is the same call `run_simulation` makes (handles both MC and analytic backends via `config.backend`). For the normal flow it reloads the identical kernel the config selects → the `qi_field` is **bit-identical** (same `Resq_i`, same default `theta_0` for simplified; oblique `qi_field` theta behavior is unchanged — `run_postprocess` did not wrap `reflection_theta_if_oblique` before and still doesn't, a pre-existing detail handled in Slice 4). It also fixes `--postprocess-only`.
+
+A `_run_simulation_inner`-style `_load_resolution` call is cheap relative to the postprocess work, and idempotent.
+
+- [ ] **Step 6: Apply the guard to all three run functions**
+
+In `pipeline.py`, decorate `run_simulation`, `run_identification`, AND `run_postprocess` with `@fm._forward_state_guard()` (decorator form — no body re-indentation; each call gets a fresh snapshot restored on return/raise, including any kernel load done inside the run). Guarding `run_postprocess` too serves the #10 no-leakage goal directly (a worker that postprocesses shouldn't leak globals either) and is safe because Step 5 made it self-loading. Keep `reflection_theta_if_oblique` where it is — the guard owns the *restore*, the CM still owns the geometry *rebuild* during the run.
+
+```python
+@fm._forward_state_guard()
+def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
+    ...
+
+@fm._forward_state_guard()
+def run_identification(config: SimulationConfig, output_dir: Path) -> ...:
+    ...
+
+@fm._forward_state_guard()
+def run_postprocess(output_dir: Path, config: SimulationConfig, *, Hg=None, q_hkl=None) -> dict[str, Any]:
+    ...
+```
+
+- [ ] **Step 6b: Self-load regression test**
+
+Add to `tests/test_forward_state_guard.py` a test proving `run_postprocess` no longer free-rides on a prior `run_simulation`'s globals. Reuse the kernel-on-disk gate + the wall-mode config from `tests/test_postprocess_strain_source.py`. After `run_simulation` (now guarded → it restores `fm.Resq_i=None` on exit), assert `fm.Resq_i is None` *before* `run_postprocess`, then assert `run_postprocess` still writes `/1.1/dfxm_geo/analysis/qi_field` (proving self-load):
+
+```python
+def test_run_postprocess_self_loads_kernel_after_guarded_run_simulation(
+    tmp_path, _kernel_on_disk
+):
+    from dfxm_geo.pipeline import (AxisScanConfig, CrystalConfig, IOConfig,
+        ReciprocalConfig, ScanConfig, SimulationConfig, WallCrystalConfig,
+        run_postprocess, run_simulation)
+    cfg = SimulationConfig(
+        crystal=CrystalConfig(mode="wall", wall=WallCrystalConfig(dis=4.0, ndis=10, sample_remount="S1")),
+        scan=ScanConfig(phi=AxisScanConfig(range=0.0006*180/np.pi, steps=3),
+                        chi=AxisScanConfig(range=0.002*180/np.pi, steps=3)),
+        io=IOConfig(include_perfect_crystal=True, max_workers=1),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    out = tmp_path / "run"
+    run_simulation(cfg, out)
+    assert fm.Resq_i is None, "guard should have restored Resq_i to None on run_simulation exit"
+    run_postprocess(out, cfg)   # must self-load the kernel, not crash
+    import h5py
+    with h5py.File(out / "dfxm_geo.h5", "r") as f:
+        assert "/1.1/dfxm_geo/analysis/qi_field" in f
+```
+(Define a `_kernel_on_disk` fixture in this file identical to the one in `test_postprocess_strain_source.py`.)
+
+- [ ] **Step 7: Slice-1 gate — full kernel-present verification**
 
 Bootstrap the canonical kernel, then:
 ```
@@ -305,11 +364,11 @@ Bootstrap the canonical kernel, then:
 ```
 Expected: all green, mypy 0 errors. The Fd_find golden (`tests/data/golden/Fd_find_smoke.npy`) reproduces. `_mc_lut_forward` not recompiled (no hot-path edit this slice).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```
 git add tests/test_forward_state_guard.py src/dfxm_geo/direct_space/forward_model.py src/dfxm_geo/pipeline.py
-git commit -m "feat(#10): snapshot/restore forward-model globals around each run"
+git commit -m "feat(#10): self-loading run_postprocess + snapshot/restore globals around each run"
 ```
 
 ---
