@@ -170,6 +170,7 @@ def reciprocal_res_func(
     rng: np.random.Generator | None = None,
     return_qs: bool = False,
     dphi_range: float = 0.0,
+    eta: float = 0.0,
     beamstop: bool = False,
     bs_height: float | None = None,
     aperture: bool = False,
@@ -254,6 +255,19 @@ def reciprocal_res_func(
     # % Convert from crystal to imaging system  (Eq. ??? in DFXM paper)
     qrock_prime = np.cos(theta) * qrock + np.sin(theta) * qpar
     q2th = -np.sin(theta) * qrock + np.cos(theta) * qpar
+
+    # Apply oblique-angle rotation around the beam axis (lab x̂) after the
+    # simplified-geometry R_y(-2θ).  At eta=0 the block is skipped entirely
+    # so the numerical path is bit-identical to v2.2.0.
+    # See docs/superpowers/specs/2026-05-28-multi-reflection-oblique-angle-design.md.
+    if eta != 0.0:
+        c_e, s_e = float(np.cos(eta)), float(np.sin(eta))
+        # R_x(eta) on (qrock_prime, qroll, q2th):
+        # qrock_prime is along x̂ — unchanged by R_x.
+        qroll_new = c_e * qroll - s_e * q2th
+        q2th_new = s_e * qroll + c_e * q2th
+        qroll, q2th = qroll_new, q2th_new
+
     print("Converted to image system system ")
 
     if beamstop:
@@ -319,6 +333,7 @@ def reciprocal_res_func(
         plt.show()
     if save_resqi == 1:
         meta_arrays = {k: np.asarray(v) for k, v in (kernel_meta or {}).items()}
+        meta_arrays["eta"] = np.asarray(np.float64(eta))
         if output_path is not None:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)

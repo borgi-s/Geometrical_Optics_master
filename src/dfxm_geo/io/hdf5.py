@@ -20,7 +20,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
+
+from dfxm_geo.crystal.oblique import CrystalMount
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -84,7 +86,7 @@ class ScanSpec:
     positioners: dict[str, np.ndarray | float]
     dfxm_geo: dict
     detectors: dict[str, list[_FrameArgs]]
-    attrs: dict[str, str | list[str]]
+    attrs: dict[str, Any]
 
 
 def _set_nx_class(grp: h5py.Group, cls: str) -> None:
@@ -294,7 +296,13 @@ def _write_provenance(
                     continue  # the array itself, not metadata
                 if key in k:
                     del k[key]
-                k.create_dataset(key, data=arch[key])
+                val = arch[key]
+                # h5py cannot serialize numpy fixed-width-unicode (<U) arrays
+                # (the oblique-arc kernels bundle `geometry_mode`/`lattice` as
+                # <U strings); store them as native variable-length strings.
+                if val.dtype.kind == "U":
+                    val = val.item() if val.ndim == 0 else val.astype(object)
+                k.create_dataset(key, data=val)
 
     if config_toml is not None:
         if "config_toml" in g:
@@ -359,7 +367,7 @@ class MasterWriter:
         positioners: dict[str, np.ndarray | float],
         detector_links: dict[str, tuple[Path, str]],
         dfxm_geo: dict[str, object],
-        attrs: dict[str, str | list[str]],
+        attrs: dict[str, Any],
     ) -> None:
         """Append one BLISS scan entry `/<scan_id>` to the master.
 
@@ -572,6 +580,7 @@ def write_identification_h5(
     config_toml: str,
     kernel_npz: Path | None = None,
     max_workers: int | None = None,
+    write_strain_provenance: bool = True,
 ) -> int:
     """Drive an identification run: consume ScanSpecs, write master + per-scan dirs.
 
@@ -580,6 +589,12 @@ def write_identification_h5(
       2. For each `(detector_name, args_list)` in `spec.detectors`, write
          `output_dir/scanNNNN/<name>_0000.h5` via the parallel writer.
       3. Call `master.add_scan(scan_id=f"{N}.1", detector_links=..., ...)`.
+
+    `write_strain_provenance`: when False, the large per-ray ``Hg``
+    displacement-gradient array is dropped from each ``/N.1/dfxm_geo`` group
+    (matching ``write_simulation_h5``); the tiny ``q_hkl``/``theta``/``psize``/
+    ``zl_rms`` scalars are retained. The ``Hg`` dump dominates per-scan size,
+    so disable it for batch/ML identification runs.
 
     Returns the count of scans written.
     """
@@ -624,6 +639,11 @@ def write_identification_h5(
                     DETECTOR_INTERNAL_PATH,
                 )
             end_time = _now()
+            # Honour io.write_strain_provenance: drop the large per-ray Hg dump
+            # from the master when disabled (the tiny scalars stay).
+            dfxm_geo_meta = spec.dfxm_geo
+            if not write_strain_provenance and "Hg" in dfxm_geo_meta:
+                dfxm_geo_meta = {k: v for k, v in dfxm_geo_meta.items() if k != "Hg"}
             master.add_scan(
                 scan_id=scan_id,
                 title=spec.title,
@@ -632,7 +652,7 @@ def write_identification_h5(
                 sample=spec.sample,
                 positioners=spec.positioners,
                 detector_links=detector_links,
-                dfxm_geo=spec.dfxm_geo,
+                dfxm_geo=dfxm_geo_meta,
                 attrs=spec.attrs,
             )
             n_scans += 1
@@ -659,6 +679,9 @@ def write_simulation_h5(
     positioners: dict[str, np.ndarray | float] | None = None,
     Hg_provider: Callable[[float], tuple[np.ndarray, np.ndarray]] | None = None,
     write_strain_provenance: bool = True,
+    geometry_mode: str = "simplified",
+    eta: float = 0.0,
+    mount: CrystalMount | None = None,
 ) -> None:
     """One-call entry point for forward mode, v1.2.0 layout.
 
@@ -673,6 +696,11 @@ def write_simulation_h5(
     `positioners`, if provided, is passed verbatim to `master.add_scan`.
     If None, it is derived from `frames` + `scanned_axes`: scanned axes
     receive the full per-frame array, fixed axes default to 0.0.
+
+    `geometry_mode`: "simplified" (default, eta=0, v2.2.0 behaviour) or "oblique".
+    `eta`: azimuthal tilt in radians (0.0 for simplified).
+    `mount`: crystal mount orientation; defaults to Al (1,0,0)/(0,1,0)/(0,0,1)
+        when None.
     """
 
     if kernel_npz is None:
@@ -718,13 +746,30 @@ def write_simulation_h5(
             for i in range(n)
         ]
 
-    attrs_1_1: dict[str, str | list[str]] = {}
+    attrs_1_1: dict[str, Any] = {}
     if scan_mode is not None:
         attrs_1_1["scan_mode"] = scan_mode
     if scanned_axes is not None:
         attrs_1_1["scanned_axes"] = list(scanned_axes)
     if crystal_mode is not None:
         attrs_1_1["crystal_mode"] = crystal_mode
+
+    # Oblique-angle provenance (v2.3.0+). eta=0 / simplified for v2.2.0 configs.
+    _resolved_mount: CrystalMount
+    if mount is not None:
+        _resolved_mount = mount
+    else:
+        from dfxm_geo.reciprocal_space.kernel import _DEFAULT_AL_CRYSTAL
+
+        _resolved_mount = _DEFAULT_AL_CRYSTAL
+    attrs_1_1["geometry_mode"] = geometry_mode
+    attrs_1_1["eta"] = float(eta)
+    attrs_1_1["theta"] = float(_fm.theta)
+    attrs_1_1["lattice"] = _resolved_mount.lattice
+    attrs_1_1["a"] = float(_resolved_mount.a)
+    attrs_1_1["mount_x"] = np.array(_resolved_mount.mount_x, dtype=np.int64)
+    attrs_1_1["mount_y"] = np.array(_resolved_mount.mount_y, dtype=np.int64)
+    attrs_1_1["mount_z"] = np.array(_resolved_mount.mount_z, dtype=np.int64)
 
     # Build positioners dict once; reused for both /1.1 and /2.1 add_scan calls.
     if positioners is None:

@@ -36,8 +36,10 @@ class TestEmptyTomlForward:
         try:
             import dfxm_geo.direct_space.forward_model as fm
 
-            fm._lookup_kernel_path((-1, 1, -1), 17.0, fm.pkl_fpath)
-        except FileNotFoundError:
+            fm._lookup_kernel_path(
+                directory=fm.pkl_fpath, mode="simplified", hkl=(-1, 1, -1), keV=17.0
+            )
+        except KeyError:
             pytest.skip("bundled Al 111 @ 17 keV kernel missing; run dfxm-bootstrap first")
 
         from dfxm_geo.pipeline import run_simulation

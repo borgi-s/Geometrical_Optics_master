@@ -12,7 +12,9 @@ in CI without any precomputed kernel present.
 Default geometry constants match ID06 at the ESRF; see `dfxm_geo.constants`.
 """
 
+import contextlib
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass as _dataclass
 from pathlib import Path
 from pprint import pprint
@@ -42,19 +44,32 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # Sub-project C: random_dislocations placement constants.
 _MAX_REJECTION_TRIES = 10_000
 
-# A subset of FCC slip systems on the {111}/<-110> family used to draw
-# random orientations for random_dislocations mode. Each entry is (b, n, t)
-# with b.n=0 and t parallel to n x b. Six variants spanning two of the
-# four {111} planes -- sufficient for v1.2.0 sampling.
+# The full 12 FCC slip systems on the {111}/<110> family used to draw random
+# orientations for random_dislocations mode. Each entry is (b, n, t) with
+# b.n=0 (Burgers in the glide plane) and t parallel to n x b (line direction).
+# All four distinct {111} plane normals are covered, three <110> Burgers
+# vectors per plane (4 planes x 3 = 12 systems). The first six entries are the
+# original v1.2.0 sampling subset (planes (1,1,1) and (1,-1,1)), retained
+# verbatim; the last six complete planes (-1,1,1) and (1,1,-1).
 _SLIP_SYSTEM_111: tuple[
     tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]], ...
 ] = (
+    # Plane (1, 1, 1)
     ((1, -1, 0), (1, 1, 1), (1, 1, -2)),
     ((-1, 0, 1), (1, 1, 1), (-1, 2, -1)),
     ((0, 1, -1), (1, 1, 1), (-2, 1, 1)),
+    # Plane (1, -1, 1)
     ((1, 1, 0), (1, -1, 1), (1, -1, -2)),
     ((-1, 0, 1), (1, -1, 1), (-1, -2, -1)),
     ((0, -1, -1), (1, -1, 1), (-2, -1, 1)),
+    # Plane (-1, 1, 1)
+    ((0, 1, -1), (-1, 1, 1), (-2, -1, -1)),
+    ((1, 0, 1), (-1, 1, 1), (1, 2, -1)),
+    ((1, 1, 0), (-1, 1, 1), (-1, 1, -2)),
+    # Plane (1, 1, -1)
+    ((0, 1, 1), (1, 1, -1), (2, -1, 1)),
+    ((1, -1, 0), (1, 1, -1), (-1, -1, -2)),
+    ((1, 0, 1), (1, 1, -1), (1, -2, -1)),
 )
 
 fast_inverse2(
@@ -77,8 +92,8 @@ NN2 = int(Npixels * Nsub)
 NN3 = int(Npixels // 30 * Nsub)
 
 # Default directory for reciprocal-space resolution kernel files.
-# Kernel files are discovered via _lookup_kernel_path(hkl, keV, pkl_fpath)
-# which globs Resq_i_h{h}_k{k}_l{l}_{keV}keV_*.npz and picks the newest.
+# Kernel files are discovered via _lookup_kernel_path(directory=..., mode=..., hkl=..., keV=...)
+# which globs the appropriate pattern and picks the newest match.
 # There is no longer a module-level `pkl_fn` constant — sub-project D removed it.
 pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
 
@@ -132,6 +147,49 @@ rl = np.vstack(  # type: ignore[call-overload]
 ).reshape(3, -1)
 
 prob_z = np.exp(-0.5 * (rl[2] / zl_rms) ** 2)
+
+
+@contextlib.contextmanager
+def reflection_theta_if_oblique(mode: str, theta_new: float | None) -> Iterator[None]:
+    """Temporarily set the forward Bragg angle for an oblique run, then restore.
+
+    ``theta_0`` (and the geometry it drives: ``Theta``, ``xl_start``, the ray
+    grid ``rl``, ``prob_z``) defaults to Al (1,1,1) @ 17 keV (8.98 deg). Oblique
+    reflections diffract at their own theta, so for ``mode == "oblique"`` this
+    rebuilds the theta-dependent globals at ``theta_new`` (radians) for the
+    duration of the ``with`` block and restores the defaults on exit (so
+    simplified-mode runs and other callers/tests are never polluted). For any
+    other mode, or ``theta_new is None``, it is a no-op.
+
+    Must wrap the population build + forward: the ray grid ``rl`` (which the
+    strain field is sampled on) and the imaging rotation ``Theta`` both depend
+    on theta.
+    """
+    global theta_0, theta, Theta, xl_start, xl_range, rl, prob_z
+    if mode != "oblique" or theta_new is None:
+        yield
+        return
+    saved = (theta_0, theta, Theta, xl_start, xl_range, rl, prob_z)
+    try:
+        theta_0 = float(theta_new)
+        theta = theta_0
+        Theta = np.array(
+            [[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]]
+        )
+        xl_start = yl_start / np.tan(2 * theta) / 3
+        xl_range = -xl_start
+        rl = np.vstack(  # type: ignore[call-overload]
+            np.mgrid[
+                -xl_range : xl_range : complex(xl_steps),
+                -yl_range : yl_range : complex(yl_steps),
+                -zl_range : zl_range : complex(zl_steps),
+            ]
+        ).reshape(3, -1)
+        prob_z = np.exp(-0.5 * (rl[2] / zl_rms) ** 2)
+        yield
+    finally:
+        theta_0, theta, Theta, xl_start, xl_range, rl, prob_z = saved
+
 
 # To avoid edge effects:
 # for dis 0.25, ndis >= 7501
@@ -279,9 +337,9 @@ def _load_default_kernel(
     """Load the reciprocal-space resolution kernel from disk into module state.
 
     Must be called with an explicit `pkl_path`. Use
-    `_lookup_kernel_path(hkl, keV, pkl_fpath)` to find the matching file,
-    or call via `pipeline._lookup_and_load_kernel(hkl, keV)` which composes
-    the lookup and load together.
+    `_lookup_kernel_path(directory=..., mode=..., hkl=..., keV=...)` to find
+    the matching file, or call via `pipeline._lookup_and_load_kernel(hkl, keV)`
+    which composes the lookup and load together.
 
     Sets module-level globals: `Resq_i`, `qi1_range`/`qi2_range`/`qi3_range`,
     `npoints1`/`npoints2`/`npoints3`, `qi1_start`/`qi1_step`/etc.,
@@ -290,7 +348,7 @@ def _load_default_kernel(
 
     Args:
         pkl_path: Path to the .npz kernel file. Required — pass the result
-            of `_lookup_kernel_path(hkl, keV, pkl_fpath)`.
+            of `_lookup_kernel_path(directory=..., mode=..., hkl=..., keV=...)`.
         expected_hkl: If given, verify that the kernel's bundled ``hkl``
             metadata matches. Raises ``KeyError`` if the metadata is absent
             (pre-sub-project-D bootstrap), ``ValueError`` on mismatch.
@@ -310,8 +368,8 @@ def _load_default_kernel(
     if pkl_path is None:
         raise ValueError(
             "_load_default_kernel requires an explicit `pkl_path` after sub-project D. "
-            "Use `_lookup_kernel_path(hkl, keV, pkl_fpath)` to find the matching kernel, "
-            "or call via `pipeline._lookup_and_load_kernel(hkl, keV)`."
+            "Use `_lookup_kernel_path(directory=..., mode=..., hkl=..., keV=...)` to find "
+            "the matching kernel, or call via `pipeline._lookup_and_load_kernel(hkl, keV)`."
         )
 
     if str(pkl_path).endswith(".pkl"):
@@ -366,9 +424,14 @@ def _load_default_kernel(
     finally:
         data.close()
 
-    qi1_start, qi1_step = -qi1_range / 2, qi1_range / (npoints1 - 1)
-    qi2_start, qi2_step = -qi2_range / 2, qi2_range / (npoints2 - 1)
-    qi3_start, qi3_step = -qi3_range / 2, qi3_range / (npoints3 - 1)
+    # Bin width must match the FILL convention in reciprocal_space/resolution.py
+    # (index = floor((q + range/2) / range * npoints) lays down `npoints` equal
+    # bins of width range/npoints). Reading with range/(npoints-1) — the linspace
+    # "fencepost" spacing — drifts the gather index low toward the grid edge
+    # (~0.25-0.5% at npoints 400/200). Use range/npoints so READ inverts FILL.
+    qi1_start, qi1_step = -qi1_range / 2, qi1_range / npoints1
+    qi2_start, qi2_step = -qi2_range / 2, qi2_range / npoints2
+    qi3_start, qi3_step = -qi3_range / 2, qi3_range / npoints3
     qi_starts = np.asarray([qi1_start, qi2_start, qi3_start])
     qi_steps = 1 / np.asarray([qi1_step, qi2_step, qi3_step])
 
@@ -378,46 +441,108 @@ def _load_default_kernel(
     _loaded_kernel_path = Path(pkl_path)
 
 
-def _lookup_kernel_path(
+def _lookup_legacy_simplified(
+    directory: Path,
     hkl: tuple[int, int, int],
     keV: float,
-    pkl_fpath: str | Path,
 ) -> Path:
-    """Find the newest kernel npz on disk matching the requested (hkl, keV).
+    """Find the newest simplified-mode kernel npz on disk matching (hkl, keV).
 
-    Globs ``<pkl_fpath>/Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_*.npz``, sorts by
+    Globs ``<directory>/Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_*.npz``, sorts by
     mtime descending, returns the newest. Emits a stderr WARN listing all
-    matches when more than one exists. Raises FileNotFoundError with a
+    matches when more than one exists. Raises KeyError with a
     ``dfxm-bootstrap`` instruction on zero matches.
 
     Sub-project D: replaces the previous ``pkl_fn``-constant lookup.
+    Internal helper — call via ``_lookup_kernel_path``.
     """
     import sys
 
     h, k, l = hkl
-    pkl_fpath = Path(pkl_fpath)
     pattern = f"Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_*.npz"
     matches = sorted(
-        pkl_fpath.glob(pattern),
+        directory.glob(pattern),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
     if not matches:
-        raise FileNotFoundError(
-            f"no kernel found for hkl={hkl} at {keV} keV in {pkl_fpath}/.\n"
+        raise KeyError(
+            f"no kernel found for hkl={hkl} at {keV} keV in {directory}/.\n"
             f"Run: dfxm-bootstrap --config <yourconfig.toml>\n"
             f"(produces Resq_i_h{h}_k{k}_l{l}_{keV:g}keV_<date>.npz, "
             f"~50 s wall-clock at default Nrays=1e8)"
         )
     if len(matches) > 1:
         lines = [
-            f"warning: found {len(matches)} kernels matching hkl={hkl} keV={keV:g} in {pkl_fpath}:"
+            f"warning: found {len(matches)} kernels matching hkl={hkl} keV={keV:g} in {directory}:"
         ]
         for i, m in enumerate(matches):
             tag = "  (newest, will use)" if i == 0 else ""
             lines.append(f"  {m.name}{tag}")
         print("\n".join(lines), file=sys.stderr)
     return matches[0]
+
+
+def _lookup_kernel_path(
+    *,
+    directory: Path | str,
+    mode: str = "simplified",
+    hkl: tuple[int, int, int] | None = None,
+    keV: float,
+    theta: float | None = None,
+    eta: float | None = None,
+    tol: float = 1e-6,
+) -> Path:
+    """Resolve a LUT npz on disk.
+
+    simplified: glob the legacy pattern, verify (hkl, keV) in metadata.
+    oblique: glob the new pattern, verify (theta, eta, keV) in metadata
+        within ``tol``.
+    Raises KeyError with a dfxm-bootstrap hint when no match exists.
+
+    Args:
+        directory: Directory to search for kernel npz files.
+        mode: ``"simplified"`` (default) or ``"oblique"``.
+        hkl: Required for simplified mode.
+        keV: X-ray energy in keV. Required for both modes.
+        theta: Bragg angle in radians. Required for oblique mode.
+        eta: Azimuthal tilt angle in radians. Required for oblique mode.
+        tol: Absolute tolerance for float comparisons (theta, eta).
+    """
+    directory = Path(directory)
+
+    if mode == "simplified":
+        if hkl is None:
+            raise ValueError("simplified mode lookup requires hkl.")
+        return _lookup_legacy_simplified(directory, hkl, keV)
+
+    if mode == "oblique":
+        if theta is None or eta is None:
+            raise ValueError("oblique mode lookup requires theta and eta.")
+        glob_pattern = f"Resq_i_theta*_eta*_{keV:g}keV_*.npz"
+        candidates = sorted(
+            directory.glob(glob_pattern),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for path in candidates:
+            data = np.load(path)
+            try:
+                if (
+                    abs(float(data["theta"]) - theta) <= tol
+                    and abs(float(data["eta"]) - eta) <= tol
+                    and abs(float(data["keV"]) - keV) <= 1e-9
+                ):
+                    return path
+            except KeyError:
+                continue  # incomplete metadata; skip
+        raise KeyError(
+            f"No bootstrapped kernel matching "
+            f"(mode=oblique, theta={theta:.4f}, eta={eta:.4f}, keV={keV:g}) "
+            f"in {directory}. Run: dfxm-bootstrap --config <your-config>"
+        )
+
+    raise ValueError(f"unknown geometry mode: {mode!r}")
 
 
 def _load_analytic_resolution(config: "ReciprocalConfig") -> None:
@@ -432,9 +557,16 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> None:
     from dfxm_geo.reciprocal_space.analytic_resolution import AnalyticResolution
     from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
-    theta = _validate_reflection(config.hkl, config.keV, 4.0495e-10)
+    # Derive theta from the config's cubic lattice parameter `a`. Falls back to
+    # the legacy Al value (4.0495e-10 m) for v2.2.0-era configs that don't carry
+    # one — same getattr-default pattern as `eta` below. Mirrors how
+    # reciprocal_space/kernel.py threads the mount's lattice into the MC path.
+    lattice_a = float(getattr(config, "lattice_a", 4.0495e-10))
+    theta = _validate_reflection(config.hkl, config.keV, lattice_a)
+    eta_val = float(getattr(config, "eta", 0.0))  # safe default for v2.2.0-era configs
     _analytic_eval = AnalyticResolution(
         theta=theta,
+        eta=eta_val,
         zeta_v_fwhm=config.zeta_v_fwhm,
         zeta_h_fwhm=config.zeta_h_fwhm,
         NA_rms=config.NA_rms,
@@ -643,6 +775,25 @@ def forward(
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Compute the DFXM forward-model image for the given goniometer angles.
 
+    Contrast formation. Each detector pixel is a depth-integrated projection
+    along the diffracted 2theta direction: the ``(NN1, NN2, NN3)`` ray grid is
+    summed onto the ``(NN2//Nsub, NN1//Nsub)`` image (the ``flat_indices``
+    scatter in ``_mc_lut_forward``). A ray contributes intensity only when its
+    local scattering vector ``qi = Theta @ (Us @ Hg @ q_hkl + ang)`` lands
+    inside the reciprocal-space resolution function ``Res_q`` (the bootstrapped
+    LUT, or its analytic closed form); rays whose ``qi`` falls outside the
+    LUT bounds are dropped (dark). So a pixel is bright where the locally
+    strained lattice still satisfies the rocking condition and dark where the
+    strain has rotated/dilated it out of the acceptance window — this is the
+    weak-beam contrast that images dislocation strain fields. Features that look
+    concentrated near a dislocation core are the physically-correct deep
+    weak-beam regime, not an artifact: far from the core the strain is small and
+    the lattice sits squarely in ``Res_q`` (uniform bright background), while the
+    steep near-core strain sweeps ``qi`` through and out of the window, carving
+    the characteristic contrast. See Poulsen et al. 2021 (J. Appl. Cryst.) for
+    the DFXM resolution-function / projection geometry and Borgi et al. 2024
+    (IUCrJ; doi:10.1107/S1600576724001183) for this kinematic implementation.
+
     Thin wrapper over ``precompute_forward_static`` + ``forward_from_static``,
     preserved for one-shot callers (single images, tests). For scans, call
     ``precompute_forward_static(Hg)`` once and ``forward_from_static`` per frame
@@ -770,11 +921,18 @@ class DislocationPopulation:
     positions_um: shape (N, 3) — (x, y, z) sample-frame coordinates.
     Ud: shape (N, 3, 3) — column-stacked (b_hat, n_hat, t_hat) rotation matrices.
     sidecar: dict to be written as JSON, or None if no sidecar needed.
+    rotation_deg: shape (N,) — per-dislocation mixed-character rotation angle
+        (degrees) of the line direction `t` around the slip-plane normal `n`,
+        starting from `t_0 = b x n`. ``None`` (the default for every current
+        builder) means pure edge for all dislocations (rotation_deg = 0), the
+        legacy behaviour. See ``crystal.dislocations.Fd_find_mixed`` for the
+        screw/edge convention (rotation_deg=0 edge, 90 screw).
     """
 
     positions_um: np.ndarray
     Ud: np.ndarray
     sidecar: dict | None
+    rotation_deg: np.ndarray | None = None
 
 
 def _ud_matrix_from_bnt(
@@ -918,6 +1076,24 @@ def build_dislocation_population(
     raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
 
 
+def _population_rotation_deg(population: DislocationPopulation, n: int) -> np.ndarray:
+    """Per-dislocation mixed-character rotation angles (degrees), length n.
+
+    ``population.rotation_deg is None`` (every current builder) means pure edge
+    for all dislocations -> all zeros, the legacy behaviour. Otherwise the
+    supplied array is broadcast/validated to shape (n,).
+    """
+    if population.rotation_deg is None:
+        return np.zeros(n, dtype=np.float64)
+    rot = np.asarray(population.rotation_deg, dtype=np.float64).reshape(-1)
+    if rot.shape[0] != n:
+        raise ValueError(
+            f"population.rotation_deg has length {rot.shape[0]}, expected {n} "
+            f"(one per dislocation)."
+        )
+    return rot
+
+
 def _find_hg_from_population_numpy(
     population: DislocationPopulation,
     h: int,
@@ -943,11 +1119,13 @@ def _find_hg_from_population_numpy(
     q_hkl = np.asarray([h, k, l]) / Q_norm
 
     # Build MixedDislocSpec per dislocation. Fd_find_multi_dislocs_mixed
-    # supports per-crystal Ud + lab-frame offset.
+    # supports per-crystal Ud + lab-frame offset. Honour each dislocation's
+    # mixed-character rotation_deg (None -> pure edge for all, the default).
+    rot_deg = _population_rotation_deg(population, len(population.positions_um))
     crystals = [
         MixedDislocSpec(
             Ud_mix=population.Ud[i],
-            rotation_deg=0.0,  # pure edge; full character encoded in Ud columns
+            rotation_deg=float(rot_deg[i]),
             position_lab_um=(
                 float(population.positions_um[i, 0]),
                 float(population.positions_um[i, 1]),
@@ -1021,9 +1199,12 @@ def Find_Hg_from_population(
         Ud[i] = population.Ud[i]
         M[i] = population.Ud[i].T @ base
         offset[i] = population.positions_um[i]
-    # Population dislocations are pure edge (rotation_deg = 0): cos=1, sin=0.
-    cos_rot = np.ones(n)
-    sin_rot = np.zeros(n)
+    # Honour each dislocation's mixed-character rotation_deg (edge<->screw).
+    # None means pure edge for the whole population (rotation_deg = 0), the
+    # legacy default: cos=1, sin=0.
+    rot_deg = _population_rotation_deg(population, n)
+    cos_rot = np.cos(np.deg2rad(rot_deg))
+    sin_rot = np.sin(np.deg2rad(rot_deg))
 
     # rl is in metres; the field formula expects micrometres (b in µm) — *1e6,
     # exactly as the NumPy path and the reference disloc_identify.py do.

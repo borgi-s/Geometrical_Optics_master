@@ -1,62 +1,24 @@
 """Mosaicity-extraction analysis routines for DFXM rocking-grid stacks.
 
-The functions in this module are a port of the per-pixel center-of-mass
-extraction in the original ``init_forward.py``. They consume image stacks
-already reshaped to ``(chi_steps, phi_steps, H, W)`` and return:
+The function in this module is a port of the per-pixel center-of-mass
+extraction in the original ``init_forward.py``. It consumes an image stack
+already reshaped to ``(chi_steps, phi_steps, H, W)`` and returns:
 
-- ``compute_chi_shift``: a scalar χ-axis offset (in radians) measured from the
-  corner pixel of a strain-free reference stack. Use it to calibrate the χ
-  axis before extracting COMs from a strained stack.
 - ``compute_com_maps``: per-pixel mosaicity maps in φ and χ (radians) for a
   strained stack.
 
 All angular ranges are in **radians** — the project-wide convention shared by
 the ``[scan.*]`` TOML blocks, ``build_scan_grid``, and ``forward``.
 
-``compute_chi_shift`` preserves the original numerical conventions, including
-the ``abs(shift)`` sign-loss. ``compute_com_maps`` was vectorized via two
-einsum contractions in Phase 8 close-out (May 2026), then in v2.0.2 changed
-from the original oversampled-grid index lookup to a direct intensity-weighted
-mean in radians — the exact center of mass, with no quantization (see the
-``compute_com_maps`` docstring).
+``compute_com_maps`` was vectorized via two einsum contractions in Phase 8
+close-out (May 2026), then in v2.0.2 changed from the original oversampled-grid
+index lookup to a direct intensity-weighted mean in radians — the exact center
+of mass, with no quantization (see the ``compute_com_maps`` docstring).
 """
 
 from __future__ import annotations
 
 import numpy as np
-from scipy.ndimage import center_of_mass
-
-
-def compute_chi_shift(
-    stack_perfect: np.ndarray,
-    chi_steps: int,
-    chi_range: float,
-    *,
-    oversample: int = 100,
-) -> float:
-    """Measure the systematic χ offset from the corner pixel of a perfect stack.
-
-    The corner pixel ``stack_perfect[:, :, -1, -1]`` of a strain-free crystal
-    should peak at χ = 0. Any offset is interpreted as a systematic shift
-    introduced by the finite rocking grid; this function returns the magnitude
-    of that offset in *radians* (the value is expressed in the same units as
-    ``chi_range``, which is radians per the project-wide convention).
-
-    Args:
-        stack_perfect: Shape ``(chi_steps, phi_steps, H, W)``. Detector frame
-            of the perfect-crystal rocking sweep.
-        chi_steps: Number of χ steps in the rocking grid.
-        chi_range: Half-range of χ in radians (same units as ``configs/default.toml``).
-        oversample: High-resolution refinement factor on the χ axis. The
-            original script uses 100.
-
-    Returns:
-        Absolute χ-axis shift in radians.
-    """
-    com = center_of_mass(stack_perfect[:, :, -1, -1])
-    chi_high = np.linspace(-chi_range, chi_range, chi_steps * oversample)
-    shift_idx = com[0] * oversample - (chi_steps * oversample / 2)
-    return float(chi_high[int(abs(shift_idx))] - chi_high[0])
 
 
 def compute_com_maps(
@@ -94,8 +56,8 @@ def compute_com_maps(
             dislocated rocking sweep.
         phi_range, phi_steps: Half-range (radians) and step count of φ.
         chi_range, chi_steps: Half-range (radians) and step count of χ.
-        chi_shift: Additive shift to the χ axis (radians), as returned by
-            :func:`compute_chi_shift`.
+        chi_shift: Additive calibration offset for the χ axis (radians).
+            Defaults to ``0.0`` (the nominal χ grid; no runtime calibration).
 
     Returns:
         ``(phi_list, chi_list)`` mosaicity maps, both shape ``(H, W)`` and in

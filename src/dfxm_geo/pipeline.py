@@ -39,6 +39,7 @@ from dfxm_geo.crystal.dislocations import (
     Fd_find_multi_dislocs_mixed,
     MixedDislocSpec,
 )
+from dfxm_geo.crystal.oblique import CrystalMount
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.io.hdf5 import (
@@ -391,6 +392,11 @@ class ReciprocalConfig:
     NA_rms: float = 7.31e-4 / 2.35
     eps_rms: float = 1.41e-4 / 2.35
     zeta_v_clip: float = 1.4e-4
+    eta: float = 0.0  # Azimuthal tilt (rad); 0.0 = simplified geometry (v2.2.0 default)
+    # Cubic lattice parameter (m); Al default. Drives the Bragg-angle (theta)
+    # derivation in __post_init__ and the analytic backend
+    # (forward_model._load_analytic_resolution reads config.lattice_a).
+    lattice_a: float = 4.0495e-10
 
     _VALID_BACKENDS = ("auto", "analytic", "mc")
 
@@ -403,11 +409,10 @@ class ReciprocalConfig:
             )
         from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
-        # TODO(non-Al materials): hardcoded Al lattice parameter; revisit if/when
-        # the codebase supports other crystals. Tracked as deferred work in the
-        # sub-project A spec ("materials other than Al") and in the sub-project D
-        # spec ("out of scope").
-        _validate_reflection(self.hkl, self.keV, 4.0495e-10)
+        # lattice_a defaults to Al (4.0495e-10) but is now config-driven, so a
+        # non-Al cubic lattice can be supplied via [reciprocal] lattice_a and
+        # flows through to both the Bragg-validity check and the analytic backend.
+        _validate_reflection(self.hkl, self.keV, self.lattice_a)
 
     @classmethod
     def from_dict(cls, data: dict | None) -> ReciprocalConfig:
@@ -423,10 +428,76 @@ class ReciprocalConfig:
                 kwargs[key] = str(data[key])
         if "beamstop" in data:
             kwargs["beamstop"] = bool(data["beamstop"])
-        for key in ("zeta_v_fwhm", "zeta_h_fwhm", "NA_rms", "eps_rms", "zeta_v_clip"):
+        for key in (
+            "zeta_v_fwhm",
+            "zeta_h_fwhm",
+            "NA_rms",
+            "eps_rms",
+            "zeta_v_clip",
+            "eta",
+            "lattice_a",
+        ):
             if key in data:
                 kwargs[key] = float(data[key])
         return cls(**kwargs)
+
+
+@dataclass
+class GeometryConfig:
+    """Diffraction-geometry mode + oblique-angle parameters (v2.3.0).
+
+    Populated from the TOML ``[geometry]`` block (``mode``, ``eta``) plus the
+    crystal-mount fields in ``[crystal]`` (``lattice``/``a``/``mount_x/y/z``).
+    For ``mode='oblique'`` the config ``eta`` is cross-checked against
+    ``compute_omega_eta(mount, hkl, keV)`` — the *same* solver the bootstrap
+    uses — and the matching ``(theta, omega)`` are stored. ``theta_validated``
+    therefore equals the value baked into the oblique LUT filename, so the
+    pipeline-side lookup resolves the bootstrapped kernel exactly.
+
+    ``mode='simplified'`` (the default, and any config without a ``[geometry]``
+    block) reproduces v2.2.0 behaviour: ``eta=0``, ``theta_validated=None``.
+    """
+
+    mode: str = "simplified"
+    eta: float = 0.0
+    theta_validated: float | None = None
+    omega: float = 0.0
+    mount: CrystalMount | None = None
+
+
+def _build_geometry_config(raw: dict, reciprocal: ReciprocalConfig) -> GeometryConfig:
+    """Build a GeometryConfig from raw TOML tables (``[geometry]`` + ``[crystal]``).
+
+    Mirrors ``reciprocal_space.kernel.cli_main``'s bootstrap-side parsing so the
+    consumer (forward/identify) and the producer (dfxm-bootstrap) agree on the
+    geometry. For oblique mode, validates ``eta`` against the reflection geometry
+    and resolves the Bragg ``theta`` / azimuthal ``omega`` from the solver.
+
+    Raises:
+        ValueError: on a malformed ``[geometry]`` block, a missing mount key, or
+            an ``eta`` that does not match any computed reflection geometry.
+    """
+    from dfxm_geo.reciprocal_space.kernel import (
+        _crystal_mount_from_toml,
+        _parse_geometry_block,
+        _validate_eta_against_compute_omega_eta,
+    )
+
+    mode, eta = _parse_geometry_block(raw.get("geometry"))
+    if mode == "simplified":
+        return GeometryConfig(mode="simplified")
+
+    mount = _crystal_mount_from_toml(raw.get("crystal"))
+    theta_validated, omega = _validate_eta_against_compute_omega_eta(
+        mount, reciprocal.hkl, reciprocal.keV, eta
+    )
+    return GeometryConfig(
+        mode="oblique",
+        eta=eta,
+        theta_validated=theta_validated,
+        omega=omega,
+        mount=mount,
+    )
 
 
 @dataclass
@@ -438,6 +509,8 @@ class SimulationConfig:
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     # Sub-project F: reciprocal cascades to Al 111 @ 17 keV (was: Optional[None]).
     reciprocal: ReciprocalConfig = field(default_factory=ReciprocalConfig)
+    # v2.3.0: diffraction geometry (simplified vs oblique-angle).
+    geometry: GeometryConfig = field(default_factory=GeometryConfig)
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -449,8 +522,19 @@ class SimulationConfig:
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
         reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
+        geometry = _build_geometry_config(raw, reciprocal)
+        # The analytic backend reads eta off ReciprocalConfig (see
+        # forward_model._load_analytic_resolution). The user supplies it in
+        # [geometry], so surface it there for oblique runs.
+        if geometry.mode == "oblique":
+            reciprocal.eta = geometry.eta
         return cls(
-            crystal=crystal, scan=scan, io=io, postprocess=postprocess, reciprocal=reciprocal
+            crystal=crystal,
+            scan=scan,
+            io=io,
+            postprocess=postprocess,
+            reciprocal=reciprocal,
+            geometry=geometry,
         )
 
 
@@ -542,6 +626,10 @@ class IdentificationConfig:
     zscan: IdentificationZScanConfig | None = None
     # Sub-project F: reciprocal tightens to non-Optional + default.
     reciprocal: ReciprocalConfig = field(default_factory=ReciprocalConfig)
+    # v2.3.0: diffraction geometry (simplified vs oblique-angle), mirroring
+    # SimulationConfig. Defaults to simplified so existing identify configs
+    # are unchanged.
+    geometry: GeometryConfig = field(default_factory=GeometryConfig)
 
     def __post_init__(self) -> None:
         if self.mode not in ("single", "multi", "z-scan"):
@@ -599,7 +687,14 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     # Sub-project F: 'mode' is now optional in TOML; defaults to 'single'.
     mode = data.get("mode", "single")
 
-    crystal_data = data.get("crystal", {})
+    crystal_data = dict(data.get("crystal", {}))
+    # Mount keys belong to the oblique [geometry] machinery (read via
+    # _build_geometry_config -> _crystal_mount_from_toml), NOT to the
+    # IdentificationCrystalConfig dislocation-sweep schema. Strip them so an
+    # oblique identify config's [crystal] block parses (forward's
+    # CrystalConfig.from_dict filters the same keys by picking known fields).
+    for _mount_key in ("lattice", "a", "mount_x", "mount_y", "mount_z"):
+        crystal_data.pop(_mount_key, None)
     if "slip_plane_normal" in crystal_data:
         crystal_data = {
             **crystal_data,
@@ -614,6 +709,11 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     )
     zscan = IdentificationZScanConfig(**data["zscan"]) if data.get("zscan") is not None else None
     reciprocal = ReciprocalConfig.from_dict(data.get("reciprocal"))
+    geometry = _build_geometry_config(data, reciprocal)
+    # Mirror SimulationConfig.from_toml: the analytic backend reads eta off
+    # ReciprocalConfig, so surface the validated oblique eta there.
+    if geometry.mode == "oblique":
+        reciprocal.eta = geometry.eta
 
     return IdentificationConfig(
         mode=mode,
@@ -624,28 +724,52 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         multi=multi,
         zscan=zscan,
         reciprocal=reciprocal,
+        geometry=geometry,
     )
 
 
 def _lookup_and_load_kernel(
     hkl: tuple[int, int, int],
     keV: float,
+    *,
+    geometry: GeometryConfig | None = None,
 ) -> None:
-    """Pre-flight: look up the kernel npz matching (hkl, keV) and load it.
+    """Pre-flight: look up the kernel npz for this geometry and load it.
 
-    Sub-project D replacement for `_ensure_kernel_loaded()`. Composes:
-    1. `fm._lookup_kernel_path(hkl, keV, fm.pkl_fpath)` — glob + newest pick.
-    2. `fm._load_default_kernel(path, expected_hkl=hkl, expected_keV=keV)` —
-       load + bundled-metadata verification.
+    Sub-project D replacement for `_ensure_kernel_loaded()`. Composes a lookup
+    and a load:
 
-    Idempotent for the same (hkl, keV): if `fm._loaded_kernel_path` already
-    matches what we'd look up, skip the reload. (Helpful for test loops and
-    interactive REPL.)
+    - simplified (default / `geometry=None`): glob the legacy
+      ``Resq_i_h{h}_k{k}_l{l}_{keV}keV_*.npz`` pattern by (hkl, keV).
+    - oblique (v2.3.0): glob the ``Resq_i_theta{θ}rad_eta{η}rad_{keV}keV_*.npz``
+      pattern by the validated (theta, eta, keV). ``geometry.theta_validated``
+      is the solver value baked into the bootstrap filename, so the match is
+      exact.
 
-    Raises FileNotFoundError on lookup miss, ValueError on metadata mismatch,
+    Both modes still verify the npz's bundled (hkl, keV) metadata on load — the
+    oblique bootstrap records them too.
+
+    Idempotent: if `fm._loaded_kernel_path` already matches the resolved target,
+    skip the reload. (Helpful for test loops and interactive REPL.)
+
+    Raises KeyError on lookup miss, ValueError on metadata mismatch,
     KeyError on pre-sub-project-D legacy npz lacking metadata.
     """
-    target = fm._lookup_kernel_path(hkl, keV, fm.pkl_fpath)
+    if geometry is not None and geometry.mode == "oblique":
+        if geometry.theta_validated is None:
+            raise ValueError(
+                "oblique kernel lookup requires geometry.theta_validated "
+                "(set by SimulationConfig.from_toml from the [geometry] block)."
+            )
+        target = fm._lookup_kernel_path(
+            directory=fm.pkl_fpath,
+            mode="oblique",
+            theta=geometry.theta_validated,
+            eta=geometry.eta,
+            keV=keV,
+        )
+    else:
+        target = fm._lookup_kernel_path(directory=fm.pkl_fpath, mode="simplified", hkl=hkl, keV=keV)
     if fm._loaded_kernel_path == target:
         return
     fm._load_default_kernel(
@@ -655,12 +779,17 @@ def _lookup_and_load_kernel(
     )
 
 
-def _load_resolution(config: ReciprocalConfig) -> None:
+def _load_resolution(config: ReciprocalConfig, geometry: GeometryConfig | None = None) -> None:
     """Select and load the resolution backend per config (spec sec. 5.4).
 
     auto     -> analytic if beamstop off, else MC
     analytic -> analytic; ValueError if beamstop on (cannot represent it)
     mc       -> MC
+
+    ``geometry`` routes the MC LUT lookup to the oblique pattern when
+    ``geometry.mode == 'oblique'``; the analytic backend reads ``eta`` straight
+    off ``config`` (already propagated from [geometry] by
+    SimulationConfig.from_toml). Defaults to simplified when omitted.
     """
     use_analytic = config.backend == "analytic" or (
         config.backend == "auto" and not config.beamstop
@@ -676,7 +805,7 @@ def _load_resolution(config: ReciprocalConfig) -> None:
         fm._load_analytic_resolution(config)
     else:
         fm._analytic_eval = None  # ensure forward() uses the LUT
-        _lookup_and_load_kernel(config.hkl, config.keV)
+        _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
 
 
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
@@ -687,8 +816,20 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
-    _load_resolution(config.reciprocal)
+    _load_resolution(config.reciprocal, config.geometry)
+    # Oblique reflections diffract at their own Bragg angle; run the body inside
+    # the theta context so the ray grid + imaging rotation use it (simplified
+    # mode is a no-op, preserving v2.2.0 geometry bit-for-bit).
+    with fm.reflection_theta_if_oblique(config.geometry.mode, config.geometry.theta_validated):
+        return _run_simulation_inner(config, output_dir)
 
+
+def _run_simulation_inner(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
+    """Body of ``run_simulation``, run inside the (optional) oblique-theta context.
+
+    Split out so the population build + forward both see the run's Bragg angle
+    (see ``forward_model.reflection_theta_if_oblique``).
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Build dislocation population (dispatches on crystal.mode).
@@ -789,6 +930,9 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
         positioners=positioners,
         Hg_provider=Hg_provider,
         write_strain_provenance=config.io.write_strain_provenance,
+        geometry_mode=config.geometry.mode,
+        eta=config.geometry.eta,
+        mount=config.geometry.mount,
     )
     return {
         "h5_path": h5_path,
@@ -839,8 +983,19 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
             lines.append(f"steps = {axis.steps}")
         lines.append("")
 
-    # [crystal] + matching sub-block
+    # [crystal] + matching sub-block. The crystal-mount fields (oblique
+    # geometry, v2.3.0) live in the top-level [crystal] table and MUST be
+    # emitted before the [crystal.<mode>] sub-table (TOML key-ordering rule)
+    # — otherwise an oblique config round-trips to 'simplified' and the lossy
+    # TOML misattributes oblique runs in the embedded HDF5 provenance.
     lines.append("[crystal]")
+    mount = config.geometry.mount
+    if mount is not None:
+        lines.append(f'lattice = "{mount.lattice}"')
+        lines.append(f"a = {mount.a}")
+        lines.append(f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]")
+        lines.append(f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]")
+        lines.append(f"mount_z = [{mount.mount_z[0]}, {mount.mount_z[1]}, {mount.mount_z[2]}]")
     lines.append(f'mode = "{config.crystal.mode}"')
     lines.append(f"[crystal.{config.crystal.mode}]")
     if config.crystal.mode == "centered":
@@ -866,6 +1021,17 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
         if rd.seed is not None:
             lines.append(f"seed = {rd.seed}")
     lines.append("")
+
+    # [geometry] - only for oblique runs. Simplified mode is the default and
+    # carries no [geometry] block, so omitting it keeps simplified configs
+    # byte-for-byte unchanged. The mount fields are emitted in [crystal] above;
+    # together they let _build_geometry_config re-derive (theta_validated,
+    # omega) identically on round-trip.
+    if config.geometry.mode == "oblique":
+        lines.append("[geometry]")
+        lines.append('mode = "oblique"')
+        lines.append(f"eta = {config.geometry.eta}")
+        lines.append("")
 
     # [io] - render every field (default-skipping is brittle here since users
     # may explicitly want to set fields to defaults). Use asdict for simplicity.
@@ -1206,11 +1372,23 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
             f"hkl = [{h}, {k}, {l}]",
             f"keV = {cfg.reciprocal.keV}",
         ]
-    # [crystal] (identification flavor; not the SimulationConfig crystal)
+    # [crystal] (identification flavor; not the SimulationConfig crystal).
+    # Oblique mount fields (v2.3.0) are emitted FIRST in the table; together
+    # with the [geometry] block below they let load_identification_config
+    # re-derive the validated theta, so oblique identify provenance round-trips
+    # instead of misattributing to 'simplified'. Mirrors _dataclass_to_toml_str.
     c = cfg.crystal
+    lines += ["", "[crystal]"]
+    mount = cfg.geometry.mount
+    if mount is not None:
+        lines += [
+            f'lattice = "{mount.lattice}"',
+            f"a = {mount.a}",
+            f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]",
+            f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]",
+            f"mount_z = [{mount.mount_z[0]}, {mount.mount_z[1]}, {mount.mount_z[2]}]",
+        ]
     lines += [
-        "",
-        "[crystal]",
         f"slip_plane_normal = [{c.slip_plane_normal[0]}, "
         f"{c.slip_plane_normal[1]}, {c.slip_plane_normal[2]}]",
         f"angle_start_deg = {c.angle_start_deg}",
@@ -1259,6 +1437,16 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
             f"include_secondary = {str(cfg.zscan.include_secondary).lower()}",
             f"secondary_rng_offset = {cfg.zscan.secondary_rng_offset}",
             f"render_per_dislocation = {str(cfg.zscan.render_per_dislocation).lower()}",
+        ]
+    # [geometry] — oblique runs only (mirrors _dataclass_to_toml_str). With the
+    # mount emitted in [crystal] above, load_identification_config re-derives the
+    # validated theta so oblique identify provenance round-trips.
+    if cfg.geometry.mode == "oblique":
+        lines += [
+            "",
+            "[geometry]",
+            'mode = "oblique"',
+            f"eta = {cfg.geometry.eta}",
         ]
     return "\n".join(lines) + "\n"
 
@@ -1317,8 +1505,10 @@ def _iter_identification_single(
 
     for z in z_samples:
         z_float = float(z)
-        # fm.rl (not None) — Fd_find_mixed takes rl positionally and expects an ndarray.
-        rl_eff = fm.Z_shift(z_float) if z_float != 0.0 else fm.rl
+        # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); fm.rl
+        # and fm.Z_shift(...) are both in metres, so scale by 1e6 — matching the
+        # forward path (strain_cache.py:61, forward_model.py:1139).
+        rl_eff = (fm.Z_shift(z_float) if z_float != 0.0 else fm.rl) * 1e6
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for plane in planes:
@@ -1400,6 +1590,7 @@ def _run_identification_single(
         cli=" ".join(sys.argv),
         config_toml=config_toml,
         max_workers=config.io.max_workers,
+        write_strain_provenance=config.io.write_strain_provenance,
     )
     _maybe_apply_poisson_noise(config, output_dir, n_scans)
     return {
@@ -1499,8 +1690,10 @@ def _iter_identification_multi(
     # by design (sample i at z=-2 and sample i at z=+2 use different dislocations).
     for z in z_samples:
         z_float = float(z)
-        # fm.rl (not None) — Fd_find_mixed takes rl positionally and expects an ndarray.
-        rl_eff = fm.Z_shift(z_float) if z_float != 0.0 else fm.rl
+        # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); fm.rl
+        # and fm.Z_shift(...) are both in metres, so scale by 1e6 — matching the
+        # forward path (strain_cache.py:61, forward_model.py:1139).
+        rl_eff = (fm.Z_shift(z_float) if z_float != 0.0 else fm.rl) * 1e6
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for _ in range(mc.n_samples):
@@ -1598,6 +1791,7 @@ def _run_identification_multi(
         cli=" ".join(sys.argv),
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
+        write_strain_provenance=config.io.write_strain_provenance,
     )
     _maybe_apply_poisson_noise(config, output_dir, n_scans)
     return {
@@ -1682,7 +1876,9 @@ def _iter_identification_zscan(
     for z_off in zscan.z_offsets_um:
         frames_at_z = _build_scan_frames_at_z(config.scan, z_value=float(z_off))
         n_frames = frames_at_z.n_frames
-        rl_shifted = fm.Z_shift(z_off)
+        # Fd_find_* expect the ray grid in MICROMETRES (b is in µm); Z_shift
+        # returns metres, so scale by 1e6 — matching the forward path.
+        rl_shifted = fm.Z_shift(z_off) * 1e6
         for plane in planes:
             b_table = _burgers_vectors(plane)
             b_indices = (
@@ -1823,6 +2019,7 @@ def _run_identification_zscan(
         cli=" ".join(sys.argv),
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
+        write_strain_provenance=config.io.write_strain_provenance,
     )
     _maybe_apply_poisson_noise(config, output_dir, n_scans)
     return {
@@ -1837,13 +2034,18 @@ def run_identification(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode."""
-    _load_resolution(config.reciprocal)
+    _load_resolution(config.reciprocal, config.geometry)
 
-    if config.mode == "single":
-        return _run_identification_single(config, output_dir)
-    if config.mode == "multi":
-        return _run_identification_multi(config, output_dir)
-    return _run_identification_zscan(config, output_dir)
+    # Oblique reflections diffract at their own Bragg angle; run the spec
+    # generators inside the theta context so the ray grid + imaging rotation
+    # use it (simplified mode is a no-op, preserving v2.2.0 geometry exactly).
+    # Mirrors run_simulation.
+    with fm.reflection_theta_if_oblique(config.geometry.mode, config.geometry.theta_validated):
+        if config.mode == "single":
+            return _run_identification_single(config, output_dir)
+        if config.mode == "multi":
+            return _run_identification_multi(config, output_dir)
+        return _run_identification_zscan(config, output_dir)
 
 
 def cli_main_identify(argv: list[str] | None = None) -> int:

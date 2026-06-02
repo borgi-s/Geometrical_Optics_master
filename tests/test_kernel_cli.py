@@ -472,31 +472,37 @@ class TestBuildKernelFilename:
     def test_basic_default_reflection(self) -> None:
         from dfxm_geo.reciprocal_space.kernel import _build_kernel_filename
 
-        result = _build_kernel_filename((-1, 1, -1), 17.0, "20260520_2100")
+        result = _build_kernel_filename("simplified", (-1, 1, -1), 17.0, date="20260520_2100")
         assert result == "Resq_i_h-1_k1_l-1_17keV_20260520_2100.npz"
 
     def test_g_format_drops_trailing_zero(self) -> None:
         from dfxm_geo.reciprocal_space.kernel import _build_kernel_filename
 
         # 17.0 → "17"
-        assert "_17keV_" in _build_kernel_filename((-1, 1, -1), 17.0, "20260520_2100")
+        assert "_17keV_" in _build_kernel_filename(
+            "simplified", (-1, 1, -1), 17.0, date="20260520_2100"
+        )
 
     def test_g_format_keeps_decimals_when_needed(self) -> None:
         from dfxm_geo.reciprocal_space.kernel import _build_kernel_filename
 
         # 17.5 → "17.5"
-        assert "_17.5keV_" in _build_kernel_filename((-1, 1, -1), 17.5, "20260520_2100")
+        assert "_17.5keV_" in _build_kernel_filename(
+            "simplified", (-1, 1, -1), 17.5, date="20260520_2100"
+        )
 
     def test_int_keV_renders_as_int(self) -> None:
         from dfxm_geo.reciprocal_space.kernel import _build_kernel_filename
 
         # int 17 → "17" (not "17.0")
-        assert "_17keV_" in _build_kernel_filename((-1, 1, -1), 17, "20260520_2100")
+        assert "_17keV_" in _build_kernel_filename(
+            "simplified", (-1, 1, -1), 17, date="20260520_2100"
+        )
 
     def test_mixed_signs(self) -> None:
         from dfxm_geo.reciprocal_space.kernel import _build_kernel_filename
 
-        result = _build_kernel_filename((2, -1, 3), 8.0, "20260520_2100")
+        result = _build_kernel_filename("simplified", (2, -1, 3), 8.0, date="20260520_2100")
         assert result == "Resq_i_h2_k-1_l3_8keV_20260520_2100.npz"
 
 

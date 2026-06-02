@@ -31,13 +31,20 @@ def test_hdf5_writer_bit_equivalent_to_legacy_npy_golden(tmp_path: Path) -> None
     """
     from dfxm_geo.pipeline import _lookup_and_load_kernel
 
-    if fm.Resq_i is None:
-        try:
-            _lookup_and_load_kernel((-1, 1, -1), 17.0)
-        except Exception:  # noqa: BLE001 - any load failure -> skip
-            pytest.skip("no MC kernel available on this checkout")
+    # Always (re)load the canonical kernel rather than trusting fm.Resq_i: in a
+    # full-suite run an earlier test may have left a DIFFERENT kernel / oblique
+    # theta in the fm module globals, which would make this comparison render
+    # the wrong geometry (fm-globals pollution; see the ForwardContext refactor
+    # follow-up). On a bare checkout with no kernel npz the load raises -> skip.
+    try:
+        _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    except Exception:  # noqa: BLE001 - any load failure -> skip
+        pytest.skip("no MC kernel available on this checkout")
     if fm.Resq_i is None:
         pytest.skip("kernel not loaded")
+    # Force the MC-LUT path: a prior test may have left fm._analytic_eval set
+    # (analytic backend), which forward() would otherwise prefer over the LUT.
+    fm._analytic_eval = None
 
     Hg, q_hkl = fm.Find_Hg(
         4.0,
