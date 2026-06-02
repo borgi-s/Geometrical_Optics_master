@@ -381,6 +381,74 @@ class TestCliMain:
         out = captured.out + captured.err
         assert "mutually exclusive" in out
 
+    def test_simplified_ignores_forward_layout_crystal_block(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A forward-style [crystal] (dislocation layout: mode + sub-block, no
+        mount keys) with no [geometry] must be treated as simplified, NOT as an
+        oblique mount. Regression: `dfxm-bootstrap --config configs/default.toml`
+        raised '[crystal] requires [geometry]' / '[crystal] missing key: lattice'
+        because the bootstrap parsed the layout block as a mount."""
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = tmp_path / "fwd_layout.toml"
+        cfg.write_text(
+            "[reciprocal]\n"
+            "hkl = [-1, 1, -1]\n"
+            "keV = 17.0\n"
+            "Nrays = 1000\n"
+            "\n"
+            "[crystal]\n"
+            'mode = "centered"\n'
+            "[crystal.centered]\n"
+            "b = [1, -1, 0]\n"
+            "n = [1, 1, 1]\n"
+            "t = [1, 1, -2]\n",
+            encoding="utf-8",
+        )
+        captured: dict[str, object] = {}
+
+        def fake_generate(**kwargs: object) -> Path:
+            captured.update(kwargs)
+            out = kwargs["output_path"]
+            assert isinstance(out, Path)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"")
+            return out
+
+        monkeypatch.setattr(kmod, "generate_kernel", fake_generate)
+        rc = kmod.cli_main(["--config", str(cfg), "--output", str(tmp_path / "k.npz")])
+        assert rc == 0
+        assert captured["mode"] == "simplified"
+        # Forward layout has no `a`; the Bragg angle uses the default Al lattice.
+        assert captured["theta"] == pytest.approx(kmod._default_theta_al_111(17))
+        assert captured["mount"].a == pytest.approx(4.0495e-10)  # type: ignore[attr-defined]
+
+    def test_mount_block_without_geometry_errors_clearly(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A MOUNT-style [crystal] (lattice/a/mount_*) with no [geometry] is a
+        config error — the user provided a mount but didn't declare the mode
+        (the spec-§6 explicitness guard, now correctly scoped to mount blocks so
+        it no longer over-fires on a forward-layout [crystal])."""
+        from dfxm_geo.reciprocal_space import kernel as kmod
+
+        cfg = tmp_path / "mount_no_geometry.toml"
+        cfg.write_text(
+            "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\nNrays = 1000\n"
+            "\n[crystal]\n"
+            'lattice = "cubic"\n'
+            "a = 4.0495e-10\n"
+            "mount_x = [1, 0, 0]\n"
+            "mount_y = [0, 1, 0]\n"
+            "mount_z = [0, 0, 1]\n",
+            encoding="utf-8",
+        )
+        rc = kmod.cli_main(["--config", str(cfg), "--output", str(tmp_path / "k.npz")])
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "[geometry]" in captured.out + captured.err
+
 
 class TestValidateReflection:
     def test_len_not_three_raises(self) -> None:

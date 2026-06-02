@@ -498,18 +498,30 @@ def cli_main(argv: list[str] | None = None) -> int:
     mount_block = data.get("crystal")
     geometry_block = data.get("geometry")
 
-    # Spec §6: [crystal] without [geometry] is a configuration error — the user
-    # must be explicit about which geometry mode to use.
-    if mount_block is not None and geometry_block is None:
-        raise ValueError(
-            "[crystal] block requires [geometry] mode to be set explicitly. "
-            "Use mode='simplified' for v2.2.0 behavior, mode='oblique' for "
-            "oblique-angle geometry."
+    # The crystal MOUNT (lattice/a/mount_x/y/z) is only used geometrically by
+    # oblique mode (theta/omega via the solver); simplified mode needs only the
+    # cubic lattice parameter `a`. A mount-style [crystal] carries the mount keys;
+    # a forward-style [crystal] (dislocation layout: mode + sub-block) does NOT
+    # and is irrelevant to the kernel. Distinguish them so
+    # `dfxm-bootstrap --config configs/default.toml` (whose [crystal] is a
+    # forward layout) works, while still requiring an explicit [geometry] mode
+    # when a genuine mount is supplied (the spec-§6 explicitness guard, now
+    # correctly scoped so it no longer over-fires on a forward layout).
+    _MOUNT_KEYS = ("lattice", "a", "mount_x", "mount_y", "mount_z")
+    is_mount_block = mount_block is not None and any(k in mount_block for k in _MOUNT_KEYS)
+    if is_mount_block and geometry_block is None:
+        print(
+            "error: a [crystal] mount block requires [geometry] mode to be set "
+            "explicitly (mode='simplified' or mode='oblique').",
+            file=sys.stderr,
         )
+        return 1
 
     try:
         mode, config_eta = _parse_geometry_block(geometry_block)
-        mount = _crystal_mount_from_toml(mount_block)
+        # Ignore a forward-layout [crystal] (use the default Al mount); only a
+        # genuine mount block feeds the lattice parameter / orientation.
+        mount = _crystal_mount_from_toml(mount_block if is_mount_block else None)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
