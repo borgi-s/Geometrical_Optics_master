@@ -1062,24 +1062,62 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any]:
+def _resolve_postprocess_Hg(h5_path: Path, Hg: np.ndarray | None) -> np.ndarray:
+    """Strain source for postprocess, in priority order.
+
+    1. explicit ``Hg`` argument;
+    2. persisted ``/1.1/dfxm_geo/Hg`` from the run's HDF5 (written when
+       ``io.write_strain_provenance`` is True);
+    3. the legacy ``fm.Hg`` module global (deprecated shim; one release only).
+    """
+    if Hg is not None:
+        return np.asarray(Hg, dtype=float)
+    with h5py.File(h5_path, "r") as f:
+        if "/1.1/dfxm_geo/Hg" in f:
+            return np.asarray(f["/1.1/dfxm_geo/Hg"][()], dtype=float)
+    if fm.Hg is not None:
+        return np.asarray(fm.Hg, dtype=float)
+    raise RuntimeError(
+        "Cannot postprocess: no Hg passed, none persisted at "
+        "/1.1/dfxm_geo/Hg (run with io.write_strain_provenance=true), and "
+        "fm.Hg is unset."
+    )
+
+
+def run_postprocess(
+    output_dir: Path,
+    config: SimulationConfig,
+    *,
+    Hg: np.ndarray | None = None,
+    q_hkl: np.ndarray | None = None,
+) -> dict[str, Any]:
     """Read /1.1 from dfxm_geo.h5; compute COM maps and the qi field.
 
     Analysis outputs are written into /1.1/dfxm_geo/analysis/ inside the same
     HDF5 file. SVG figures land on disk under <output_dir>/figures/ (F1).
 
-    Warning:
-        When invoked via ``--postprocess-only`` against an output dir whose
-        stacks were produced with non-default ``dis`` / ``ndis``, the qi field
-        is computed against the *module-level* ``fm.Hg``. If no prior
-        ``run_simulation`` set ``fm.Hg`` in this process, ``fm.Hg`` will be
-        None and this function will raise RuntimeError. For correctness in that
-        workflow, call ``pipeline._lookup_and_load_kernel(hkl, keV)`` and
-        assign ``fm.Hg`` explicitly before calling this function.
+    The strain field ``Hg`` used for qi computation is resolved in priority order:
+
+    1. the explicit ``Hg`` keyword argument (if supplied);
+    2. ``/1.1/dfxm_geo/Hg`` persisted in the HDF5 (written when
+       ``io.write_strain_provenance`` is True, the default);
+    3. the legacy ``fm.Hg`` module global (deprecated shim; one release only).
+
+    This means ``--postprocess-only`` on a fresh process works without any manual
+    ``fm.Hg`` assignment, as long as the HDF5 was produced with strain provenance
+    enabled (the default).
+
+    Args:
+        output_dir: Directory containing ``dfxm_geo.h5`` from a prior run.
+        config: ``SimulationConfig`` matching the original run.
+        Hg: Optional explicit strain-gradient tensor to use for qi computation.
+            Overrides both the persisted HDF5 value and ``fm.Hg``.
+        q_hkl: Accepted for API symmetry; currently unused by the postprocess body.
 
     Raises:
         FileNotFoundError: if the expected dfxm_geo.h5 file is absent.
         FileNotFoundError: if /2.1 (perfect crystal scan) is missing from the .h5.
+        RuntimeError: if no Hg source can be found (explicit, HDF5, or global).
     """
     h5_path = output_dir / "dfxm_geo.h5"
     if not h5_path.is_file():
@@ -1122,9 +1160,8 @@ def run_postprocess(output_dir: Path, config: SimulationConfig) -> dict[str, Any
         chi_steps,
         chi_shift=0.0,
     )
-    if fm.Hg is None:
-        raise RuntimeError("fm.Hg is not set. Call run_simulation() first.")
-    _, qi_field = fm.forward(fm.Hg, phi=0, qi_return=True)
+    Hg_pp = _resolve_postprocess_Hg(h5_path, Hg)
+    _, qi_field = fm.forward(Hg_pp, phi=0, qi_return=True)
 
     # Append analysis to /1.1/dfxm_geo/analysis/ inside the existing .h5
     with h5py.File(h5_path, "a") as f:
