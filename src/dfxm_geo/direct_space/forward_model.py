@@ -424,9 +424,14 @@ def _load_default_kernel(
     finally:
         data.close()
 
-    qi1_start, qi1_step = -qi1_range / 2, qi1_range / (npoints1 - 1)
-    qi2_start, qi2_step = -qi2_range / 2, qi2_range / (npoints2 - 1)
-    qi3_start, qi3_step = -qi3_range / 2, qi3_range / (npoints3 - 1)
+    # Bin width must match the FILL convention in reciprocal_space/resolution.py
+    # (index = floor((q + range/2) / range * npoints) lays down `npoints` equal
+    # bins of width range/npoints). Reading with range/(npoints-1) — the linspace
+    # "fencepost" spacing — drifts the gather index low toward the grid edge
+    # (~0.25-0.5% at npoints 400/200). Use range/npoints so READ inverts FILL.
+    qi1_start, qi1_step = -qi1_range / 2, qi1_range / npoints1
+    qi2_start, qi2_step = -qi2_range / 2, qi2_range / npoints2
+    qi3_start, qi3_step = -qi3_range / 2, qi3_range / npoints3
     qi_starts = np.asarray([qi1_start, qi2_start, qi3_start])
     qi_steps = 1 / np.asarray([qi1_step, qi2_step, qi3_step])
 

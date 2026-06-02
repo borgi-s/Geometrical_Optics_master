@@ -37,10 +37,16 @@ GOLDEN = REPO / "tests" / "data" / "golden" / "forward_legacy_writer_4frames_8x8
 
 
 def main() -> None:
-    # Use the canonical kernel; assert it loaded so we don't silently call
-    # forward() with Hg unset.
-    if fm.Hg is None:
-        raise SystemExit("Kernel didn't auto-load; run dfxm-bootstrap first or set DFXM_PKL_PATH.")
+    # Load the canonical MC kernel on demand (sub-project D removed the
+    # module-import auto-load). Bootstrap it first with a fixed seed so the
+    # golden is reproducible, e.g.:
+    #   dfxm-bootstrap --seed 0 --config <simplified Al-111 17keV config>
+    from dfxm_geo.pipeline import _lookup_and_load_kernel
+
+    if fm.Resq_i is None:
+        _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    if fm.Resq_i is None:
+        raise SystemExit("Kernel didn't load; run dfxm-bootstrap first or set DFXM_PKL_PATH.")
 
     S = SAMPLE_REMOUNT_OPTIONS["S1"]
     Hg, q_hkl = fm.Find_Hg(
