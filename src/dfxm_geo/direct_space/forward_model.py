@@ -44,19 +44,32 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # Sub-project C: random_dislocations placement constants.
 _MAX_REJECTION_TRIES = 10_000
 
-# A subset of FCC slip systems on the {111}/<-110> family used to draw
-# random orientations for random_dislocations mode. Each entry is (b, n, t)
-# with b.n=0 and t parallel to n x b. Six variants spanning two of the
-# four {111} planes -- sufficient for v1.2.0 sampling.
+# The full 12 FCC slip systems on the {111}/<110> family used to draw random
+# orientations for random_dislocations mode. Each entry is (b, n, t) with
+# b.n=0 (Burgers in the glide plane) and t parallel to n x b (line direction).
+# All four distinct {111} plane normals are covered, three <110> Burgers
+# vectors per plane (4 planes x 3 = 12 systems). The first six entries are the
+# original v1.2.0 sampling subset (planes (1,1,1) and (1,-1,1)), retained
+# verbatim; the last six complete planes (-1,1,1) and (1,1,-1).
 _SLIP_SYSTEM_111: tuple[
     tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]], ...
 ] = (
+    # Plane (1, 1, 1)
     ((1, -1, 0), (1, 1, 1), (1, 1, -2)),
     ((-1, 0, 1), (1, 1, 1), (-1, 2, -1)),
     ((0, 1, -1), (1, 1, 1), (-2, 1, 1)),
+    # Plane (1, -1, 1)
     ((1, 1, 0), (1, -1, 1), (1, -1, -2)),
     ((-1, 0, 1), (1, -1, 1), (-1, -2, -1)),
     ((0, -1, -1), (1, -1, 1), (-2, -1, 1)),
+    # Plane (-1, 1, 1)
+    ((0, 1, -1), (-1, 1, 1), (-2, -1, -1)),
+    ((1, 0, 1), (-1, 1, 1), (1, 2, -1)),
+    ((1, 1, 0), (-1, 1, 1), (-1, 1, -2)),
+    # Plane (1, 1, -1)
+    ((0, 1, 1), (1, 1, -1), (2, -1, 1)),
+    ((1, -1, 0), (1, 1, -1), (-1, -1, -2)),
+    ((1, 0, 1), (1, 1, -1), (1, -2, -1)),
 )
 
 fast_inverse2(
@@ -539,7 +552,12 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> None:
     from dfxm_geo.reciprocal_space.analytic_resolution import AnalyticResolution
     from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
-    theta = _validate_reflection(config.hkl, config.keV, 4.0495e-10)
+    # Derive theta from the config's cubic lattice parameter `a`. Falls back to
+    # the legacy Al value (4.0495e-10 m) for v2.2.0-era configs that don't carry
+    # one — same getattr-default pattern as `eta` below. Mirrors how
+    # reciprocal_space/kernel.py threads the mount's lattice into the MC path.
+    lattice_a = float(getattr(config, "lattice_a", 4.0495e-10))
+    theta = _validate_reflection(config.hkl, config.keV, lattice_a)
     eta_val = float(getattr(config, "eta", 0.0))  # safe default for v2.2.0-era configs
     _analytic_eval = AnalyticResolution(
         theta=theta,
@@ -752,6 +770,25 @@ def forward(
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Compute the DFXM forward-model image for the given goniometer angles.
 
+    Contrast formation. Each detector pixel is a depth-integrated projection
+    along the diffracted 2theta direction: the ``(NN1, NN2, NN3)`` ray grid is
+    summed onto the ``(NN2//Nsub, NN1//Nsub)`` image (the ``flat_indices``
+    scatter in ``_mc_lut_forward``). A ray contributes intensity only when its
+    local scattering vector ``qi = Theta @ (Us @ Hg @ q_hkl + ang)`` lands
+    inside the reciprocal-space resolution function ``Res_q`` (the bootstrapped
+    LUT, or its analytic closed form); rays whose ``qi`` falls outside the
+    LUT bounds are dropped (dark). So a pixel is bright where the locally
+    strained lattice still satisfies the rocking condition and dark where the
+    strain has rotated/dilated it out of the acceptance window — this is the
+    weak-beam contrast that images dislocation strain fields. Features that look
+    concentrated near a dislocation core are the physically-correct deep
+    weak-beam regime, not an artifact: far from the core the strain is small and
+    the lattice sits squarely in ``Res_q`` (uniform bright background), while the
+    steep near-core strain sweeps ``qi`` through and out of the window, carving
+    the characteristic contrast. See Poulsen et al. 2021 (J. Appl. Cryst.) for
+    the DFXM resolution-function / projection geometry and Borgi et al. 2024
+    (IUCrJ; doi:10.1107/S1600576724001183) for this kinematic implementation.
+
     Thin wrapper over ``precompute_forward_static`` + ``forward_from_static``,
     preserved for one-shot callers (single images, tests). For scans, call
     ``precompute_forward_static(Hg)`` once and ``forward_from_static`` per frame
@@ -879,11 +916,18 @@ class DislocationPopulation:
     positions_um: shape (N, 3) — (x, y, z) sample-frame coordinates.
     Ud: shape (N, 3, 3) — column-stacked (b_hat, n_hat, t_hat) rotation matrices.
     sidecar: dict to be written as JSON, or None if no sidecar needed.
+    rotation_deg: shape (N,) — per-dislocation mixed-character rotation angle
+        (degrees) of the line direction `t` around the slip-plane normal `n`,
+        starting from `t_0 = b x n`. ``None`` (the default for every current
+        builder) means pure edge for all dislocations (rotation_deg = 0), the
+        legacy behaviour. See ``crystal.dislocations.Fd_find_mixed`` for the
+        screw/edge convention (rotation_deg=0 edge, 90 screw).
     """
 
     positions_um: np.ndarray
     Ud: np.ndarray
     sidecar: dict | None
+    rotation_deg: np.ndarray | None = None
 
 
 def _ud_matrix_from_bnt(
@@ -1027,6 +1071,24 @@ def build_dislocation_population(
     raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
 
 
+def _population_rotation_deg(population: DislocationPopulation, n: int) -> np.ndarray:
+    """Per-dislocation mixed-character rotation angles (degrees), length n.
+
+    ``population.rotation_deg is None`` (every current builder) means pure edge
+    for all dislocations -> all zeros, the legacy behaviour. Otherwise the
+    supplied array is broadcast/validated to shape (n,).
+    """
+    if population.rotation_deg is None:
+        return np.zeros(n, dtype=np.float64)
+    rot = np.asarray(population.rotation_deg, dtype=np.float64).reshape(-1)
+    if rot.shape[0] != n:
+        raise ValueError(
+            f"population.rotation_deg has length {rot.shape[0]}, expected {n} "
+            f"(one per dislocation)."
+        )
+    return rot
+
+
 def _find_hg_from_population_numpy(
     population: DislocationPopulation,
     h: int,
@@ -1052,11 +1114,13 @@ def _find_hg_from_population_numpy(
     q_hkl = np.asarray([h, k, l]) / Q_norm
 
     # Build MixedDislocSpec per dislocation. Fd_find_multi_dislocs_mixed
-    # supports per-crystal Ud + lab-frame offset.
+    # supports per-crystal Ud + lab-frame offset. Honour each dislocation's
+    # mixed-character rotation_deg (None -> pure edge for all, the default).
+    rot_deg = _population_rotation_deg(population, len(population.positions_um))
     crystals = [
         MixedDislocSpec(
             Ud_mix=population.Ud[i],
-            rotation_deg=0.0,  # pure edge; full character encoded in Ud columns
+            rotation_deg=float(rot_deg[i]),
             position_lab_um=(
                 float(population.positions_um[i, 0]),
                 float(population.positions_um[i, 1]),
@@ -1130,9 +1194,12 @@ def Find_Hg_from_population(
         Ud[i] = population.Ud[i]
         M[i] = population.Ud[i].T @ base
         offset[i] = population.positions_um[i]
-    # Population dislocations are pure edge (rotation_deg = 0): cos=1, sin=0.
-    cos_rot = np.ones(n)
-    sin_rot = np.zeros(n)
+    # Honour each dislocation's mixed-character rotation_deg (edge<->screw).
+    # None means pure edge for the whole population (rotation_deg = 0), the
+    # legacy default: cos=1, sin=0.
+    rot_deg = _population_rotation_deg(population, n)
+    cos_rot = np.cos(np.deg2rad(rot_deg))
+    sin_rot = np.sin(np.deg2rad(rot_deg))
 
     # rl is in metres; the field formula expects micrometres (b in µm) — *1e6,
     # exactly as the NumPy path and the reference disloc_identify.py do.

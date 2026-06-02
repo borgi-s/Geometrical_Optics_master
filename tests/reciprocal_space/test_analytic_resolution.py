@@ -73,6 +73,40 @@ def test_closed_form_matches_quadrature():
     np.testing.assert_allclose(closed[mask], quad[mask], rtol=1e-8, atol=1e-12)
 
 
+def test_closed_form_matches_quadrature_oblique():
+    """Oracle check on the oblique (eta != 0) closed form.
+
+    The @slow MC parity test for oblique is deselected from CI, so without
+    this the eta != 0 branch of the closed form has no fast oracle. The
+    quadrature oracle must thread eta through _build_M(theta, eta) so the
+    eta-rotated covariance is integrated the same way the closed form treats
+    it. `eta` (20.233 deg) is taken from the paper sec. 6 oblique example;
+    the remaining parameters are the Al-111 17 keV nominal (_nominal_kwargs),
+    so this exercises the eta-rotation, not the full (-1,-1,3)@19.1 keV setup.
+    """
+    eta = np.deg2rad(20.233)
+    kw = _nominal_kwargs()
+    res = AnalyticResolution(eta=eta, **kw)
+    rng = np.random.default_rng(1)
+    # q points spanning a few sigma in each imaging axis.
+    q = (rng.standard_normal((3, 200)).T * np.array([2e-4, 1.2e-3, 1.2e-3])).T
+    closed = res._raw_pq(q)  # unnormalized, to compare to the integral
+    quad = quadrature_pq(q, eta=eta, **kw)
+    mask = quad > quad.max() * 1e-9
+    np.testing.assert_allclose(closed[mask], quad[mask], rtol=1e-8, atol=1e-12)
+
+
+def test_quadrature_eta_zero_is_default():
+    """eta defaults to 0.0 and the eta=0 path stays bit-identical to the
+    no-eta call (the existing oracle relies on this)."""
+    kw = _nominal_kwargs()
+    rng = np.random.default_rng(2)
+    q = (rng.standard_normal((3, 50)).T * np.array([2e-4, 1.2e-3, 1.2e-3])).T
+    default = quadrature_pq(q, **kw)
+    explicit = quadrature_pq(q, eta=0.0, **kw)
+    np.testing.assert_array_equal(default, explicit)
+
+
 def test_degenerate_eps_raises():
     kw = _nominal_kwargs()
     kw["eps_rms"] = 1e-12  # collapses qrock' Gaussian spread

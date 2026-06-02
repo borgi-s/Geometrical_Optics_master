@@ -574,6 +574,7 @@ def write_identification_h5(
     config_toml: str,
     kernel_npz: Path | None = None,
     max_workers: int | None = None,
+    write_strain_provenance: bool = True,
 ) -> int:
     """Drive an identification run: consume ScanSpecs, write master + per-scan dirs.
 
@@ -582,6 +583,12 @@ def write_identification_h5(
       2. For each `(detector_name, args_list)` in `spec.detectors`, write
          `output_dir/scanNNNN/<name>_0000.h5` via the parallel writer.
       3. Call `master.add_scan(scan_id=f"{N}.1", detector_links=..., ...)`.
+
+    `write_strain_provenance`: when False, the large per-ray ``Hg``
+    displacement-gradient array is dropped from each ``/N.1/dfxm_geo`` group
+    (matching ``write_simulation_h5``); the tiny ``q_hkl``/``theta``/``psize``/
+    ``zl_rms`` scalars are retained. The ``Hg`` dump dominates per-scan size,
+    so disable it for batch/ML identification runs.
 
     Returns the count of scans written.
     """
@@ -626,6 +633,11 @@ def write_identification_h5(
                     DETECTOR_INTERNAL_PATH,
                 )
             end_time = _now()
+            # Honour io.write_strain_provenance: drop the large per-ray Hg dump
+            # from the master when disabled (the tiny scalars stay).
+            dfxm_geo_meta = spec.dfxm_geo
+            if not write_strain_provenance and "Hg" in dfxm_geo_meta:
+                dfxm_geo_meta = {k: v for k, v in dfxm_geo_meta.items() if k != "Hg"}
             master.add_scan(
                 scan_id=scan_id,
                 title=spec.title,
@@ -634,7 +646,7 @@ def write_identification_h5(
                 sample=spec.sample,
                 positioners=spec.positioners,
                 detector_links=detector_links,
-                dfxm_geo=spec.dfxm_geo,
+                dfxm_geo=dfxm_geo_meta,
                 attrs=spec.attrs,
             )
             n_scans += 1

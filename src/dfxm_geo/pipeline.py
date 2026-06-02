@@ -972,8 +972,19 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
             lines.append(f"steps = {axis.steps}")
         lines.append("")
 
-    # [crystal] + matching sub-block
+    # [crystal] + matching sub-block. The crystal-mount fields (oblique
+    # geometry, v2.3.0) live in the top-level [crystal] table and MUST be
+    # emitted before the [crystal.<mode>] sub-table (TOML key-ordering rule)
+    # — otherwise an oblique config round-trips to 'simplified' and the lossy
+    # TOML misattributes oblique runs in the embedded HDF5 provenance.
     lines.append("[crystal]")
+    mount = config.geometry.mount
+    if mount is not None:
+        lines.append(f'lattice = "{mount.lattice}"')
+        lines.append(f"a = {mount.a}")
+        lines.append(f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]")
+        lines.append(f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]")
+        lines.append(f"mount_z = [{mount.mount_z[0]}, {mount.mount_z[1]}, {mount.mount_z[2]}]")
     lines.append(f'mode = "{config.crystal.mode}"')
     lines.append(f"[crystal.{config.crystal.mode}]")
     if config.crystal.mode == "centered":
@@ -999,6 +1010,17 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
         if rd.seed is not None:
             lines.append(f"seed = {rd.seed}")
     lines.append("")
+
+    # [geometry] - only for oblique runs. Simplified mode is the default and
+    # carries no [geometry] block, so omitting it keeps simplified configs
+    # byte-for-byte unchanged. The mount fields are emitted in [crystal] above;
+    # together they let _build_geometry_config re-derive (theta_validated,
+    # omega) identically on round-trip.
+    if config.geometry.mode == "oblique":
+        lines.append("[geometry]")
+        lines.append('mode = "oblique"')
+        lines.append(f"eta = {config.geometry.eta}")
+        lines.append("")
 
     # [io] - render every field (default-skipping is brittle here since users
     # may explicitly want to set fields to defaults). Use asdict for simplicity.
@@ -1339,11 +1361,23 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
             f"hkl = [{h}, {k}, {l}]",
             f"keV = {cfg.reciprocal.keV}",
         ]
-    # [crystal] (identification flavor; not the SimulationConfig crystal)
+    # [crystal] (identification flavor; not the SimulationConfig crystal).
+    # Oblique mount fields (v2.3.0) are emitted FIRST in the table; together
+    # with the [geometry] block below they let load_identification_config
+    # re-derive the validated theta, so oblique identify provenance round-trips
+    # instead of misattributing to 'simplified'. Mirrors _dataclass_to_toml_str.
     c = cfg.crystal
+    lines += ["", "[crystal]"]
+    mount = cfg.geometry.mount
+    if mount is not None:
+        lines += [
+            f'lattice = "{mount.lattice}"',
+            f"a = {mount.a}",
+            f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]",
+            f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]",
+            f"mount_z = [{mount.mount_z[0]}, {mount.mount_z[1]}, {mount.mount_z[2]}]",
+        ]
     lines += [
-        "",
-        "[crystal]",
         f"slip_plane_normal = [{c.slip_plane_normal[0]}, "
         f"{c.slip_plane_normal[1]}, {c.slip_plane_normal[2]}]",
         f"angle_start_deg = {c.angle_start_deg}",
@@ -1392,6 +1426,16 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
             f"include_secondary = {str(cfg.zscan.include_secondary).lower()}",
             f"secondary_rng_offset = {cfg.zscan.secondary_rng_offset}",
             f"render_per_dislocation = {str(cfg.zscan.render_per_dislocation).lower()}",
+        ]
+    # [geometry] — oblique runs only (mirrors _dataclass_to_toml_str). With the
+    # mount emitted in [crystal] above, load_identification_config re-derives the
+    # validated theta so oblique identify provenance round-trips.
+    if cfg.geometry.mode == "oblique":
+        lines += [
+            "",
+            "[geometry]",
+            'mode = "oblique"',
+            f"eta = {cfg.geometry.eta}",
         ]
     return "\n".join(lines) + "\n"
 
@@ -1535,6 +1579,7 @@ def _run_identification_single(
         cli=" ".join(sys.argv),
         config_toml=config_toml,
         max_workers=config.io.max_workers,
+        write_strain_provenance=config.io.write_strain_provenance,
     )
     _maybe_apply_poisson_noise(config, output_dir, n_scans)
     return {
@@ -1735,6 +1780,7 @@ def _run_identification_multi(
         cli=" ".join(sys.argv),
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
+        write_strain_provenance=config.io.write_strain_provenance,
     )
     _maybe_apply_poisson_noise(config, output_dir, n_scans)
     return {
@@ -1962,6 +2008,7 @@ def _run_identification_zscan(
         cli=" ".join(sys.argv),
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
+        write_strain_provenance=config.io.write_strain_provenance,
     )
     _maybe_apply_poisson_noise(config, output_dir, n_scans)
     return {

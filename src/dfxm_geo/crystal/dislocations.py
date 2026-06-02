@@ -191,7 +191,6 @@ def Fd_find(
         chunks = [
             range(start, min(start + chunk_size, ndis)) for start in range(1, ndis, chunk_size)
         ]
-        print(chunks)
 
         with ThreadPoolExecutor(max_workers=njobs) as executor:
             results = list(

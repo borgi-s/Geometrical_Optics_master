@@ -157,6 +157,7 @@ def quadrature_pq(
     qi: np.ndarray,
     *,
     theta: float,
+    eta: float = 0.0,
     zeta_v_fwhm: float,
     zeta_h_fwhm: float,
     NA_rms: float,
@@ -169,10 +170,15 @@ def quadrature_pq(
     quadrature. Returns the *unnormalized* density (same scale as
     AnalyticResolution._raw_pq). Serves as the algebra oracle and the fallback
     if the NA-aperture approximation ever exceeds tolerance.
+
+    `eta` is threaded into the imaging map M = _build_M(theta, eta) exactly as
+    AnalyticResolution does, so this oracle also validates the oblique
+    (eta != 0) closed form. At eta=0 the map -- and hence the result -- is
+    bit-identical to the no-eta call.
     """
     qi = np.asarray(qi, dtype=float)
     sig_zv = zeta_v_fwhm / 2.355
-    M = _build_M(theta)
+    M = _build_M(theta, eta)
     m_u = M[:, 1]
     M_g = M[:, [0, 2, 3, 4]]
     # zeta_h divisor 2.35 (vs zeta_v's 2.355 above) is intentional, mirroring

@@ -31,6 +31,7 @@ import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     GeometryConfig,
     IdentificationConfig,
+    _identification_config_to_toml_str,
     load_identification_config,
     run_identification,
 )
@@ -145,3 +146,20 @@ def test_run_identification_threads_geometry(
     assert captured["geometry"].mode == "oblique"
     assert captured["theta_ctx"] == ("oblique", pytest.approx(_OBLIQUE_THETA))
     assert captured["ran"] is True
+
+
+def test_oblique_identify_provenance_round_trips_through_toml_str(tmp_path: Path) -> None:
+    """The provenance TOML embedded in the HDF5 master for an oblique identify
+    run must round-trip back to oblique (not silently 'simplified')."""
+    p = tmp_path / "oblique_identify.toml"
+    _write_oblique_identify_toml(p)
+    cfg = load_identification_config(p)
+    assert cfg.geometry.mode == "oblique"  # precondition
+
+    rt = tmp_path / "provenance_round_trip.toml"
+    rt.write_text(_identification_config_to_toml_str(cfg))
+    reloaded = load_identification_config(rt)
+
+    assert reloaded.geometry.mode == "oblique"
+    assert reloaded.geometry.eta == pytest.approx(_OBLIQUE_ETA, abs=1e-6)
+    assert reloaded.geometry.theta_validated == pytest.approx(_OBLIQUE_THETA, abs=1e-3)
