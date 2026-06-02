@@ -26,7 +26,7 @@ src/dfxm_geo/
 ├── analysis/
 │   ├── moments.py           Image-stack moments / FWHM
 │   ├── colormaps.py         Inverse pole-figure RGB mapping
-│   └── mosaicity.py         compute_chi_shift, compute_com_maps (Phase 9.2)
+│   └── mosaicity.py         compute_com_maps (Phase 9.2)
 ├── viz/
 │   └── mosaicity.py         plot_mosaicity_maps, plot_qi_cross_section (Phase 9.2)
 └── pipeline.py              Config dataclasses, run_simulation, run_postprocess, CLI
@@ -87,11 +87,12 @@ The end-to-end pipeline has five stages. Stages 1–3 are the forward simulation
    field `qi` for diagnostics.
 
 4. **Compute mosaicity maps** (`analysis.mosaicity`, Phase 9.2). Reads both
-   stacks back from disk via `load_images`, corrects the χ axis with
-   `compute_chi_shift`, then extracts per-pixel center-of-mass positions
-   over the (φ, χ) grid with `compute_com_maps`. Outputs `phi_list` and
-   `chi_list` arrays (shape `(H, W)` each, in radians) plus a
-   `chi_shift_rad` scalar (radians), stored in the HDF5 analysis group.
+   stacks back from disk via `load_images`, then extracts per-pixel
+   center-of-mass positions over the (φ, χ) grid with `compute_com_maps`
+   (on the nominal χ grid; the old runtime χ-offset calibration was
+   dropped). Outputs `phi_list` and `chi_list` arrays (shape `(H, W)` each,
+   in radians) plus a `chi_shift_rad` scalar (radians, now always 0.0),
+   stored in the HDF5 analysis group.
 
 5. **Render SVG figures** (`viz.mosaicity`, Phase 9.2). `plot_mosaicity_maps`
    produces the two-panel "extreme φ / χ" figure; `plot_qi_cross_section`
@@ -234,9 +235,8 @@ NumPy array (image or stack), return another NumPy array (or a dict of
 named summary statistics). Avoid file I/O — that belongs in
 `dfxm_geo/io/`.
 
-See `analysis/mosaicity.py` for the Phase 9.2 example: `compute_chi_shift`
-takes a stack and scalar grid parameters; `compute_com_maps` returns two
-`(H, W)` maps.
+See `analysis/mosaicity.py` for the Phase 9.2 example: `compute_com_maps`
+takes a stack and scalar grid parameters and returns two `(H, W)` maps.
 
 ## Adding a new viz function
 
