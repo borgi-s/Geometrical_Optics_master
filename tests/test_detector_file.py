@@ -79,12 +79,13 @@ def test_compute_and_write_detector_file_parallel_roundtrip(tmp_path: Path) -> N
         pytest.skip("forward_model.Hg not populated; run dfxm-bootstrap.")
     try:
         Hg = fm.Hg
-        base_qc = fm.precompute_forward_static(Hg)
+        ctx = fm._context_from_globals()
+        base_qc = fm.precompute_forward_static(Hg, ctx)
         args = [
-            (0, base_qc, 0.0, 0.0, 0.0),
-            (1, base_qc, 1e-5, 0.0, 0.0),
-            (2, base_qc, 0.0, 1e-5, 0.0),
-            (3, base_qc, 1e-5, 1e-5, 0.0),
+            (0, base_qc, 0.0, 0.0, 0.0, ctx),
+            (1, base_qc, 1e-5, 0.0, 0.0, ctx),
+            (2, base_qc, 0.0, 1e-5, 0.0, ctx),
+            (3, base_qc, 1e-5, 1e-5, 0.0, ctx),
         ]
         out = tmp_path / "scan0001" / "dfxm_sim_detector_0000.h5"
         _compute_and_write_detector_file_parallel(out, args, max_workers=2)

@@ -66,12 +66,13 @@ def test_hdf5_writer_bit_equivalent_to_legacy_npy_golden(tmp_path: Path) -> None
     # exercised: phi inner, chi outer, frame_idx = chi_idx * phi_steps + phi_idx.
     Phi = np.linspace(-TINY_HALF_RANGE_RAD, TINY_HALF_RANGE_RAD, 2)
     Chi = np.linspace(-TINY_HALF_RANGE_RAD, TINY_HALF_RANGE_RAD, 2)
-    base_qc = fm.precompute_forward_static(Hg)
+    ctx = fm._context_from_globals()
+    base_qc = fm.precompute_forward_static(Hg, ctx)
     args = []
     for chi_idx in range(2):
         for phi_idx in range(2):
             k = chi_idx * 2 + phi_idx
-            args.append((k, base_qc, float(Phi[phi_idx]), float(Chi[chi_idx]), 0.0))
+            args.append((k, base_qc, float(Phi[phi_idx]), float(Chi[chi_idx]), 0.0, ctx))
     _compute_and_write_detector_file_parallel(out, args, max_workers=1)
 
     expected = np.load(GOLDEN)  # shape (4, 8, 8), float64

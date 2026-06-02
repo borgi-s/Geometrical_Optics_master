@@ -86,7 +86,8 @@ def test_scan_frames_args_carry_base_qc(loaded_Hg: np.ndarray) -> None:
     args_list, _positioners = _scan_frames_args(loaded_Hg, frames, scan)
 
     expected_base_qc = fm.precompute_forward_static(loaded_Hg)
-    # Every frame tuple carries the SAME base_qc object (shared, read-only).
+    # Every frame tuple carries the SAME base_qc object (shared, read-only);
+    # index 1 is base_qc in the (frame_idx, base_qc, phi, chi, 2dt, ctx) tuple.
     first_base_qc = args_list[0][1]
     np.testing.assert_array_equal(first_base_qc, expected_base_qc)
     for args in args_list[1:]:
@@ -99,9 +100,10 @@ def test_compute_frame_matches_forward(loaded_Hg: np.ndarray) -> None:
 
     from dfxm_geo.io.hdf5 import _compute_frame
 
-    base_qc = fm.precompute_forward_static(loaded_Hg)
+    ctx = fm._context_from_globals()
+    base_qc = fm.precompute_forward_static(loaded_Hg, ctx)
     phi, chi, two_dtheta = 1e-4, -2e-4, 3e-4
-    idx, im = _compute_frame((7, base_qc, phi, chi, two_dtheta))
+    idx, im = _compute_frame((7, base_qc, phi, chi, two_dtheta, ctx))
     assert idx == 7
     expected = fm.forward(loaded_Hg, phi=phi, chi=chi, TwoDeltaTheta=two_dtheta)
     np.testing.assert_array_equal(im, expected)

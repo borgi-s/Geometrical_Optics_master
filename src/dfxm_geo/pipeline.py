@@ -1335,19 +1335,23 @@ def _iterate_simulation_frames(
 
 def _scan_frames_args(
     Hg: np.ndarray, frames: ScanFrames, scan: ScanConfig
-) -> tuple[list[tuple[int, np.ndarray, float, float, float]], dict[str, np.ndarray | float]]:
+) -> tuple[
+    list[tuple[int, np.ndarray, float, float, float, fm.ForwardContext]],
+    dict[str, np.ndarray | float],
+]:
     """Build (args_list, positioners) for one ScanSpec.
 
-    args_list elements: (frame_idx, base_qc, phi_rad, chi_rad, two_dtheta_rad),
+    args_list elements: (frame_idx, base_qc, phi_rad, chi_rad, two_dtheta_rad, ctx),
     where base_qc = precompute_forward_static(Hg) is computed ONCE here and
     shared (read-only) across every frame -- the per-frame worker runs the
-    cheap forward_from_static(base_qc, ...) instead of recomputing the
+    cheap forward_from_static(base_qc, ctx, ...) instead of recomputing the
     Hg-only qs matmul each frame.
     positioners: dict keyed by canonical axis; scanned axes -> per-frame array,
     fixed axes -> scalar.
     """
-    base_qc = fm.precompute_forward_static(Hg)
-    args_list: list[tuple[int, np.ndarray, float, float, float]] = []
+    ctx = fm._context_from_globals()
+    base_qc = fm.precompute_forward_static(Hg, ctx)
+    args_list: list[tuple[int, np.ndarray, float, float, float, fm.ForwardContext]] = []
     for k in range(frames.n_frames):
         args_list.append(
             (
@@ -1356,6 +1360,7 @@ def _scan_frames_args(
                 float(frames.phi_pf[k]),
                 float(frames.chi_pf[k]),
                 float(frames.two_dtheta_pf[k]),
+                ctx,
             )
         )
     positioners = _positioners_for_scan_frames(frames, scan)
@@ -1757,7 +1762,9 @@ def _iter_identification_multi(
             Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
 
             combined_args, positioners = _scan_frames_args(Hg_combined, frames_at_z, config.scan)
-            detectors: dict[str, list[tuple[int, np.ndarray, float, float, float]]] = {
+            detectors: dict[
+                str, list[tuple[int, np.ndarray, float, float, float, fm.ForwardContext]]
+            ] = {
                 "dfxm_sim_detector": combined_args,
             }
 
@@ -1964,7 +1971,9 @@ def _iter_identification_zscan(
                         },
                     }
 
-                    detectors: dict[str, list[tuple[int, np.ndarray, float, float, float]]] = {}
+                    detectors: dict[
+                        str, list[tuple[int, np.ndarray, float, float, float, fm.ForwardContext]]
+                    ] = {}
                     if zscan.include_secondary:
                         sec = _draw_dislocation(secondary_rng, pos_std_um=0.0)
                         secondary_spec = MixedDislocSpec(

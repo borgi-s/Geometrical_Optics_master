@@ -52,10 +52,12 @@ SCAN_DIR_FMT = "scan{:04d}"
 DETECTOR_FILE_FMT = "{name}_0000.h5"
 DETECTOR_INTERNAL_PATH = "/entry_0000/dfxm_sim_detector/image"
 
-# (frame_idx, base_qc, phi, chi, two_dtheta). base_qc = precompute_forward_static(Hg),
-# shared read-only across frames; replaces the per-frame Hg as of the static-hoist.
-_FrameArgs = tuple[int, np.ndarray, float, float, float]
-"""(frame_idx, base_qc, phi_rad, chi_rad, two_dtheta_rad)"""
+# (frame_idx, base_qc, phi, chi, two_dtheta, ctx). base_qc =
+# precompute_forward_static(Hg), shared read-only across frames; replaces the
+# per-frame Hg as of the static-hoist. ctx is a ForwardContext (shared
+# read-only across all frames of a scan, built once per writer call).
+_FrameArgs = tuple[int, np.ndarray, float, float, float, "_fm.ForwardContext"]
+"""(frame_idx, base_qc, phi_rad, chi_rad, two_dtheta_rad, ctx)"""
 
 
 @dataclass(frozen=True)
@@ -120,12 +122,12 @@ def _sha256_of(path: Path) -> str:
 def _compute_frame(args: _FrameArgs) -> tuple[int, np.ndarray]:
     """Worker function: run the per-frame forward model and return (frame_idx, image).
 
-    args = (frame_idx, base_qc, phi, chi, two_dtheta)
+    args = (frame_idx, base_qc, phi, chi, two_dtheta, ctx)
     """
-    frame_idx, base_qc, phi, chi, two_dtheta = args
+    frame_idx, base_qc, phi, chi, two_dtheta, ctx = args
     im = cast(
         np.ndarray,
-        _fm.forward_from_static(base_qc, phi=phi, chi=chi, TwoDeltaTheta=two_dtheta),
+        _fm.forward_from_static(base_qc, ctx, phi=phi, chi=chi, TwoDeltaTheta=two_dtheta),
     )
     return frame_idx, im
 
@@ -581,6 +583,7 @@ def write_identification_h5(
     kernel_npz: Path | None = None,
     max_workers: int | None = None,
     write_strain_provenance: bool = True,
+    ctx: _fm.ForwardContext | None = None,
 ) -> int:
     """Drive an identification run: consume ScanSpecs, write master + per-scan dirs.
 
@@ -682,6 +685,7 @@ def write_simulation_h5(
     geometry_mode: str = "simplified",
     eta: float = 0.0,
     mount: CrystalMount | None = None,
+    ctx: _fm.ForwardContext | None = None,
 ) -> None:
     """One-call entry point for forward mode, v1.2.0 layout.
 
@@ -718,6 +722,11 @@ def write_simulation_h5(
     out_dir = path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Build (or adopt) a ForwardContext once per write call; shared read-only
+    # across all frames and scans.  Current callers that don't pass ctx get the
+    # globals snapshot so behaviour is unchanged.
+    _ctx = _fm._context_from_globals() if ctx is None else ctx
+
     n = frames.n_frames
     phi_per_frame = frames.phi_pf
     chi_per_frame = frames.chi_pf
@@ -733,8 +742,8 @@ def write_simulation_h5(
 
     def _build_args(Hg_in: np.ndarray) -> list[_FrameArgs]:
         # Precompute base_qc once per scan (shared read-only across frames);
-        # the per-frame worker runs forward_from_static(base_qc, ...).
-        base_qc = _fm.precompute_forward_static(Hg_in)
+        # the per-frame worker runs forward_from_static(base_qc, ctx, ...).
+        base_qc = _fm.precompute_forward_static(Hg_in, _ctx)
         return [
             (
                 i,
@@ -742,6 +751,7 @@ def write_simulation_h5(
                 float(phi_per_frame[i]),
                 float(chi_per_frame[i]),
                 float(two_dtheta_per_frame[i]),
+                _ctx,
             )
             for i in range(n)
         ]
@@ -813,7 +823,7 @@ def write_simulation_h5(
                     z = float(z_per_frame[k])
                     if z not in z_to_base_qc:
                         Hg_z = Hg_provider(z)[0]  # discard q_hkl on per-z calls
-                        z_to_base_qc[z] = _fm.precompute_forward_static(Hg_z)
+                        z_to_base_qc[z] = _fm.precompute_forward_static(Hg_z, _ctx)
                     provider_args_list.append(
                         (
                             k,
@@ -821,6 +831,7 @@ def write_simulation_h5(
                             float(phi_per_frame[k]),
                             float(chi_per_frame[k]),
                             float(two_dtheta_per_frame[k]),
+                            _ctx,
                         )
                     )
                     if k == n - 1 or float(z_per_frame[k + 1]) != z:
