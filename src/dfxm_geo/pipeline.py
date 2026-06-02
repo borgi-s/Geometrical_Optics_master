@@ -615,6 +615,10 @@ class IdentificationConfig:
     zscan: IdentificationZScanConfig | None = None
     # Sub-project F: reciprocal tightens to non-Optional + default.
     reciprocal: ReciprocalConfig = field(default_factory=ReciprocalConfig)
+    # v2.3.0: diffraction geometry (simplified vs oblique-angle), mirroring
+    # SimulationConfig. Defaults to simplified so existing identify configs
+    # are unchanged.
+    geometry: GeometryConfig = field(default_factory=GeometryConfig)
 
     def __post_init__(self) -> None:
         if self.mode not in ("single", "multi", "z-scan"):
@@ -672,7 +676,14 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     # Sub-project F: 'mode' is now optional in TOML; defaults to 'single'.
     mode = data.get("mode", "single")
 
-    crystal_data = data.get("crystal", {})
+    crystal_data = dict(data.get("crystal", {}))
+    # Mount keys belong to the oblique [geometry] machinery (read via
+    # _build_geometry_config -> _crystal_mount_from_toml), NOT to the
+    # IdentificationCrystalConfig dislocation-sweep schema. Strip them so an
+    # oblique identify config's [crystal] block parses (forward's
+    # CrystalConfig.from_dict filters the same keys by picking known fields).
+    for _mount_key in ("lattice", "a", "mount_x", "mount_y", "mount_z"):
+        crystal_data.pop(_mount_key, None)
     if "slip_plane_normal" in crystal_data:
         crystal_data = {
             **crystal_data,
@@ -687,6 +698,11 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     )
     zscan = IdentificationZScanConfig(**data["zscan"]) if data.get("zscan") is not None else None
     reciprocal = ReciprocalConfig.from_dict(data.get("reciprocal"))
+    geometry = _build_geometry_config(data, reciprocal)
+    # Mirror SimulationConfig.from_toml: the analytic backend reads eta off
+    # ReciprocalConfig, so surface the validated oblique eta there.
+    if geometry.mode == "oblique":
+        reciprocal.eta = geometry.eta
 
     return IdentificationConfig(
         mode=mode,
@@ -697,6 +713,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         multi=multi,
         zscan=zscan,
         reciprocal=reciprocal,
+        geometry=geometry,
     )
 
 
@@ -1433,8 +1450,10 @@ def _iter_identification_single(
 
     for z in z_samples:
         z_float = float(z)
-        # fm.rl (not None) — Fd_find_mixed takes rl positionally and expects an ndarray.
-        rl_eff = fm.Z_shift(z_float) if z_float != 0.0 else fm.rl
+        # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); fm.rl
+        # and fm.Z_shift(...) are both in metres, so scale by 1e6 — matching the
+        # forward path (strain_cache.py:61, forward_model.py:1139).
+        rl_eff = (fm.Z_shift(z_float) if z_float != 0.0 else fm.rl) * 1e6
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for plane in planes:
@@ -1615,8 +1634,10 @@ def _iter_identification_multi(
     # by design (sample i at z=-2 and sample i at z=+2 use different dislocations).
     for z in z_samples:
         z_float = float(z)
-        # fm.rl (not None) — Fd_find_mixed takes rl positionally and expects an ndarray.
-        rl_eff = fm.Z_shift(z_float) if z_float != 0.0 else fm.rl
+        # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); fm.rl
+        # and fm.Z_shift(...) are both in metres, so scale by 1e6 — matching the
+        # forward path (strain_cache.py:61, forward_model.py:1139).
+        rl_eff = (fm.Z_shift(z_float) if z_float != 0.0 else fm.rl) * 1e6
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for _ in range(mc.n_samples):
@@ -1798,7 +1819,9 @@ def _iter_identification_zscan(
     for z_off in zscan.z_offsets_um:
         frames_at_z = _build_scan_frames_at_z(config.scan, z_value=float(z_off))
         n_frames = frames_at_z.n_frames
-        rl_shifted = fm.Z_shift(z_off)
+        # Fd_find_* expect the ray grid in MICROMETRES (b is in µm); Z_shift
+        # returns metres, so scale by 1e6 — matching the forward path.
+        rl_shifted = fm.Z_shift(z_off) * 1e6
         for plane in planes:
             b_table = _burgers_vectors(plane)
             b_indices = (
@@ -1953,13 +1976,18 @@ def run_identification(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode."""
-    _load_resolution(config.reciprocal)
+    _load_resolution(config.reciprocal, config.geometry)
 
-    if config.mode == "single":
-        return _run_identification_single(config, output_dir)
-    if config.mode == "multi":
-        return _run_identification_multi(config, output_dir)
-    return _run_identification_zscan(config, output_dir)
+    # Oblique reflections diffract at their own Bragg angle; run the spec
+    # generators inside the theta context so the ray grid + imaging rotation
+    # use it (simplified mode is a no-op, preserving v2.2.0 geometry exactly).
+    # Mirrors run_simulation.
+    with fm.reflection_theta_if_oblique(config.geometry.mode, config.geometry.theta_validated):
+        if config.mode == "single":
+            return _run_identification_single(config, output_dir)
+        if config.mode == "multi":
+            return _run_identification_multi(config, output_dir)
+        return _run_identification_zscan(config, output_dir)
 
 
 def cli_main_identify(argv: list[str] | None = None) -> int:
