@@ -1548,7 +1548,9 @@ def _iter_identification_single(
     When z is fixed, z_samples has length 1 (no extra scans emitted).
 
     ctx is the run's ForwardContext, built inside the oblique CM by
-    run_identification and passed in — globals are NOT read here.
+    run_identification and passed in. Geometry globals (Theta/rl/Us/psize/
+    zl_rms/theta_0) are NOT read here — only ``fm.q_hkl`` (per-config strain,
+    not geometry-dependent).
     """
     crystal_cfg = config.crystal
     # Noiseless frames are emitted here; intensity scaling and optional
@@ -1749,7 +1751,9 @@ def _iter_identification_multi(
     behaviour.
 
     ctx is the run's ForwardContext, built inside the oblique CM by
-    run_identification and passed in — globals are NOT read here.
+    run_identification and passed in. Geometry globals (Theta/rl/Us/psize/
+    zl_rms/theta_0) are NOT read here — only ``fm.q_hkl`` (per-config strain,
+    not geometry-dependent).
     """
     assert config.multi is not None  # validated in __post_init__
     mc = config.multi
@@ -1946,7 +1950,9 @@ def _iter_identification_zscan(
     applied post-write by ``_maybe_apply_poisson_noise``.
 
     ctx is the run's ForwardContext, built inside the oblique CM by
-    run_identification and passed in — globals are NOT read here.
+    run_identification and passed in. Geometry globals (Theta/rl/Us/psize/
+    zl_rms/theta_0) are NOT read here — only ``fm.q_hkl`` (per-config strain,
+    not geometry-dependent).
     """
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
