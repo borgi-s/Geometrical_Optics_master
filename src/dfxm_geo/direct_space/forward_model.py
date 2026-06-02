@@ -444,7 +444,7 @@ def _load_default_kernel(
     expected_hkl: tuple[int, int, int] | None = None,
     expected_keV: float | None = None,
     compute_Hg: bool = True,
-) -> None:
+) -> "ResolutionContext":
     """Load the reciprocal-space resolution kernel from disk into module state.
 
     Must be called with an explicit `pkl_path`. Use
@@ -551,6 +551,21 @@ def _load_default_kernel(
 
     _loaded_kernel_path = Path(pkl_path)
 
+    return ResolutionContext(
+        Resq_i=Resq_i,
+        qi1_start=qi1_start,
+        qi1_step=qi1_step,
+        qi2_start=qi2_start,
+        qi2_step=qi2_step,
+        qi3_start=qi3_start,
+        qi3_step=qi3_step,
+        npoints1=npoints1,
+        npoints2=npoints2,
+        npoints3=npoints3,
+        analytic_eval=None,
+        loaded_kernel_path=_loaded_kernel_path,
+    )
+
 
 def _lookup_legacy_simplified(
     directory: Path,
@@ -656,7 +671,7 @@ def _lookup_kernel_path(
     raise ValueError(f"unknown geometry mode: {mode!r}")
 
 
-def _load_analytic_resolution(config: "ReciprocalConfig") -> None:
+def _load_analytic_resolution(config: "ReciprocalConfig") -> "ResolutionContext":
     """Build the closed-form resolution evaluator and register it for forward().
 
     Derives theta from (hkl, keV) the same way the MC bootstrap does, then
@@ -686,6 +701,21 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> None:
     )
     if Hg is None:
         Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
+
+    return ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=_analytic_eval,
+        loaded_kernel_path=None,
+    )
 
 
 def build_instrument_context() -> InstrumentContext:
