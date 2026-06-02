@@ -15,7 +15,6 @@ Default geometry constants match ID06 at the ESRF; see `dfxm_geo.constants`.
 import contextlib
 import os
 from collections.abc import Iterator
-from dataclasses import dataclass
 from dataclasses import dataclass as _dataclass
 from pathlib import Path
 from pprint import pprint
@@ -37,7 +36,7 @@ if TYPE_CHECKING:
 _S_IDENTITY: np.ndarray = np.identity(3)
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class InstrumentContext:
     """Per-process, reflection-independent ray grid + detector geometry."""
 
@@ -57,7 +56,7 @@ class InstrumentContext:
     zl_steps: int
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class GeometryContext:
     """Per-reflection Bragg geometry + the ray grid it drives."""
 
@@ -69,7 +68,7 @@ class GeometryContext:
     prob_z: np.ndarray  # (N,) beam profile weight
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class ResolutionContext:
     """Per-reflection resolution backend (exactly one of the two is set)."""
 
@@ -87,7 +86,7 @@ class ResolutionContext:
     loaded_kernel_path: "Path | None"
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class ForwardContext:
     """Everything forward_from_static needs, bundled. Immutable + thread-safe."""
 
