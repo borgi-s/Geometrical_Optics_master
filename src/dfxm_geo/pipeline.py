@@ -393,6 +393,10 @@ class ReciprocalConfig:
     eps_rms: float = 1.41e-4 / 2.35
     zeta_v_clip: float = 1.4e-4
     eta: float = 0.0  # Azimuthal tilt (rad); 0.0 = simplified geometry (v2.2.0 default)
+    # Cubic lattice parameter (m); Al default. Drives the Bragg-angle (theta)
+    # derivation in __post_init__ and the analytic backend
+    # (forward_model._load_analytic_resolution reads config.lattice_a).
+    lattice_a: float = 4.0495e-10
 
     _VALID_BACKENDS = ("auto", "analytic", "mc")
 
@@ -405,11 +409,10 @@ class ReciprocalConfig:
             )
         from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
-        # TODO(non-Al materials): hardcoded Al lattice parameter; revisit if/when
-        # the codebase supports other crystals. Tracked as deferred work in the
-        # sub-project A spec ("materials other than Al") and in the sub-project D
-        # spec ("out of scope").
-        _validate_reflection(self.hkl, self.keV, 4.0495e-10)
+        # lattice_a defaults to Al (4.0495e-10) but is now config-driven, so a
+        # non-Al cubic lattice can be supplied via [reciprocal] lattice_a and
+        # flows through to both the Bragg-validity check and the analytic backend.
+        _validate_reflection(self.hkl, self.keV, self.lattice_a)
 
     @classmethod
     def from_dict(cls, data: dict | None) -> ReciprocalConfig:
@@ -425,7 +428,15 @@ class ReciprocalConfig:
                 kwargs[key] = str(data[key])
         if "beamstop" in data:
             kwargs["beamstop"] = bool(data["beamstop"])
-        for key in ("zeta_v_fwhm", "zeta_h_fwhm", "NA_rms", "eps_rms", "zeta_v_clip", "eta"):
+        for key in (
+            "zeta_v_fwhm",
+            "zeta_h_fwhm",
+            "NA_rms",
+            "eps_rms",
+            "zeta_v_clip",
+            "eta",
+            "lattice_a",
+        ):
             if key in data:
                 kwargs[key] = float(data[key])
         return cls(**kwargs)
