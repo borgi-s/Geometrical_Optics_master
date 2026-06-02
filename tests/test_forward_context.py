@@ -56,6 +56,21 @@ def test_context_from_globals_roundtrips():
 
 
 @pytest.mark.skipif(not _KERNELS, reason="no bootstrapped kernel on disk")
+def test_forward_ctx_path_bit_identical_to_globals_path():
+    fm._load_default_kernel(_KERNELS[0], compute_Hg=True)
+    Hg = fm.Hg
+    # Warm up the JIT so the signature count reflects the already-compiled
+    # kernel; the first in-process call compiles it.
+    _ = fm.forward(Hg, phi=1e-4, chi=2e-4)
+    n_sig_before = len(fm._mc_lut_forward.signatures)
+    img_globals = fm.forward(Hg, phi=1e-4, chi=2e-4)
+    ctx = fm._context_from_globals()
+    img_ctx = fm.forward(Hg, ctx=ctx, phi=1e-4, chi=2e-4)
+    assert np.array_equal(img_ctx, img_globals)  # bit-exact, not allclose
+    assert len(fm._mc_lut_forward.signatures) == n_sig_before  # ctx path: no new compile
+
+
+@pytest.mark.skipif(not _KERNELS, reason="no bootstrapped kernel on disk")
 def test_load_default_kernel_returns_matching_resolution_context():
     res = fm._load_default_kernel(_KERNELS[0], compute_Hg=False)
     assert res is not None

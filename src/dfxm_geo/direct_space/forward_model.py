@@ -833,7 +833,10 @@ def build_forward_context(theta_0_: "float | None" = None) -> ForwardContext:
     return ForwardContext(instrument=instr, geometry=geom, resolution=res)
 
 
-def precompute_forward_static(Hg: np.ndarray) -> np.ndarray:
+def precompute_forward_static(
+    Hg: np.ndarray,
+    ctx: "ForwardContext | None" = None,
+) -> np.ndarray:
     """Compute the phi/chi/2theta-independent part of the forward model.
 
     Returns ``base_qc = (Us @ Hg @ q_hkl).squeeze().T`` (shape ``(3, N)``),
@@ -842,8 +845,13 @@ def precompute_forward_static(Hg: np.ndarray) -> np.ndarray:
     and pass it to ``forward_from_static`` for every frame. The result is
     read-only and safe to share across worker threads (the dynamic half never
     mutates it).
+
+    ``ctx`` is optional; when provided, ``Us`` is sourced from it instead of
+    the module global. ``q_hkl`` is a per-config strain global and is NOT
+    part of ``ForwardContext`` by design — it is always read from the module.
     """
-    qs = Us @ Hg @ q_hkl
+    Us_ = Us if ctx is None else ctx.instrument.Us
+    qs = Us_ @ Hg @ q_hkl  # q_hkl: per-config strain (module global), not in ForwardContext
     return qs.squeeze().T
 
 
@@ -919,6 +927,7 @@ def _mc_lut_forward(
 
 def forward_from_static(
     base_qc: np.ndarray,
+    ctx: "ForwardContext | None" = None,
     phi: float = 0,
     chi: float = 0,
     TwoDeltaTheta: float = 0,
@@ -930,8 +939,17 @@ def forward_from_static(
     angles, and produces the detector image. Reproduces the exact float
     operations of the historical monolithic ``forward()`` tail (no
     reassociation), so output is bit-identical.
+
+    ``ctx`` is optional; when provided, all former-global reads are sourced
+    from it instead of module globals. When None, a ``ForwardContext`` is
+    built from the current globals via ``_context_from_globals()``.
     """
-    if Resq_i is None and _analytic_eval is None:
+    ctx = ctx if ctx is not None else _context_from_globals()
+    res = ctx.resolution
+    geom = ctx.geometry
+    instr = ctx.instrument
+
+    if res.Resq_i is None and res.analytic_eval is None:
         raise RuntimeError(
             "forward_model state is not initialized. Load a kernel "
             "(_lookup_and_load_kernel) or register the analytic backend "
@@ -939,54 +957,46 @@ def forward_from_static(
         )
 
     if TwoDeltaTheta != 0:
-        theta = theta_0 + TwoDeltaTheta
-        Theta = np.array(
-            [[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]]
-        )
+        th = geom.theta_0 + TwoDeltaTheta
+        Theta_ = np.array([[np.cos(th), 0, np.sin(th)], [0, 1, 0], [-np.sin(th), 0, np.cos(th)]])
     else:
-        Theta = np.array(
-            [
-                [np.cos(theta_0), 0, np.sin(theta_0)],
-                [0, 1, 0],
-                [-np.sin(theta_0), 0, np.cos(theta_0)],
-            ]
-        )
+        Theta_ = geom.Theta
 
     # Initialize forward model image with zeros
-    im_1 = np.zeros([(NN2 // Nsub), NN1 // Nsub])
+    im_1 = np.zeros([(instr.NN2 // instr.Nsub), instr.NN1 // instr.Nsub])
 
     # Goniometer offset vector components (added to base_qc to form qc).
     ang0 = phi - TwoDeltaTheta / 2
     ang1 = float(chi)
-    ang2 = (TwoDeltaTheta / 2) / np.tan(theta_0)
+    ang2 = (TwoDeltaTheta / 2) / np.tan(geom.theta_0)
 
     # The analytic backend and the qi_return diagnostic both need the full
     # materialized qi array. The common MC path does NOT -- the fused kernel
     # below recomputes qc/qi per ray, so we skip building them here (that
     # materialization was the per-frame memory bottleneck).
     qi = None
-    if _analytic_eval is not None or qi_return:
+    if res.analytic_eval is not None or qi_return:
         qc = base_qc + np.asarray([[ang0], [ang1], [ang2]])
-        qi = Theta @ qc
+        qi = Theta_ @ qc
 
-    if _analytic_eval is not None:
+    if res.analytic_eval is not None:
         # Grid-free: evaluate the closed-form p_Q at every ray's qi. No
         # grid-bounds mask -- the closed form returns ~0 in the tails, and
-        # _flat_indices already maps every ray to its detector pixel.
+        # flat_indices already maps every ray to its detector pixel.
         assert qi is not None
-        prob = (_analytic_eval(qi) * prob_z).astype(np.float32)
-        contribution = np.bincount(_flat_indices, weights=prob, minlength=im_1.size)
+        prob = (res.analytic_eval(qi) * geom.prob_z).astype(np.float32)
+        contribution = np.bincount(instr.flat_indices, weights=prob, minlength=im_1.size)
         im_1 += contribution.reshape(im_1.shape)
         if qi_return:
-            return im_1, qi.reshape(3, NN1, NN2, NN3)
+            return im_1, qi.reshape(3, instr.NN1, instr.NN2, instr.NN3)
         return im_1
 
     # MC LUT path: the analytic branch above returned early, so reaching here
     # guarantees Resq_i is loaded. Assert re-narrows it for the type checker
-    # (the guard now only requires that *one* of Resq_i / _analytic_eval is set).
-    assert Resq_i is not None
+    # (the guard now only requires that *one* of Resq_i / analytic_eval is set).
+    assert res.Resq_i is not None
     # A loaded kernel sets all the grid metadata together; narrow for mypy.
-    assert npoints1 is not None and npoints2 is not None and npoints3 is not None
+    assert res.npoints1 is not None and res.npoints2 is not None and res.npoints3 is not None
 
     # Whole per-frame forward (qc add, qi=Theta@qc, floor, in-bounds mask,
     # Resq_i gather, float32 scatter) fused into one nogil numba pass that
@@ -999,31 +1009,32 @@ def forward_from_static(
         ang0,
         ang1,
         ang2,
-        Theta,
-        prob_z,
-        _flat_indices,
-        Resq_i.reshape(-1),
+        Theta_,
+        geom.prob_z,
+        instr.flat_indices,
+        res.Resq_i.reshape(-1),
         im_1.reshape(-1),
-        qi1_start,
-        qi1_step,
-        qi2_start,
-        qi2_step,
-        qi3_start,
-        qi3_step,
-        npoints1,
-        npoints2,
-        npoints3,
-        npoints2 * npoints3,
-        npoints3,
+        res.qi1_start,
+        res.qi1_step,
+        res.qi2_start,
+        res.qi2_step,
+        res.qi3_start,
+        res.qi3_step,
+        res.npoints1,
+        res.npoints2,
+        res.npoints3,
+        res.npoints2 * res.npoints3,
+        res.npoints3,
     )
     if qi_return:
         assert qi is not None  # built above because qi_return is True
-        return im_1, qi.reshape(3, NN1, NN2, NN3)
+        return im_1, qi.reshape(3, instr.NN1, instr.NN2, instr.NN3)
     return im_1
 
 
 def forward(
     Hg: np.ndarray,
+    ctx: "ForwardContext | None" = None,
     phi: float = 0,
     chi: float = 0,
     TwoDeltaTheta: float = 0,
@@ -1057,6 +1068,7 @@ def forward(
 
     Args:
         Hg: Displacement gradient field, shape (X, 3, 3) where X = NN1*NN2*NN3.
+        ctx: Optional ``ForwardContext``; when None, built from current globals.
         phi: Radians off the Bragg condition (rotation around y_l axis).
         chi: Radians off the Bragg condition (rotation around x_l axis).
         TwoDeltaTheta: Radians off the Bragg angle (2theta shift).
@@ -1066,18 +1078,19 @@ def forward(
         Forward-model image of shape (NN2//Nsub, NN1//Nsub). If qi_return is
         True, returns (image, qi_field) where qi_field has shape (3, NN1, NN2, NN3).
     """
+    ctx = ctx if ctx is not None else _context_from_globals()
     # Guard BEFORE precompute so an uninitialized call (e.g. forward(Hg=None)
     # with no kernel loaded) raises the clear RuntimeError rather than a
     # TypeError from `Us @ None`.
-    if Resq_i is None and _analytic_eval is None:
+    if ctx.resolution.Resq_i is None and ctx.resolution.analytic_eval is None:
         raise RuntimeError(
             "forward_model state is not initialized. Load a kernel "
             "(_lookup_and_load_kernel) or register the analytic backend "
             "(_load_analytic_resolution) before computing the forward model."
         )
-    base_qc = precompute_forward_static(Hg)
+    base_qc = precompute_forward_static(Hg, ctx)
     return forward_from_static(
-        base_qc, phi=phi, chi=chi, TwoDeltaTheta=TwoDeltaTheta, qi_return=qi_return
+        base_qc, ctx, phi=phi, chi=chi, TwoDeltaTheta=TwoDeltaTheta, qi_return=qi_return
     )
 
 
