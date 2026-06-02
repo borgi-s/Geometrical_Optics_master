@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     AxisScanConfig,
     ScanConfig,
@@ -125,18 +126,19 @@ def test_build_scan_frames_at_z_ignores_z_scan_config():
     np.testing.assert_array_equal(frames.z_pf, [7.7, 7.7])
 
 
-def test_scan_frames_args_returns_5_tuples():
-    """_scan_frames_args(Hg, frames, cfg) emits (idx, Hg, phi, chi, two_dtheta)."""
+def test_scan_frames_args_returns_6_tuples():
+    """_scan_frames_args(Hg, frames, cfg, ctx) emits (idx, base_qc, phi, chi, two_dtheta, ctx)."""
     cfg = ScanConfig(
         phi=AxisScanConfig(range=1e-3, steps=2),
         two_dtheta=AxisScanConfig(range=3e-4, steps=2),
     )
     frames = _build_scan_frames_at_z(cfg, z_value=0.0)
     Hg = np.zeros((10, 3, 3))
-    args_list, positioners = _scan_frames_args(Hg, frames, cfg)
+    ctx = fm._context_from_globals()
+    args_list, positioners = _scan_frames_args(Hg, frames, cfg, ctx)
     assert len(args_list) == 4
     for tup in args_list:
-        assert len(tup) == 5  # idx, Hg, phi, chi, two_dtheta
+        assert len(tup) == 6  # idx, base_qc, phi, chi, two_dtheta, ctx
     indices = [tup[0] for tup in args_list]
     assert indices == [0, 1, 2, 3]
     # Per-frame phi/chi/two_dtheta come straight from frames
@@ -228,7 +230,8 @@ def test_scan_frames_args_positioners_contain_all_four_axes():
     )
     frames = _build_scan_frames_at_z(cfg, z_value=5.0)
     Hg = np.zeros((10, 3, 3))
-    _, positioners = _scan_frames_args(Hg, frames, cfg)
+    ctx = fm._context_from_globals()
+    _, positioners = _scan_frames_args(Hg, frames, cfg, ctx)
     assert set(positioners.keys()) == {"phi", "chi", "two_dtheta", "z"}
     # Scanned axes are arrays
     assert isinstance(positioners["phi"], np.ndarray)

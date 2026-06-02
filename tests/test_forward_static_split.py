@@ -83,7 +83,8 @@ def test_scan_frames_args_carry_base_qc(loaded_Hg: np.ndarray) -> None:
         {"phi": {"range": 6e-4, "steps": 2}, "chi": {"range": 2e-3, "steps": 2}}
     )
     frames = _build_scan_frames(scan)
-    args_list, _positioners = _scan_frames_args(loaded_Hg, frames, scan)
+    ctx = fm._context_from_globals()
+    args_list, _positioners = _scan_frames_args(loaded_Hg, frames, scan, ctx)
 
     expected_base_qc = fm.precompute_forward_static(loaded_Hg)
     # Every frame tuple carries the SAME base_qc object (shared, read-only);

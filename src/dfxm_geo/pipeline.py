@@ -860,6 +860,13 @@ def _run_simulation_inner(config: SimulationConfig, output_dir: Path) -> dict[st
         flush=True,
     )
 
+    # Snapshot the run's ForwardContext NOW — inside the oblique CM so the
+    # oblique theta_0/Theta/rl are live.  Passed explicitly to write_simulation_h5
+    # so every frame uses the same frozen ctx rather than re-reading globals.
+    # NOTE: fm.Hg / fm.q_hkl are no longer written; Hg is passed explicitly and
+    # run_postprocess recovers Hg from the HDF5 file.
+    ctx = fm.build_forward_context()
+
     # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
     # Centered + random_dislocations use Find_Hg_from_population.
     # Hg_provider(z) returns (Hg, q_hkl) for a given z offset in micrometers.
@@ -889,6 +896,9 @@ def _run_simulation_inner(config: SimulationConfig, output_dir: Path) -> dict[st
     else:
 
         def Hg_provider(z: float) -> tuple[np.ndarray, np.ndarray]:
+            # z != 0: use Z_shift for the per-z-layer rl (takes precedence over ctx).
+            # z == 0: no explicit rl → Find_Hg_from_population uses ctx.geometry.rl
+            # (the oblique-aware grid built above).
             rl_eff = fm.Z_shift(z) if z != 0.0 else None
             return fm.Find_Hg_from_population(
                 population,
@@ -896,6 +906,7 @@ def _run_simulation_inner(config: SimulationConfig, output_dir: Path) -> dict[st
                 k=config.reciprocal.hkl[1],
                 l=config.reciprocal.hkl[2],
                 rl=rl_eff,
+                ctx=ctx,
             )
 
         sample_dis = None  # not applicable for centered/random_dislocations
@@ -905,8 +916,6 @@ def _run_simulation_inner(config: SimulationConfig, output_dir: Path) -> dict[st
     # Use Hg at z=0 as the "base" provenance Hg stored in /dfxm_geo/Hg.
     # Per-frame variation is captured in the detector stack + positioners[z].
     Hg_base, q_hkl = Hg_provider(0.0)
-    fm.Hg = Hg_base
-    fm.q_hkl = q_hkl
 
     config_toml = _dataclass_to_toml_str(config)
 
@@ -934,6 +943,7 @@ def _run_simulation_inner(config: SimulationConfig, output_dir: Path) -> dict[st
         geometry_mode=config.geometry.mode,
         eta=config.geometry.eta,
         mount=config.geometry.mount,
+        ctx=ctx,
     )
     return {
         "h5_path": h5_path,
@@ -1128,6 +1138,10 @@ def run_postprocess(
         )
 
     _load_resolution(config.reciprocal, config.geometry)
+    # Build run ctx after resolution is loaded (analytic_eval / Resq_i are now live).
+    # run_postprocess is NOT inside an oblique CM — its qi_field uses the default
+    # theta, unchanged from today; that pre-existing detail is intentional.
+    ctx = fm.build_forward_context()
 
     # Sanity-check that /2.1 exists (the perfect-crystal scan is still part of
     # the forward-output contract, even though postprocessing no longer reads it).
@@ -1165,7 +1179,7 @@ def run_postprocess(
         chi_shift=0.0,
     )
     Hg_pp = _resolve_postprocess_Hg(h5_path, Hg)
-    _, qi_field = fm.forward(Hg_pp, phi=0, qi_return=True)
+    _, qi_field = fm.forward(Hg_pp, ctx=ctx, phi=0, qi_return=True)
 
     # Append analysis to /1.1/dfxm_geo/analysis/ inside the existing .h5
     with h5py.File(h5_path, "a") as f:
@@ -1334,7 +1348,10 @@ def _iterate_simulation_frames(
 
 
 def _scan_frames_args(
-    Hg: np.ndarray, frames: ScanFrames, scan: ScanConfig
+    Hg: np.ndarray,
+    frames: ScanFrames,
+    scan: ScanConfig,
+    ctx: fm.ForwardContext,
 ) -> tuple[
     list[tuple[int, np.ndarray, float, float, float, fm.ForwardContext]],
     dict[str, np.ndarray | float],
@@ -1348,8 +1365,10 @@ def _scan_frames_args(
     Hg-only qs matmul each frame.
     positioners: dict keyed by canonical axis; scanned axes -> per-frame array,
     fixed axes -> scalar.
+
+    ctx is the run's ForwardContext, built once inside the oblique CM (if any)
+    and passed in by the caller — not rebuilt from globals here.
     """
-    ctx = fm._context_from_globals()
     base_qc = fm.precompute_forward_static(Hg, ctx)
     args_list: list[tuple[int, np.ndarray, float, float, float, fm.ForwardContext]] = []
     for k in range(frames.n_frames):
@@ -1514,6 +1533,7 @@ def _passes_invisibility(
 
 def _iter_identification_single(
     config: IdentificationConfig,
+    ctx: fm.ForwardContext,
 ) -> Iterator[ScanSpec]:
     """Yield one ScanSpec per (z, plane, b_idx, alpha) configuration.
 
@@ -1525,6 +1545,9 @@ def _iter_identification_single(
     unique z value produces its own set of (plane × b × alpha) ScanSpecs,
     with `rl_eff = fm.Z_shift(z)` substituted into `Fd_find_mixed`.
     When z is fixed, z_samples has length 1 (no extra scans emitted).
+
+    ctx is the run's ForwardContext, built inside the oblique CM by
+    run_identification and passed in — globals are NOT read here.
     """
     crystal_cfg = config.crystal
     # Noiseless frames are emitted here; intensity scaling and optional
@@ -1545,16 +1568,24 @@ def _iter_identification_single(
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
 
+    # Source geometry + instrument from ctx (oblique-safe).
+    Us_ = ctx.instrument.Us
+    Theta_ = ctx.geometry.Theta
+    rl_ = ctx.geometry.rl
+    psize_ = ctx.instrument.psize
+    zl_rms_ = ctx.instrument.zl_rms
+    theta_0_ = ctx.geometry.theta_0
+
     # Outer z loop. When z is fixed, z_samples is a length-1 array so the
     # loop body executes once — identical to the pre-z-aware behaviour.
     z_samples = fm.build_scan_grid(config.scan).samples[3]
 
     for z in z_samples:
         z_float = float(z)
-        # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); fm.rl
+        # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); rl_
         # and fm.Z_shift(...) are both in metres, so scale by 1e6 — matching the
         # forward path (strain_cache.py:61, forward_model.py:1139).
-        rl_eff = (fm.Z_shift(z_float) if z_float != 0.0 else fm.rl) * 1e6
+        rl_eff = (fm.Z_shift(z_float) if z_float != 0.0 else rl_) * 1e6
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for plane in planes:
@@ -1579,14 +1610,14 @@ def _iter_identification_single(
                     Ud_mix = Ud_all[i, j]
                     Fg = Fd_find_mixed(
                         rl_eff,
-                        fm.Us,
+                        Us_,
                         Ud_mix=Ud_mix,
                         rotation_deg=float(alpha),
-                        Theta=fm.Theta,
+                        Theta=Theta_,
                     )
                     Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
 
-                    args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan)
+                    args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan, ctx)
 
                     burgers_int = (
                         int(round(b_table[b_idx, 0] * np.sqrt(2))),
@@ -1605,9 +1636,9 @@ def _iter_identification_single(
                         dfxm_geo={
                             "Hg": Hg,
                             "q_hkl": q_hkl,
-                            "theta": float(fm.theta),
-                            "psize": float(fm.psize),
-                            "zl_rms": float(fm.zl_rms),
+                            "theta": float(theta_0_),
+                            "psize": float(psize_),
+                            "zl_rms": float(zl_rms_),
                         },
                         detectors={"dfxm_sim_detector": args_list},
                         attrs={
@@ -1621,6 +1652,7 @@ def _iter_identification_single(
 def _run_identification_single(
     config: IdentificationConfig,
     output_dir: Path,
+    ctx: fm.ForwardContext,
 ) -> dict[str, Any]:
     """Dispatcher: feed `_iter_identification_single` into write_identification_h5.
 
@@ -1632,7 +1664,7 @@ def _run_identification_single(
     config_toml = _identification_config_to_toml_str(config)
     n_scans = write_identification_h5(
         output_dir,
-        scan_iter=_iter_identification_single(config),
+        scan_iter=_iter_identification_single(config, ctx),
         cli=" ".join(sys.argv),
         config_toml=config_toml,
         max_workers=config.io.max_workers,
@@ -1695,6 +1727,7 @@ def _build_dislocation_sample_entry(d: dict[str, Any]) -> dict[str, Any]:
 
 def _iter_identification_multi(
     config: IdentificationConfig,
+    ctx: fm.ForwardContext,
 ) -> Iterator[ScanSpec]:
     """Yield one ScanSpec per (z, Monte Carlo sample) pair.
 
@@ -1713,11 +1746,22 @@ def _iter_identification_multi(
     `rl_eff = fm.Z_shift(z)` substituted into all Fd_find calls.
     When z is fixed, z_samples has length 1 — identical to pre-z-aware
     behaviour.
+
+    ctx is the run's ForwardContext, built inside the oblique CM by
+    run_identification and passed in — globals are NOT read here.
     """
     assert config.multi is not None  # validated in __post_init__
     mc = config.multi
     noise_cfg = config.noise
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
+
+    # Source geometry + instrument from ctx (oblique-safe).
+    Us_ = ctx.instrument.Us
+    Theta_ = ctx.geometry.Theta
+    rl_ = ctx.geometry.rl
+    psize_ = ctx.instrument.psize
+    zl_rms_ = ctx.instrument.zl_rms
+    theta_0_ = ctx.geometry.theta_0
 
     # Split master rng → child streams. [0] = param draws (consumed here);
     # [1] = Poisson noise (consumed by _maybe_apply_poisson_noise, which
@@ -1735,10 +1779,10 @@ def _iter_identification_multi(
     # by design (sample i at z=-2 and sample i at z=+2 use different dislocations).
     for z in z_samples:
         z_float = float(z)
-        # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); fm.rl
+        # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); rl_
         # and fm.Z_shift(...) are both in metres, so scale by 1e6 — matching the
         # forward path (strain_cache.py:61, forward_model.py:1139).
-        rl_eff = (fm.Z_shift(z_float) if z_float != 0.0 else fm.rl) * 1e6
+        rl_eff = (fm.Z_shift(z_float) if z_float != 0.0 else rl_) * 1e6
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for _ in range(mc.n_samples):
@@ -1758,10 +1802,12 @@ def _iter_identification_multi(
                     position_lab_um=d2["pos_um"],
                 ),
             ]
-            Fg_combined = Fd_find_multi_dislocs_mixed(rl_eff, fm.Us, specs, fm.Theta)
+            Fg_combined = Fd_find_multi_dislocs_mixed(rl_eff, Us_, specs, Theta_)
             Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
 
-            combined_args, positioners = _scan_frames_args(Hg_combined, frames_at_z, config.scan)
+            combined_args, positioners = _scan_frames_args(
+                Hg_combined, frames_at_z, config.scan, ctx
+            )
             detectors: dict[
                 str, list[tuple[int, np.ndarray, float, float, float, fm.ForwardContext]]
             ] = {
@@ -1773,22 +1819,22 @@ def _iter_identification_multi(
                 # Noiseless by design — these are ground-truth instance labels.
                 Fg_dis0 = Fd_find_mixed(
                     rl_eff,
-                    fm.Us,
+                    Us_,
                     Ud_mix=d1["Ud"],
                     rotation_deg=d1["alpha_deg"],
-                    Theta=fm.Theta,
+                    Theta=Theta_,
                 )
                 Hg_dis0 = np.transpose(fast_inverse2(Fg_dis0), [0, 2, 1]) - np.identity(3)
                 Fg_dis1 = Fd_find_mixed(
                     rl_eff,
-                    fm.Us,
+                    Us_,
                     Ud_mix=d2["Ud"],
                     rotation_deg=d2["alpha_deg"],
-                    Theta=fm.Theta,
+                    Theta=Theta_,
                 )
                 Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
-                dis0_args, _ = _scan_frames_args(Hg_dis0, frames_at_z, config.scan)
-                dis1_args, _ = _scan_frames_args(Hg_dis1, frames_at_z, config.scan)
+                dis0_args, _ = _scan_frames_args(Hg_dis0, frames_at_z, config.scan, ctx)
+                dis1_args, _ = _scan_frames_args(Hg_dis1, frames_at_z, config.scan, ctx)
                 detectors["dfxm_sim_detector_dis0"] = dis0_args
                 detectors["dfxm_sim_detector_dis1"] = dis1_args
 
@@ -1807,9 +1853,9 @@ def _iter_identification_multi(
                 dfxm_geo={
                     "Hg": Hg_combined,
                     "q_hkl": q_hkl,
-                    "theta": float(fm.theta),
-                    "psize": float(fm.psize),
-                    "zl_rms": float(fm.zl_rms),
+                    "theta": float(theta_0_),
+                    "psize": float(psize_),
+                    "zl_rms": float(zl_rms_),
                 },
                 detectors=detectors,
                 attrs={
@@ -1823,6 +1869,7 @@ def _iter_identification_multi(
 def _run_identification_multi(
     config: IdentificationConfig,
     output_dir: Path,
+    ctx: fm.ForwardContext,
 ) -> dict[str, Any]:
     """Dispatcher: feed `_iter_identification_multi` into write_identification_h5.
 
@@ -1834,7 +1881,7 @@ def _run_identification_multi(
     output_dir.mkdir(parents=True, exist_ok=True)
     n_scans = write_identification_h5(
         output_dir,
-        scan_iter=_iter_identification_multi(config),
+        scan_iter=_iter_identification_multi(config, ctx),
         cli=" ".join(sys.argv),
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
@@ -1884,6 +1931,7 @@ def _maybe_apply_poisson_noise(
 
 def _iter_identification_zscan(
     config: IdentificationConfig,
+    ctx: fm.ForwardContext,
 ) -> Iterator[ScanSpec]:
     """Yield one ScanSpec per (z_offset, plane, b_idx, alpha) configuration.
 
@@ -1895,6 +1943,9 @@ def _iter_identification_zscan(
 
     All frames are noiseless; intensity scaling / Poisson noise are
     applied post-write by ``_maybe_apply_poisson_noise``.
+
+    ctx is the run's ForwardContext, built inside the oblique CM by
+    run_identification and passed in — globals are NOT read here.
     """
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
@@ -1919,6 +1970,13 @@ def _iter_identification_zscan(
     q_hkl = np.asarray(fm.q_hkl, dtype=float)
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
+
+    # Source geometry + instrument from ctx (oblique-safe).
+    Us_ = ctx.instrument.Us
+    Theta_ = ctx.geometry.Theta
+    psize_ = ctx.instrument.psize
+    zl_rms_ = ctx.instrument.zl_rms
+    theta_0_ = ctx.geometry.theta_0
 
     for z_off in zscan.z_offsets_um:
         frames_at_z = _build_scan_frames_at_z(config.scan, z_value=float(z_off))
@@ -1983,9 +2041,9 @@ def _iter_identification_zscan(
                         )
                         Fg = Fd_find_multi_dislocs_mixed(
                             rl_shifted,
-                            fm.Us,
+                            Us_,
                             [primary_spec, secondary_spec],
-                            fm.Theta,
+                            Theta_,
                         )
                         sample["secondary"] = _build_dislocation_sample_entry(sec)
 
@@ -1995,39 +2053,43 @@ def _iter_identification_zscan(
                             # pass, which only touches `dfxm_sim_detector`.
                             Fg_primary = Fd_find_mixed(
                                 rl_shifted,
-                                fm.Us,
+                                Us_,
                                 Ud_mix=Ud_primary,
                                 rotation_deg=float(alpha),
-                                Theta=fm.Theta,
+                                Theta=Theta_,
                             )
                             Hg_primary = np.transpose(
                                 fast_inverse2(Fg_primary), [0, 2, 1]
                             ) - np.identity(3)
                             Fg_secondary = Fd_find_mixed(
                                 rl_shifted,
-                                fm.Us,
+                                Us_,
                                 Ud_mix=sec["Ud"],
                                 rotation_deg=sec["alpha_deg"],
-                                Theta=fm.Theta,
+                                Theta=Theta_,
                             )
                             Hg_secondary = np.transpose(
                                 fast_inverse2(Fg_secondary), [0, 2, 1]
                             ) - np.identity(3)
-                            prim_args, _ = _scan_frames_args(Hg_primary, frames_at_z, config.scan)
-                            sec_args, _ = _scan_frames_args(Hg_secondary, frames_at_z, config.scan)
+                            prim_args, _ = _scan_frames_args(
+                                Hg_primary, frames_at_z, config.scan, ctx
+                            )
+                            sec_args, _ = _scan_frames_args(
+                                Hg_secondary, frames_at_z, config.scan, ctx
+                            )
                             detectors["dfxm_sim_detector_primary"] = prim_args
                             detectors["dfxm_sim_detector_secondary"] = sec_args
                     else:
                         Fg = Fd_find_mixed(
                             rl_shifted,
-                            fm.Us,
+                            Us_,
                             Ud_mix=Ud_primary,
                             rotation_deg=float(alpha),
-                            Theta=fm.Theta,
+                            Theta=Theta_,
                         )
 
                     Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
-                    args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan)
+                    args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan, ctx)
                     detectors["dfxm_sim_detector"] = args_list
 
                     yield ScanSpec(
@@ -2037,9 +2099,9 @@ def _iter_identification_zscan(
                         dfxm_geo={
                             "Hg": Hg,
                             "q_hkl": q_hkl,
-                            "theta": float(fm.theta),
-                            "psize": float(fm.psize),
-                            "zl_rms": float(fm.zl_rms),
+                            "theta": float(theta_0_),
+                            "psize": float(psize_),
+                            "zl_rms": float(zl_rms_),
                         },
                         detectors=detectors,
                         attrs={
@@ -2053,6 +2115,7 @@ def _iter_identification_zscan(
 def _run_identification_zscan(
     config: IdentificationConfig,
     output_dir: Path,
+    ctx: fm.ForwardContext,
 ) -> dict[str, Any]:
     """Dispatcher: feed ``_iter_identification_zscan`` into write_identification_h5.
 
@@ -2064,7 +2127,7 @@ def _run_identification_zscan(
     output_dir.mkdir(parents=True, exist_ok=True)
     n_scans = write_identification_h5(
         output_dir,
-        scan_iter=_iter_identification_zscan(config),
+        scan_iter=_iter_identification_zscan(config, ctx),
         cli=" ".join(sys.argv),
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
@@ -2091,11 +2154,15 @@ def run_identification(
     # use it (simplified mode is a no-op, preserving v2.2.0 geometry exactly).
     # Mirrors run_simulation.
     with fm.reflection_theta_if_oblique(config.geometry.mode, config.geometry.theta_validated):
+        # Snapshot the run's ForwardContext NOW — inside the oblique CM so the
+        # oblique theta_0/Theta/rl/Us are live.  Passed to the runner + iter so
+        # every frame and every Fd_find call uses the same frozen ctx.
+        ctx = fm.build_forward_context()
         if config.mode == "single":
-            return _run_identification_single(config, output_dir)
+            return _run_identification_single(config, output_dir, ctx)
         if config.mode == "multi":
-            return _run_identification_multi(config, output_dir)
-        return _run_identification_zscan(config, output_dir)
+            return _run_identification_multi(config, output_dir, ctx)
+        return _run_identification_zscan(config, output_dir, ctx)
 
 
 def cli_main_identify(argv: list[str] | None = None) -> int:

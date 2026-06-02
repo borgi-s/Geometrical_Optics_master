@@ -158,7 +158,7 @@ def _fm_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fm, "psize", 4e-8)
     monkeypatch.setattr(fm, "zl_rms", 1e-7)
     monkeypatch.setattr(fm, "_analytic_eval", object())
-    monkeypatch.setattr(fm, "precompute_forward_static", lambda Hg_in: np.zeros((3, 1)))
+    monkeypatch.setattr(fm, "precompute_forward_static", lambda Hg_in, ctx=None: np.zeros((3, 1)))
     monkeypatch.setattr(
         hdf5_mod, "_compute_and_write_detector_file_parallel", _fake_parallel_writer
     )

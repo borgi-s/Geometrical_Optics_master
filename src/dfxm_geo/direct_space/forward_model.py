@@ -1430,6 +1430,7 @@ def Find_Hg_from_population(
     *,
     S: np.ndarray = _S_IDENTITY,
     rl: np.ndarray | None = None,
+    ctx: "ForwardContext | None" = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute Hg + q_hkl from an arbitrary DislocationPopulation.
 
@@ -1448,19 +1449,31 @@ def Find_Hg_from_population(
         rl: Detector ray grid to evaluate the strain on. Defaults to the
             module-level `fm.rl`. Pass `Z_shift(z_um)` to evaluate at a
             non-zero sample-depth offset (z-scan support).
+        ctx: Optional ForwardContext; when provided, ``Us`` and ``Theta`` are
+            sourced from it instead of the module globals.  ``rl`` (explicit
+            kwarg) takes precedence over ``ctx.geometry.rl`` when both are
+            supplied, preserving the z-scan caller convention.
 
     Returns:
         (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
     """
     from dfxm_geo.crystal.dislocations import find_hg_population
 
-    rl_eff = rl if rl is not None else globals()["rl"]
+    # rl precedence: explicit kwarg > ctx.geometry.rl > module global.
+    if rl is not None:
+        rl_eff = rl
+    elif ctx is not None:
+        rl_eff = ctx.geometry.rl
+    else:
+        rl_eff = globals()["rl"]
     Q_norm = np.sqrt(h * h + k * k + l * l)
     q_hkl = np.asarray([h, k, l]) / Q_norm
 
     n = len(population.positions_um)
     # Collapse the per-dislocation transform to M_d = Ud_d.T @ Us.T @ S.T @ Theta.
-    base = Us.T @ S.T @ Theta  # (3, 3), shared across dislocations
+    Us_ = ctx.instrument.Us if ctx is not None else Us
+    Theta_ = ctx.geometry.Theta if ctx is not None else Theta
+    base = Us_.T @ S.T @ Theta_  # (3, 3), shared across dislocations
     M = np.empty((n, 3, 3))
     Ud = np.empty((n, 3, 3))
     offset = np.empty((n, 3))

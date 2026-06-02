@@ -303,7 +303,7 @@ class TestRunPostprocess:
         fake_im = np.zeros((4, 4))
         monkeypatch.setattr(
             "dfxm_geo.pipeline.fm.forward",
-            lambda Hg, phi=0, chi=0, qi_return=False: (
+            lambda Hg, ctx=None, phi=0, chi=0, qi_return=False: (
                 (fake_im, fake_qi) if qi_return else (fake_im, None)
             ),
         )

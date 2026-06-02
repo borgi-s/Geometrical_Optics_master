@@ -270,7 +270,7 @@ def test_run_identification_single_writes_expected_count(tmp_path, monkeypatch):
     output_dir = tmp_path / "out"
     cfg = _tiny_single_config(tmp_path)
 
-    result = _run_identification_single(cfg, output_dir)
+    result = _run_identification_single(cfg, output_dir, fm._context_from_globals())
 
     master = output_dir / "dfxm_identify.h5"
     assert master.is_file()
@@ -341,7 +341,7 @@ def test_run_identification_multi_writes_master_plus_scan_dirs(tmp_path, monkeyp
     output_dir = tmp_path / "out"
     cfg = _tiny_multi_config()
 
-    result = _run_identification_multi(cfg, output_dir)
+    result = _run_identification_multi(cfg, output_dir, fm._context_from_globals())
 
     master = output_dir / "dfxm_identify.h5"
     assert master.is_file()
@@ -375,8 +375,8 @@ def test_run_identification_multi_is_deterministic_for_seed(tmp_path, monkeypatc
     out2 = tmp_path / "out2"
     cfg = _tiny_multi_config()
 
-    _run_identification_multi(cfg, out1)
-    _run_identification_multi(cfg, out2)
+    _run_identification_multi(cfg, out1, fm._context_from_globals())
+    _run_identification_multi(cfg, out2, fm._context_from_globals())
 
     for scan_id in ("1.1", "2.1", "3.1"):
         d1 = _collect_dislocations(out1 / "dfxm_identify.h5", scan_id)
@@ -735,7 +735,7 @@ def test_run_identification_zscan_writes_per_config_rocking_grid(tmp_path, monke
 
     output_dir = tmp_path / "out"
     cfg = _tiny_zscan_config()
-    result = _run_identification_zscan(cfg, output_dir)
+    result = _run_identification_zscan(cfg, output_dir, fm._context_from_globals())
 
     master = output_dir / "dfxm_identify.h5"
     assert master.is_file()
@@ -823,8 +823,8 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
 
     out1 = tmp_path / "a"
     out2 = tmp_path / "b"
-    _run_identification_zscan(cfg, out1)
-    _run_identification_zscan(cfg, out2)
+    _run_identification_zscan(cfg, out1, fm._context_from_globals())
+    _run_identification_zscan(cfg, out2, fm._context_from_globals())
 
     s1 = _collect_zscan_secondaries(out1 / "dfxm_identify.h5")
     s2 = _collect_zscan_secondaries(out2 / "dfxm_identify.h5")

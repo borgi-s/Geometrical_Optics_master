@@ -129,7 +129,7 @@ def test_run_identification_threads_geometry(
         captured["theta_ctx"] = (mode, theta)
         yield
 
-    def fake_single(config, output_dir):
+    def fake_single(config, output_dir, ctx):
         captured["ran"] = True
         return {"n_images": 0, "output_dir": output_dir}
 

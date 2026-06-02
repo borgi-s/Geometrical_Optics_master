@@ -95,10 +95,11 @@ def _fm_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fm, "_analytic_eval", object())
 
     # Stub precompute_forward_static so no actual matmul / numba is needed.
+    # Accepts optional ctx kwarg (threaded in Slice 4).
     monkeypatch.setattr(
         fm,
         "precompute_forward_static",
-        lambda Hg_in: np.zeros((3, 1)),  # dummy base_qc shape (3, N)
+        lambda Hg_in, ctx=None: np.zeros((3, 1)),  # dummy base_qc shape (3, N)
     )
 
     # Stub the heavy parallel detector writer.

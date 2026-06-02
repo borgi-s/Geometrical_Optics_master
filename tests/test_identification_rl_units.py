@@ -101,7 +101,7 @@ class TestIdentificationRlUnits:
             scan=ScanConfig(),
             reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         )
-        spec = next(iter(_iter_identification_single(cfg)))
+        spec = next(iter(_iter_identification_single(cfg, fm._context_from_globals())))
         _assert_physical_field(spec.dfxm_geo["Hg"], "single")
 
     def test_multi_field_is_physically_scaled(self, q_hkl_set: None) -> None:
@@ -118,7 +118,7 @@ class TestIdentificationRlUnits:
             noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
             reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         )
-        spec = next(iter(_iter_identification_multi(cfg)))
+        spec = next(iter(_iter_identification_multi(cfg, fm._context_from_globals())))
         _assert_physical_field(spec.dfxm_geo["Hg"], "multi")
 
     def test_zscan_field_is_physically_scaled(self, q_hkl_set: None) -> None:
@@ -129,5 +129,5 @@ class TestIdentificationRlUnits:
             scan=ScanConfig(),
             reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         )
-        spec = next(iter(_iter_identification_zscan(cfg)))
+        spec = next(iter(_iter_identification_zscan(cfg, fm._context_from_globals())))
         _assert_physical_field(spec.dfxm_geo["Hg"], "z-scan")
