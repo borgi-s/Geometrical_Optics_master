@@ -776,6 +776,63 @@ def build_geometry_context(theta_0_: float, instrument: InstrumentContext) -> Ge
     )
 
 
+def _context_from_globals() -> ForwardContext:
+    """Build a ForwardContext snapshotting the current module globals.
+
+    The migration fallback: lets ctx-threaded functions run for callers that
+    have not yet been converted. Deleted in Slice 5.
+    """
+    instr = build_instrument_context()
+    geom = GeometryContext(
+        theta_0=theta_0,
+        Theta=Theta,
+        xl_start=xl_start,
+        xl_range=xl_range,
+        rl=rl,
+        prob_z=prob_z,
+    )
+    # qi*_start/step are None before a kernel is loaded; fall back to 0.0 so
+    # the frozen dataclass (which types them as float) stays constructible. The
+    # runtime guard in forward_from_static will still raise before these values
+    # are ever used if neither Resq_i nor _analytic_eval is set.
+    res = ResolutionContext(
+        Resq_i=Resq_i,
+        qi1_start=qi1_start or 0.0,
+        qi1_step=qi1_step or 0.0,
+        qi2_start=qi2_start or 0.0,
+        qi2_step=qi2_step or 0.0,
+        qi3_start=qi3_start or 0.0,
+        qi3_step=qi3_step or 0.0,
+        npoints1=npoints1,
+        npoints2=npoints2,
+        npoints3=npoints3,
+        analytic_eval=_analytic_eval,
+        loaded_kernel_path=_loaded_kernel_path,
+    )
+    return ForwardContext(instrument=instr, geometry=geom, resolution=res)
+
+
+def build_forward_context(theta_0_: "float | None" = None) -> ForwardContext:
+    """Compose a context for a run. theta_0_ defaults to the current global."""
+    instr = build_instrument_context()
+    geom = build_geometry_context(theta_0 if theta_0_ is None else theta_0_, instr)
+    res = ResolutionContext(
+        Resq_i=Resq_i,
+        qi1_start=qi1_start or 0.0,
+        qi1_step=qi1_step or 0.0,
+        qi2_start=qi2_start or 0.0,
+        qi2_step=qi2_step or 0.0,
+        qi3_start=qi3_start or 0.0,
+        qi3_step=qi3_step or 0.0,
+        npoints1=npoints1,
+        npoints2=npoints2,
+        npoints3=npoints3,
+        analytic_eval=_analytic_eval,
+        loaded_kernel_path=_loaded_kernel_path,
+    )
+    return ForwardContext(instrument=instr, geometry=geom, resolution=res)
+
+
 def precompute_forward_static(Hg: np.ndarray) -> np.ndarray:
     """Compute the phi/chi/2theta-independent part of the forward model.
 

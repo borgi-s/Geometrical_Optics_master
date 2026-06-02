@@ -45,6 +45,17 @@ _KERNELS = sorted(Path(fm.pkl_fpath).glob("Resq_i_h-1_k1_l-1_17keV_*.npz"))
 
 
 @pytest.mark.skipif(not _KERNELS, reason="no bootstrapped kernel on disk")
+def test_context_from_globals_roundtrips():
+    fm._load_default_kernel(_KERNELS[0], compute_Hg=False)
+    ctx = fm._context_from_globals()
+    assert np.array_equal(ctx.geometry.Theta, fm.Theta)
+    assert np.array_equal(ctx.geometry.rl, fm.rl)
+    assert np.array_equal(ctx.resolution.Resq_i, fm.Resq_i)
+    assert ctx.geometry.theta_0 == fm.theta_0
+    assert ctx.instrument.Nsub == fm.Nsub
+
+
+@pytest.mark.skipif(not _KERNELS, reason="no bootstrapped kernel on disk")
 def test_load_default_kernel_returns_matching_resolution_context():
     res = fm._load_default_kernel(_KERNELS[0], compute_Hg=False)
     assert res is not None
