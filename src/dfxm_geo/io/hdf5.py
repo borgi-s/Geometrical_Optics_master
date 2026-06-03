@@ -583,7 +583,7 @@ def write_identification_h5(
     kernel_npz: Path | None = None,
     max_workers: int | None = None,
     write_strain_provenance: bool = True,
-    ctx: _fm.ForwardContext | None = None,
+    ctx: _fm.ForwardContext,
 ) -> int:
     """Drive an identification run: consume ScanSpecs, write master + per-scan dirs.
 
@@ -599,21 +599,19 @@ def write_identification_h5(
     ``zl_rms`` scalars are retained. The ``Hg`` dump dominates per-scan size,
     so disable it for batch/ML identification runs.
 
-    `ctx` is a forward-compat hook and is currently unused by this function:
-    the per-frame ``ForwardContext`` is already carried inside each
-    ``_FrameArgs`` tuple in ``spec.detectors`` (built upstream by
-    ``pipeline._scan_frames_args``), so frames render against the right context
-    without this param. Accepted so external callers can pass a ctx explicitly
-    once the globals shim is removed (Slice 5).
+    `ctx` is the run's ``ForwardContext`` (#16 Slice 5: required). Per-frame
+    rendering uses the ctx carried inside each ``_FrameArgs`` tuple in
+    ``spec.detectors`` (built upstream by ``pipeline._scan_frames_args``); this
+    top-level ``ctx`` supplies the kernel/analytic provenance written to the
+    master file.
 
     Returns the count of scans written.
     """
 
     if kernel_npz is None:
-        # S2a (#16): prefer ctx.resolution when ctx is available.
-        _res = ctx.resolution if ctx is not None else None
-        kernel_npz = _res.loaded_kernel_path if _res is not None else _fm._loaded_kernel_path
-        _analytic = _res.analytic_eval if _res is not None else _fm._analytic_eval
+        # #16 Slice 5: provenance comes from the run's ResolutionContext.
+        kernel_npz = ctx.resolution.loaded_kernel_path
+        _analytic = ctx.resolution.analytic_eval
         if kernel_npz is None and _analytic is None:
             raise RuntimeError(
                 "no resolution backend loaded — call _lookup_and_load_kernel(hkl, "
@@ -695,7 +693,7 @@ def write_simulation_h5(
     geometry_mode: str = "simplified",
     eta: float = 0.0,
     mount: CrystalMount | None = None,
-    ctx: _fm.ForwardContext | None = None,
+    ctx: _fm.ForwardContext,
 ) -> None:
     """One-call entry point for forward mode, v1.2.0 layout.
 
@@ -717,10 +715,9 @@ def write_simulation_h5(
         when None.
     """
 
-    # Build (or adopt) a ForwardContext once per write call; shared read-only
-    # across all frames and scans.  Current callers that don't pass ctx get the
-    # globals snapshot so behaviour is unchanged.
-    _ctx = _fm._context_from_globals() if ctx is None else ctx
+    # The run's ForwardContext, shared read-only across all frames and scans
+    # (#16 Slice 5: required — no globals snapshot fallback).
+    _ctx = ctx
 
     if kernel_npz is None:
         kernel_npz = _ctx.resolution.loaded_kernel_path

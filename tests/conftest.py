@@ -11,3 +11,22 @@ GOLDEN_DIR = Path(__file__).parent / "data" / "golden"
 def golden_dir() -> Path:
     """Directory containing reference outputs for smoke tests."""
     return GOLDEN_DIR
+
+
+@pytest.fixture(autouse=True)
+def _bound_kernel_cache_memory():
+    """Clear pipeline._KERNEL_CTX_CACHE after each test to bound process memory.
+
+    #16 Slice 5 deleted ``_forward_state_guard``, which used to snapshot/restore
+    (and thus free) the loaded resolution kernel after every run. The idempotent
+    kernel cache now *retains* the loaded LUT (~100+ MB for the canonical npz)
+    for the whole process — correct for production (one kernel per worker), but
+    in a single pytest process running the full px510 suite the retained LUT
+    starves later memory-heavy tests and spawned subprocesses (fanout). Clearing
+    between tests restores the pre-deletion memory profile; production is
+    untouched (it never clears).
+    """
+    yield
+    import dfxm_geo.pipeline as _pipeline
+
+    _pipeline._KERNEL_CTX_CACHE.clear()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import h5py
@@ -13,14 +14,16 @@ from dfxm_geo.io.migrate import migrate_npy_dir_to_h5
 
 
 def test_migrate_round_trips_images(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Plant a tiny fixture kernel npz and point forward_model at it. The
-    # migrate provenance writer SHAs the kernel and mirrors its scalar
-    # params; without this fixture the test fails on fresh checkouts
-    # (e.g. a cluster that hasn't run dfxm-bootstrap yet) because the
-    # canonical Resq_i_*.npz isn't on disk.
+    # Plant a tiny fixture kernel npz and point forward_model.pkl_fpath at its
+    # directory. #16 Slice 5: migrate looks the kernel up via
+    # _lookup_kernel_path(directory=fm.pkl_fpath, mode="simplified",
+    # hkl=(-1,1,-1), keV=17.0) for the provenance path, so the fixture must be
+    # named to match that simplified glob (Resq_i_h-1_k1_l-1_17keV_*.npz). The
+    # migrate provenance writer SHAs the kernel file; the contents don't matter
+    # (Find_Hg uses geometry, not the kernel data).
     kernel_dir = tmp_path / "_fixture_kernel"
     kernel_dir.mkdir()
-    fake_kernel = kernel_dir / "fake_kernel.npz"
+    fake_kernel = kernel_dir / "Resq_i_h-1_k1_l-1_17keV_fixture.npz"
     np.savez(
         fake_kernel,
         Resq_i=np.zeros((2, 2, 2), dtype=np.float64),
@@ -31,7 +34,7 @@ def test_migrate_round_trips_images(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         npoints2=np.int64(2),
         npoints3=np.int64(2),
     )
-    monkeypatch.setattr(_fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(_fm, "pkl_fpath", str(kernel_dir) + os.sep)
 
     # Fake a legacy output dir: a few .npy files in images10/.
     images_dir = tmp_path / "images10"
@@ -76,6 +79,6 @@ def test_migrate_round_trips_images(tmp_path: Path, monkeypatch: pytest.MonkeyPa
                 k = chi_i * 2 + phi_j
                 np.testing.assert_array_equal(d1[k], np.full((4, 4), chi_i * 10 + phi_j))
                 np.testing.assert_array_equal(d2[k], np.full((4, 4), -(chi_i * 10 + phi_j)))
-        # Provenance: the fixture kernel was hashed + mirrored.
-        assert f["/dfxm_geo/kernel/pkl_fn"][()].decode() == "fake_kernel.npz"
+        # Provenance: the looked-up fixture kernel was hashed + mirrored.
+        assert f["/dfxm_geo/kernel/pkl_fn"][()].decode() == "Resq_i_h-1_k1_l-1_17keV_fixture.npz"
         assert len(f["/dfxm_geo/kernel/sha256"][()].decode()) == 64  # hex SHA256

@@ -14,22 +14,70 @@ import pytest
 import dfxm_geo.direct_space.forward_model as fm
 
 
+def _empty_resolution() -> "fm.ResolutionContext":
+    """A ResolutionContext with neither MC LUT nor analytic backend."""
+    return fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=None,
+        loaded_kernel_path=None,
+    )
+
+
+def _stub_ctx() -> "fm.ForwardContext":
+    """A ForwardContext with real geometry/instrument but no resolution backend.
+
+    Sufficient for Find_Hg tests that stub ``load_or_generate_Hg`` and only need
+    ctx.geometry (rl/Theta/xl_range) + ctx.resolution.loaded_kernel_path; no
+    kernel npz is required on disk (#16 Slice 5 — ctx replaces module globals).
+    """
+    instr = fm.build_instrument_context()
+    geom = fm.build_geometry_context(0.30, instr)
+    return fm.ForwardContext(
+        instrument=instr,
+        geometry=geom,
+        resolution=_empty_resolution(),
+        q_hkl=np.array([-1.0, 1.0, -1.0]) / np.sqrt(3),
+    )
+
+
 def test_module_imports_with_required_symbols():
     """Module-level public surface remains stable across refactors."""
     assert hasattr(fm, "forward")
     assert hasattr(fm, "Find_Hg")
     assert hasattr(fm, "_load_default_kernel")
+    # #16 Slice 5: the per-reflection geometry/resolution globals (theta_0,
+    # Theta, rl, prob_z, …) are gone — the context builders are the public
+    # surface now. Assert the ctx API + the kept instrument constants.
+    assert hasattr(fm, "build_forward_context")
+    assert hasattr(fm, "build_geometry_context")
+    assert hasattr(fm, "build_instrument_context")
+    assert hasattr(fm, "ForwardContext")
     # Numerical constants that init_forward.py and others depend on
     assert hasattr(fm, "psize")
     assert hasattr(fm, "zl_rms")
-    assert hasattr(fm, "theta_0")
     assert hasattr(fm, "Npixels")
     assert hasattr(fm, "Ud")
     assert hasattr(fm, "Us")
-    assert hasattr(fm, "Theta")
-    assert hasattr(fm, "rl")
-    assert hasattr(fm, "prob_z")
     assert hasattr(fm, "indices")
+
+
+def _uninitialized_ctx() -> "fm.ForwardContext":
+    """A ForwardContext whose resolution has neither an MC LUT nor an analytic
+    backend — i.e. the kernel-not-loaded state the forward() guard must catch.
+
+    #16 Slice 5: there is no longer a module-global to null out; the
+    uninitialized state lives on ctx.resolution, so build one explicitly.
+    """
+    return _stub_ctx()
 
 
 def test_forward_raises_when_kernel_not_loaded():
@@ -40,34 +88,43 @@ def test_forward_raises_when_kernel_not_loaded():
     this test won't break — but if someone removes the kernel-state guard
     from forward(), this test catches it.
     """
-    saved = fm.Resq_i
-    fm.Resq_i = None
-    try:
-        with pytest.raises(RuntimeError, match="not initialized"):
-            fm.forward(Hg=None)
-    finally:
-        fm.Resq_i = saved
+    with pytest.raises(RuntimeError, match="not initialized"):
+        # ctx is now required; pass one whose resolution is uninitialized so
+        # the guard (ctx.resolution.Resq_i is None and analytic_eval is None) fires.
+        fm.forward(None, _uninitialized_ctx())
+
+
+def _default_geometry() -> "fm.GeometryContext":
+    """Geometry built from the module-default Bragg angle (#16 Slice 5: the
+    per-reflection rl/xl_range live on the GeometryContext, not on globals)."""
+    from dfxm_geo.pipeline import (
+        ReciprocalConfig,
+        SimulationConfig,
+        run_theta,
+    )
+
+    instr = fm.build_instrument_context()
+    cfg = SimulationConfig(reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0))
+    return fm.build_geometry_context(run_theta(cfg), instr)
 
 
 def test_Z_shift_zero_offset_matches_module_rl():
-    """Z_shift(0.0) reproduces the module-level rl grid bit-for-bit."""
-    import dfxm_geo.direct_space.forward_model as fm
-
-    rl_shifted = fm.Z_shift(0.0)
-    np.testing.assert_array_equal(rl_shifted, fm.rl)
+    """Z_shift(0.0, xl_range=...) reproduces the geometry rl grid bit-for-bit."""
+    geom = _default_geometry()
+    rl_shifted = fm.Z_shift(0.0, xl_range=geom.xl_range)
+    np.testing.assert_array_equal(rl_shifted, geom.rl)
 
 
 def test_Z_shift_shifts_z_column_only():
-    """Z_shift(5.0) shifts z by 5 µm; x and y unchanged."""
-    import dfxm_geo.direct_space.forward_model as fm
-
+    """Z_shift(5.0, xl_range=...) shifts z by 5 µm; x and y unchanged."""
+    geom = _default_geometry()
     offset_um = 5.0
-    rl_shifted = fm.Z_shift(offset_um)
-    np.testing.assert_array_equal(rl_shifted[0], fm.rl[0])
-    np.testing.assert_array_equal(rl_shifted[1], fm.rl[1])
+    rl_shifted = fm.Z_shift(offset_um, xl_range=geom.xl_range)
+    np.testing.assert_array_equal(rl_shifted[0], geom.rl[0])
+    np.testing.assert_array_equal(rl_shifted[1], geom.rl[1])
     # The z column is shifted by -offset_um * 1e-6 m (Z_shift moves the
     # dislocation core *up* in lab z, equivalent to translating rl *down*).
-    np.testing.assert_allclose(rl_shifted[2], fm.rl[2] - offset_um * 1e-6, atol=1e-18, rtol=1e-15)
+    np.testing.assert_allclose(rl_shifted[2], geom.rl[2] - offset_um * 1e-6, atol=1e-18, rtol=1e-15)
 
 
 class TestFindHgSampleRemount:
@@ -97,6 +154,7 @@ class TestFindHgSampleRemount:
             zl_rms=fm.zl_rms,
             S=S2,
             remount_name="S2",
+            ctx=_stub_ctx(),
         )
 
         assert captured["file_path"] is not None
@@ -116,7 +174,7 @@ class TestFindHgSampleRemount:
 
         monkeypatch.setattr("dfxm_geo.direct_space.forward_model.load_or_generate_Hg", fake_load)
 
-        fm.Find_Hg(dis=4, ndis=2, psize=fm.psize, zl_rms=fm.zl_rms)
+        fm.Find_Hg(dis=4, ndis=2, psize=fm.psize, zl_rms=fm.zl_rms, ctx=_stub_ctx())
 
         assert "_remountS1.npy" in captured["file_path"]
         np.testing.assert_array_equal(captured["S"], np.identity(3))
@@ -137,4 +195,5 @@ class TestFindHgSampleRemount:
                 psize=fm.psize,
                 zl_rms=fm.zl_rms,
                 remount_name="bogus",
+                ctx=_stub_ctx(),
             )

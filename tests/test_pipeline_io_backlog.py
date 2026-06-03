@@ -151,17 +151,34 @@ def _fake_parallel_writer(
 
 
 @pytest.fixture()
-def _fm_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fm, "Hg", _TINY_HG)
-    monkeypatch.setattr(fm, "q_hkl", _TINY_Q)
-    monkeypatch.setattr(fm, "theta", 0.165)
+def _fm_stub(monkeypatch: pytest.MonkeyPatch) -> fm.ForwardContext:
+    """Stub the render + return a ForwardContext for the writers (#16 Slice 5).
+
+    The render is stubbed (_fake_parallel_writer + a no-op precompute), so the
+    ctx only needs a backend that satisfies the writer's "backend loaded" guard;
+    an analytic_eval sentinel keeps kernel_npz None (no real kernel SHA).
+    """
     monkeypatch.setattr(fm, "psize", 4e-8)
     monkeypatch.setattr(fm, "zl_rms", 1e-7)
-    monkeypatch.setattr(fm, "_analytic_eval", object())
     monkeypatch.setattr(fm, "precompute_forward_static", lambda Hg_in, ctx=None: np.zeros((3, 1)))
     monkeypatch.setattr(
         hdf5_mod, "_compute_and_write_detector_file_parallel", _fake_parallel_writer
     )
+    res = fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=object(),
+        loaded_kernel_path=None,
+    )
+    return fm.build_forward_context(0.165, res, (-1, 1, -1))
 
 
 def _single_frame() -> ScanFrames:
@@ -198,25 +215,29 @@ def _identify_scanspec(write_hg: bool) -> ScanSpec:
 # ---------------------------------------------------------------------------
 
 
-def test_identify_writes_hg_by_default(tmp_path: Path, _fm_stub: None) -> None:
+def test_identify_writes_hg_by_default(tmp_path: Path, _fm_stub: fm.ForwardContext) -> None:
     write_identification_h5(
         tmp_path,
         scan_iter=[_identify_scanspec(write_hg=True)],
         cli="test",
         config_toml="",
+        ctx=_fm_stub,
     )
     with h5py.File(tmp_path / hdf5_mod.MASTER_IDENTIFY, "r") as f:
         assert "/1.1/dfxm_geo/Hg" in f
         assert "/1.1/dfxm_geo/q_hkl" in f
 
 
-def test_identify_omits_hg_when_strain_provenance_disabled(tmp_path: Path, _fm_stub: None) -> None:
+def test_identify_omits_hg_when_strain_provenance_disabled(
+    tmp_path: Path, _fm_stub: fm.ForwardContext
+) -> None:
     write_identification_h5(
         tmp_path,
         scan_iter=[_identify_scanspec(write_hg=True)],
         cli="test",
         config_toml="",
         write_strain_provenance=False,
+        ctx=_fm_stub,
     )
     with h5py.File(tmp_path / hdf5_mod.MASTER_IDENTIFY, "r") as f:
         assert "/1.1/dfxm_geo/Hg" not in f  # big array dropped
@@ -228,7 +249,7 @@ def test_identify_omits_hg_when_strain_provenance_disabled(tmp_path: Path, _fm_s
 # ---------------------------------------------------------------------------
 
 
-def test_non_wall_mode_omits_sample_dis(tmp_path: Path, _fm_stub: None) -> None:
+def test_non_wall_mode_omits_sample_dis(tmp_path: Path, _fm_stub: fm.ForwardContext) -> None:
     out = tmp_path / "dfxm_geo.h5"
     write_simulation_h5(
         out,
@@ -241,13 +262,14 @@ def test_non_wall_mode_omits_sample_dis(tmp_path: Path, _fm_stub: None) -> None:
         sample_remount="N/A",
         config_toml="",
         cli="test",
+        ctx=_fm_stub,
     )
     with h5py.File(out, "r") as f:
         assert "/1.1/sample/dis" not in f  # omitted, not a -1.0 sentinel
         assert "/1.1/sample/ndis" in f
 
 
-def test_wall_mode_writes_sample_dis(tmp_path: Path, _fm_stub: None) -> None:
+def test_wall_mode_writes_sample_dis(tmp_path: Path, _fm_stub: fm.ForwardContext) -> None:
     out = tmp_path / "dfxm_geo.h5"
     write_simulation_h5(
         out,
@@ -260,6 +282,7 @@ def test_wall_mode_writes_sample_dis(tmp_path: Path, _fm_stub: None) -> None:
         sample_remount="S1",
         config_toml="",
         cli="test",
+        ctx=_fm_stub,
     )
     with h5py.File(out, "r") as f:
         assert "/1.1/sample/dis" in f

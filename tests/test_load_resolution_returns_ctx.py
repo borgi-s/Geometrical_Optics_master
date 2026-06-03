@@ -17,11 +17,11 @@ _KERNELS = sorted(Path(fm.pkl_fpath).glob("Resq_i_h-1_k1_l-1_17keV_*.npz"))
 
 
 @pytest.mark.skipif(not _KERNELS, reason="no bootstrapped kernel on disk")
-def test_load_resolution_returns_ctx_matching_globals():
+def test_load_resolution_returns_populated_ctx():
     res = _load_resolution(ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0))
     assert res is not None
-    assert np.array_equal(res.Resq_i, fm.Resq_i)
-    assert res.loaded_kernel_path == fm._loaded_kernel_path
+    assert res.Resq_i is not None
+    assert res.loaded_kernel_path in _KERNELS
     assert res.analytic_eval is None
 
 

@@ -96,18 +96,38 @@ def migrate_npy_dir_to_h5(
 
     S = SAMPLE_REMOUNT_OPTIONS[sample_remount]
 
-    # S4 (#16): Build a one-off ForwardContext from the already-loaded module
-    # state so Find_Hg and provenance reads no longer touch bare globals.
-    # migrate_npy_dir_to_h5 always runs outside an oblique CM (the shim
-    # reflection_theta_if_oblique is never active here), so _context_from_globals()
-    # is correct: theta == theta_0 (the default Al 17 keV Bragg angle).
-    # The kernel_npz guard is promoted before the ctx build so that the
-    # RuntimeError is raised before any heavy work.
-    kernel_npz = _fm._loaded_kernel_path
-    if kernel_npz is None:
-        raise RuntimeError("no kernel loaded — migration requires a loaded kernel for provenance.")
+    # #16 Slice 5: build a one-off ForwardContext for the legacy IUCrJ-2024 Al
+    # (-1,1,-1) @ 17 keV reflection — the only reflection the .npy era ever used.
+    # The kernel npz is looked up for its provenance path only (Find_Hg needs the
+    # geometry, not the kernel data); the lookup raises with a dfxm-bootstrap
+    # hint if no kernel is on disk, before any heavy work. NOTE: theta is now the
+    # true Bragg angle (_validate_reflection ≈ 0.156611 rad) rather than the old
+    # import-time constant (0.156669 rad) — a deliberate ~58 µrad shift consistent
+    # with run_theta, so a migration's recorded Hg/theta differs slightly from the
+    # pre-#16 (v2.3-era) one.
+    from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
-    ctx = _fm._context_from_globals()
+    _HKL = (-1, 1, -1)
+    _KEV = 17.0
+    kernel_npz = _fm._lookup_kernel_path(
+        directory=_fm.pkl_fpath, mode="simplified", hkl=_HKL, keV=_KEV
+    )
+    theta_run = _validate_reflection(_HKL, _KEV, 4.0495e-10)  # Al cubic lattice (m)
+    res = _fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=None,
+        loaded_kernel_path=kernel_npz,
+    )
+    ctx = _fm.build_forward_context(theta_run, res, _HKL)
 
     Hg, q_hkl = _fm.Find_Hg(
         dis, ndis, _fm.psize, _fm.zl_rms, S=S, remount_name=sample_remount, ctx=ctx

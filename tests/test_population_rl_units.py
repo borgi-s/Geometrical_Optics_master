@@ -22,6 +22,37 @@ from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.pipeline import CenteredCrystalConfig, CrystalConfig
 
 
+def _default_ctx() -> fm.ForwardContext:
+    """A ForwardContext for the default reflection with a no-op resolution.
+
+    #16 Slice 5: rl/Us/Theta are sourced from this ctx (geometry/instrument)
+    rather than module globals; the resolution backend is a stub since the
+    population strain path doesn't touch it.
+    """
+    instr = fm.build_instrument_context()
+    geom = fm.build_geometry_context(0.30, instr)
+    res = fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=None,
+        loaded_kernel_path=None,
+    )
+    return fm.ForwardContext(
+        instrument=instr,
+        geometry=geom,
+        resolution=res,
+        q_hkl=np.array([-1.0, 1.0, -1.0]) / np.sqrt(3),
+    )
+
+
 def _hg_from_fg(Fg: np.ndarray) -> np.ndarray:
     """Hg = transpose(Fg^-1) - I, the displacement-gradient convention."""
     Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1])
@@ -38,12 +69,15 @@ class TestPopulationRlUnits:
             crystal, fov_lateral_um=abs(fm.yl_start) * 2e6, rng=None
         )
 
-        # Pipeline path (uses module rl internally):
-        Hg_pop, _ = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1)
+        # Pipeline path (uses ctx.geometry.rl internally):
+        ctx = _default_ctx()
+        Hg_pop, _ = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1, ctx=ctx)
 
-        # Oracle: rl explicitly in micrometres into the same kernel.
+        # Oracle: the SAME rl (in micrometres) into the same kernel.
         Ud = pop.Ud[0]
-        Fg_oracle = Fd_find_mixed(fm.rl * 1e6, fm.Us, Ud, 0.0, fm.Theta)
+        Fg_oracle = Fd_find_mixed(
+            ctx.geometry.rl * 1e6, ctx.instrument.Us, Ud, 0.0, ctx.geometry.Theta
+        )
         Hg_oracle = _hg_from_fg(Fg_oracle)
 
         # Must match the micrometre oracle, NOT the (buggy) metre-scale field.
@@ -59,7 +93,7 @@ class TestPopulationRlUnits:
         pop = fm.build_dislocation_population(
             crystal, fov_lateral_um=abs(fm.yl_start) * 2e6, rng=None
         )
-        Hg_pop, _ = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1)
+        Hg_pop, _ = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1, ctx=_default_ctx())
         peak = float(np.abs(Hg_pop - np.identity(3)).max())
         assert 0.05 < peak < 5.0, (
             f"peak |Hg-I| = {peak:.3e} is outside the physical range; "

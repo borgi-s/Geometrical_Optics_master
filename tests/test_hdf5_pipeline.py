@@ -18,17 +18,29 @@ from dfxm_geo.pipeline import ScanFrames
 def _kernel_loaded() -> None:
     # These integration tests need a real bootstrapped (-1,1,-1) 17 keV kernel
     # on disk: write_simulation_h5 writes resolution-backend provenance, which
-    # requires a kernel to have been loaded. On a bare checkout (CI) none exists,
-    # so skip. The fm.Hg check alone is not enough — earlier tests can leave a
-    # non-None fm.Hg (e.g. via Find_Hg) without ever loading a kernel.
+    # requires a kernel. On a bare checkout (CI) none exists, so skip.
+    # #16 Slice 5: gate only on the npz on disk (the loader no longer sets fm.Hg).
     kernel_dir = Path(fm.pkl_fpath)
     if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
         pytest.skip(f"no kernel npz found in {kernel_dir}")
-    if fm.Hg is None:
-        pytest.skip("forward_model kernel not auto-loaded; run dfxm-bootstrap.")
+
+
+def _default_ctx() -> fm.ForwardContext:
+    """Load the canonical kernel and build the default (-1,1,-1) 17 keV ctx."""
+    from dfxm_geo.pipeline import (
+        ReciprocalConfig,
+        SimulationConfig,
+        _lookup_and_load_kernel,
+        run_theta,
+    )
+
+    res = _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    cfg = SimulationConfig(reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0))
+    return fm.build_forward_context(run_theta(cfg), res, (-1, 1, -1))
 
 
 def test_write_simulation_h5_creates_both_scans(tmp_path: Path, _kernel_loaded: None) -> None:
+    ctx = _default_ctx()
     Hg, q_hkl = fm.Find_Hg(
         4.0,
         151,
@@ -36,6 +48,7 @@ def test_write_simulation_h5_creates_both_scans(tmp_path: Path, _kernel_loaded: 
         fm.zl_rms,
         S=SAMPLE_REMOUNT_OPTIONS["S1"],
         remount_name="S1",
+        ctx=ctx,
     )
     # 3 phi steps × 1 chi step = 3 frames; phi/chi in radians.
     _phi = np.linspace(-0.0006, 0.0006, 3)
@@ -62,6 +75,7 @@ def test_write_simulation_h5_creates_both_scans(tmp_path: Path, _kernel_loaded: 
         sample_remount="S1",
         config_toml="[crystal]\ndis = 4.0\n",
         cli="dfxm-forward --config x.toml --output y/",
+        ctx=ctx,
     )
     with h5py.File(out, "r") as f:
         # /1.1 = dislocations, /2.1 = perfect crystal
@@ -78,6 +92,7 @@ def test_write_simulation_h5_creates_both_scans(tmp_path: Path, _kernel_loaded: 
 def test_write_simulation_h5_skips_perfect_when_disabled(
     tmp_path: Path, _kernel_loaded: None
 ) -> None:
+    ctx = _default_ctx()
     Hg, q_hkl = fm.Find_Hg(
         4.0,
         151,
@@ -85,6 +100,7 @@ def test_write_simulation_h5_skips_perfect_when_disabled(
         fm.zl_rms,
         S=SAMPLE_REMOUNT_OPTIONS["S1"],
         remount_name="S1",
+        ctx=ctx,
     )
     # 3 phi steps × 1 chi step = 3 frames; phi/chi in radians.
     _phi = np.linspace(-0.0006, 0.0006, 3)
@@ -111,6 +127,7 @@ def test_write_simulation_h5_skips_perfect_when_disabled(
         sample_remount="S1",
         config_toml="x",
         cli="x",
+        ctx=ctx,
     )
     with h5py.File(out, "r") as f:
         assert "/1.1" in f
@@ -176,6 +193,7 @@ def test_write_simulation_h5_title_correct_for_asymmetric_grid(
     used for both phi_steps and chi_steps, giving wrong step counts on non-square
     grids (e.g. 3x2=6 frames would write "6 chi ... 6" instead of "3 chi ... 2").
     """
+    ctx = _default_ctx()
     Hg, q_hkl = fm.Find_Hg(
         4.0,
         10,
@@ -183,6 +201,7 @@ def test_write_simulation_h5_title_correct_for_asymmetric_grid(
         fm.zl_rms,
         S=SAMPLE_REMOUNT_OPTIONS["S1"],
         remount_name="S1",
+        ctx=ctx,
     )
     phi = np.linspace(-1e-3, 1e-3, 3)
     chi = np.linspace(-2e-3, 2e-3, 2)
@@ -209,6 +228,7 @@ def test_write_simulation_h5_title_correct_for_asymmetric_grid(
         config_toml="",
         cli="pytest",
         include_perfect_crystal=False,
+        ctx=ctx,
     )
     with h5py.File(out, "r") as f:
         title = (

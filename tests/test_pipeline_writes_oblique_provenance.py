@@ -79,35 +79,40 @@ def _single_frame() -> ScanFrames:
 
 
 @pytest.fixture()
-def _fm_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Patch forward_model globals + heavy compute functions.
+def _fm_stub(monkeypatch: pytest.MonkeyPatch) -> fm.ForwardContext:
+    """Stub the heavy compute and return a ForwardContext for write_simulation_h5.
 
-    Sets fm.Hg, fm.q_hkl, fm.theta, fm._analytic_eval (non-None so the
-    backend-loaded guard passes).  Stubs both precompute_forward_static and
-    the parallel detector writer so no numba kernel is needed.
+    #16 Slice 5: the /1.1 ``theta`` attr is read from ctx.geometry.theta_0
+    (= 0.165 here, ~9.5 deg). An analytic_eval sentinel satisfies the
+    "resolution backend loaded" guard and keeps kernel_npz None (no real SHA).
+    Both precompute_forward_static and the parallel detector writer are stubbed
+    so no numba kernel is needed.
     """
-    monkeypatch.setattr(fm, "Hg", _TINY_HG)
-    monkeypatch.setattr(fm, "q_hkl", _TINY_Q)
-    monkeypatch.setattr(fm, "theta", 0.165)  # ~9.5 deg, typical Al (111) 17 keV
-
-    # A non-None sentinel satisfies the "resolution backend loaded" guard in
-    # write_simulation_h5 (checks `if kernel_npz is None and _analytic_eval is None`).
-    monkeypatch.setattr(fm, "_analytic_eval", object())
-
-    # Stub precompute_forward_static so no actual matmul / numba is needed.
-    # Accepts optional ctx kwarg (threaded in Slice 4).
     monkeypatch.setattr(
         fm,
         "precompute_forward_static",
         lambda Hg_in, ctx=None: np.zeros((3, 1)),  # dummy base_qc shape (3, N)
     )
-
-    # Stub the heavy parallel detector writer.
     monkeypatch.setattr(
         hdf5_mod,
         "_compute_and_write_detector_file_parallel",
         _fake_parallel_writer,
     )
+    res = fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=object(),
+        loaded_kernel_path=None,
+    )
+    return fm.build_forward_context(0.165, res, (-1, 1, -1))
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +120,7 @@ def _fm_stub(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_default_simplified_provenance_attrs(tmp_path: Path, _fm_stub: None) -> None:
+def test_default_simplified_provenance_attrs(tmp_path: Path, _fm_stub: fm.ForwardContext) -> None:
     """Default call (no geometry_mode / eta / mount) writes safe defaults on /1.1."""
     out = tmp_path / "dfxm_geo.h5"
     frames = _single_frame()
@@ -133,6 +138,7 @@ def test_default_simplified_provenance_attrs(tmp_path: Path, _fm_stub: None) -> 
         sample_remount="N/A",
         config_toml="",
         cli="test",
+        ctx=_fm_stub,
     )
 
     with h5py.File(out, "r") as f:
@@ -149,7 +155,7 @@ def test_default_simplified_provenance_attrs(tmp_path: Path, _fm_stub: None) -> 
         np.testing.assert_array_equal(attrs["mount_z"], [0, 0, 1])
 
 
-def test_oblique_provenance_attrs(tmp_path: Path, _fm_stub: None) -> None:
+def test_oblique_provenance_attrs(tmp_path: Path, _fm_stub: fm.ForwardContext) -> None:
     """Oblique call writes eta + paper Al mount attrs on /1.1."""
     out = tmp_path / "dfxm_geo.h5"
     frames = _single_frame()
@@ -178,6 +184,7 @@ def test_oblique_provenance_attrs(tmp_path: Path, _fm_stub: None) -> None:
         geometry_mode="oblique",
         eta=0.3531,
         mount=paper_mount,
+        ctx=_fm_stub,
     )
 
     with h5py.File(out, "r") as f:

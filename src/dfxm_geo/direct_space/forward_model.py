@@ -12,9 +12,7 @@ in CI without any precomputed kernel present.
 Default geometry constants match ID06 at the ESRF; see `dfxm_geo.constants`.
 """
 
-import contextlib
 import os
-from collections.abc import Iterator
 from dataclasses import dataclass as _dataclass
 from pathlib import Path
 from pprint import pprint
@@ -140,7 +138,6 @@ fast_inverse2(
 # INPUT instrumental settings, related to direct space resolution function
 psize = 40e-9  # pixel size in units of m, in the object plane
 zl_rms = 0.15e-6 / 2.35  # rms value of Gaussian beam profile, in m, centered at 0
-theta_0 = 17.953 / 2 * np.pi / 180  # in rad
 
 # INPUT FOV
 Npixels = 510  # nr of pixels on detector (same in both y and z) - sets the FOV.
@@ -158,16 +155,9 @@ NN3 = int(Npixels // 30 * Nsub)
 # There is no longer a module-level `pkl_fn` constant — sub-project D removed it.
 pkl_fpath = str(_REPO_ROOT / "reciprocal_space" / "pkl_files") + os.sep
 
-# Sub-project D: set by `_load_default_kernel` on successful load; read by
-# `io/hdf5.py` and `io/migrate.py` for provenance recording. `None` until a
-# kernel is loaded.
-_loaded_kernel_path: Path | None = None
-
-theta = theta_0
 yl_start = -psize * Npixels / 2 + psize / (
     2 * Nsub
 )  # start in yl direction, in unit of m, centered at 0
-xl_start = yl_start / np.tan(2 * theta) / 3  # start in xl direction, in m, for zl=0
 zl_start = -0.5 * zl_rms * 6  # start in zl direction, in m, for zl=0
 
 # CREATE MATRICES according to Eqs 2,3,7:
@@ -185,7 +175,6 @@ Us = np.array(
         [-1 / np.sqrt(2), -1 / np.sqrt(6), -1 / np.sqrt(3)],
     ]
 ).T
-Theta = np.array([[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]])
 
 YI = (np.arange(NN1) // Nsub).repeat(NN3 * NN2)
 ZI = np.tile((np.arange(NN2) // Nsub).repeat(NN3), NN1)
@@ -196,110 +185,13 @@ indices = np.vstack((ZI, YI)).T
 # (ZI, YI) row/col mapping is fixed by the detector geometry.
 _flat_indices = indices[:, 0].astype(np.int64) * (NN1 // Nsub) + indices[:, 1].astype(np.int64)
 
-xl_range, xl_steps = -xl_start, NN1
+# xl_range is theta-dependent (= -yl_start / tan(2*theta) / 3), so it lives on
+# the per-reflection GeometryContext (built by build_geometry_context), not as a
+# module global. xl_steps / yl_range / yl_steps / zl_range / zl_steps are
+# theta-independent ray-grid constants and stay here.
+xl_steps = NN1
 yl_range, yl_steps = -yl_start, NN2
 zl_range, zl_steps = -zl_start, NN3
-rl = np.vstack(  # type: ignore[call-overload]
-    np.mgrid[
-        -xl_range : xl_range : complex(xl_steps),
-        -yl_range : yl_range : complex(yl_steps),
-        -zl_range : zl_range : complex(zl_steps),
-    ]
-).reshape(3, -1)
-
-prob_z = np.exp(-0.5 * (rl[2] / zl_rms) ** 2)
-
-
-@contextlib.contextmanager
-def reflection_theta_if_oblique(mode: str, theta_new: float | None) -> Iterator[None]:
-    """Temporarily set the forward Bragg angle for an oblique run, then restore.
-
-    ``theta_0`` (and the geometry it drives: ``Theta``, ``xl_start``, the ray
-    grid ``rl``, ``prob_z``) defaults to Al (1,1,1) @ 17 keV (8.98 deg). Oblique
-    reflections diffract at their own theta, so for ``mode == "oblique"`` this
-    rebuilds the theta-dependent globals at ``theta_new`` (radians) for the
-    duration of the ``with`` block and restores the defaults on exit (so
-    simplified-mode runs and other callers/tests are never polluted). For any
-    other mode, or ``theta_new is None``, it is a no-op.
-
-    Must wrap the population build + forward: the ray grid ``rl`` (which the
-    strain field is sampled on) and the imaging rotation ``Theta`` both depend
-    on theta.
-    """
-    global theta_0, theta, Theta, xl_start, xl_range, rl, prob_z
-    if mode != "oblique" or theta_new is None:
-        yield
-        return
-    saved = (theta_0, theta, Theta, xl_start, xl_range, rl, prob_z)
-    try:
-        theta_0 = float(theta_new)
-        theta = theta_0
-        Theta = np.array(
-            [[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]]
-        )
-        xl_start = yl_start / np.tan(2 * theta) / 3
-        xl_range = -xl_start
-        rl = np.vstack(  # type: ignore[call-overload]
-            np.mgrid[
-                -xl_range : xl_range : complex(xl_steps),
-                -yl_range : yl_range : complex(yl_steps),
-                -zl_range : zl_range : complex(zl_steps),
-            ]
-        ).reshape(3, -1)
-        prob_z = np.exp(-0.5 * (rl[2] / zl_rms) ** 2)
-        yield
-    finally:
-        theta_0, theta, Theta, xl_start, xl_range, rl, prob_z = saved
-
-
-_GUARDED_GLOBALS = (
-    "theta_0",
-    "theta",
-    "Theta",
-    "xl_start",
-    "xl_range",
-    "rl",
-    "prob_z",
-    "Resq_i",
-    "qi1_start",
-    "qi1_step",
-    "qi2_start",
-    "qi2_step",
-    "qi3_start",
-    "qi3_step",
-    "npoints1",
-    "npoints2",
-    "npoints3",
-    "qi_starts",
-    "qi_steps",
-    "_analytic_eval",
-    "Hg",
-    "q_hkl",
-    "_loaded_kernel_path",
-)
-
-
-@contextlib.contextmanager
-def _forward_state_guard() -> Iterator[None]:
-    """Snapshot every mutable forward-model global on entry; restore on exit.
-
-    Makes cross-config leakage on a persistent worker impossible: whatever a
-    run mutates (kernel load, oblique theta rebuild, strain field) is rolled
-    back when the run completes or raises. Subsumes
-    ``reflection_theta_if_oblique``'s restore responsibility.
-
-    Usable as a context manager OR a decorator: calling ``_forward_state_guard()``
-    returns a ``_GeneratorContextManager`` (which is a ``ContextDecorator``), so
-    ``@_forward_state_guard()`` re-snapshots on each decorated call (via
-    ``_recreate_cm``). ``globals()`` here is forward_model's module dict
-    regardless of where the decorator is applied.
-    """
-    g = globals()
-    saved = {n: g.get(n) for n in _GUARDED_GLOBALS}
-    try:
-        yield
-    finally:
-        g.update(saved)
 
 
 # To avoid edge effects:
@@ -312,21 +204,13 @@ def _forward_state_guard() -> Iterator[None]:
 ndis = 151  # number of dislocations
 dis = 4  # units of micrometer
 
-# Kernel-dependent globals — populated by `_load_default_kernel()` if the
-# default kernel exists; otherwise these stay `None` and `forward()` will
-# raise a clear error at call time.
-Resq_i = None
-qi1_range = qi2_range = qi3_range = None
-npoints1 = npoints2 = npoints3 = None
-qi1_start = qi1_step = None
-qi2_start = qi2_step = None
-qi3_start = qi3_step = None
-qi_starts = qi_steps = None
-Hg = q_hkl = None
-
-# Analytic resolution backend (Task 5). When set, forward() evaluates this
-# closed-form p_Q(qi) instead of the Resq_i lookup. None => MC LUT path.
-_analytic_eval: "AnalyticResolution | None" = None
+# #16 Slice 5: the per-reflection resolution/strain state that used to live in
+# module globals here (Resq_i, qi*, npoints*, Hg, q_hkl, _analytic_eval,
+# _loaded_kernel_path) is GONE. The loaders return a ResolutionContext, geometry
+# is built per-run by build_forward_context, and everything is threaded as a
+# ForwardContext — so cross-config leakage on a persistent worker is impossible
+# by construction. Only the per-process instrument constants (psize, Npixels,
+# Nsub, NN*, Ud, Us, the ray-grid steps/ranges) remain module-level.
 
 
 def Find_Hg(
@@ -341,7 +225,7 @@ def Find_Hg(
     S: np.ndarray = _S_IDENTITY,
     remount_name: str = "S1",
     z_offset_um: float = 0.0,
-    ctx: "ForwardContext | None" = None,
+    ctx: "ForwardContext",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the displacement gradient field Hg and reciprocal vector q_hkl.
 
@@ -362,9 +246,8 @@ def Find_Hg(
             ``Z_shift(z_offset_um)`` and the cache filename gains a
             ``_z{round(z_offset_um*1000)}nm`` suffix so each z layer has its
             own Fg cache. When zero, behaviour is identical to v1.2.0.
-        ctx: Optional ForwardContext; when provided, geometry (rl/Theta/theta_0)
-            and kernel-path provenance are sourced from it instead of the module
-            globals (globals fallback for legacy callers).
+        ctx: Required ForwardContext; geometry (rl/Theta/theta_0) and kernel-path
+            provenance are sourced from it (#16 Slice 5 — no module globals).
 
     Returns:
         (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
@@ -408,27 +291,23 @@ def Find_Hg(
         )
     )
 
-    # Pick the rl grid: shifted if z_offset_um != 0, else ctx or module-level rl.
-    # Z_shift must use the run's xl_range (oblique-dependent) when a ctx is given,
-    # else the default global — mirror the 4 pipeline Z_shift call sites (#16 S3).
+    # Pick the rl grid: shifted if z_offset_um != 0, else ctx.geometry.rl.
+    # Z_shift uses the run's xl_range (oblique-dependent) from ctx.geometry.
     rl_eff = (
-        Z_shift(
-            z_offset_um,
-            xl_range_override=ctx.geometry.xl_range if ctx is not None else None,
-        )
+        Z_shift(z_offset_um, xl_range=ctx.geometry.xl_range)
         if z_offset_um != 0.0
-        else (ctx.geometry.rl if ctx is not None else rl)
+        else ctx.geometry.rl
     )
-    Theta_ = ctx.geometry.Theta if ctx is not None else Theta
+    Theta_ = ctx.geometry.Theta
     Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta_, dis, ndis, Fg_path, S=S)
 
     if not os.path.exists(Fg_path.replace(".npy", "_vars.txt")):
-        _lkp = ctx.resolution.loaded_kernel_path if ctx is not None else _loaded_kernel_path
+        _lkp = ctx.resolution.loaded_kernel_path
         vars = {
             "Resq_i": _lkp.name if _lkp else "<not loaded>",
             "psize [nm]": psize,
             "zl_rms": zl_rms,
-            "theta_0 [rad]": (ctx.geometry.theta_0 if ctx is not None else theta_0),
+            "theta_0 [rad]": ctx.geometry.theta_0,
             "Npixels": Npixels,
             "Nsub": Nsub,
             "Ud": Ud.tolist(),
@@ -460,17 +339,16 @@ def _load_default_kernel(
     expected_keV: float | None = None,
     compute_Hg: bool = True,
 ) -> "ResolutionContext":
-    """Load the reciprocal-space resolution kernel from disk into module state.
+    """Load the reciprocal-space resolution kernel from disk.
 
     Must be called with an explicit `pkl_path`. Use
     `_lookup_kernel_path(directory=..., mode=..., hkl=..., keV=...)` to find
     the matching file, or call via `pipeline._lookup_and_load_kernel(hkl, keV)`
     which composes the lookup and load together.
 
-    Sets module-level globals: `Resq_i`, `qi1_range`/`qi2_range`/`qi3_range`,
-    `npoints1`/`npoints2`/`npoints3`, `qi1_start`/`qi1_step`/etc.,
-    `qi_starts`, `qi_steps`. If `compute_Hg=True`, also computes the default
-    `Hg`/`q_hkl` by calling `Find_Hg(dis, ndis, psize, zl_rms)`.
+    Returns a ``ResolutionContext`` snapshotting the loaded kernel. #16 Slice 5:
+    the loader no longer mutates module globals; the returned context is threaded
+    into ``build_forward_context``.
 
     Args:
         pkl_path: Path to the .npz kernel file. Required — pass the result
@@ -481,16 +359,10 @@ def _load_default_kernel(
         expected_keV: If given, verify that the kernel's bundled ``keV``
             metadata matches. Raises ``KeyError`` if the metadata is absent,
             ``ValueError`` on mismatch.
-        compute_Hg: If True (default), also compute the default ``Hg``/
-            ``q_hkl`` by calling ``Find_Hg(dis, ndis, psize, zl_rms)``.
-
-    On success, sets ``_loaded_kernel_path`` to the resolved ``Path``.
+        compute_Hg: Ignored (#16 Slice 5; was True in older versions). The loader
+            no longer computes/stores Hg — production passes Hg explicitly and
+            q_hkl lives on the ForwardContext. Accepted for call-site compatibility.
     """
-    global Resq_i, qi1_range, qi2_range, qi3_range, npoints1, npoints2, npoints3
-    global qi1_start, qi2_start, qi3_start, qi1_step, qi2_step, qi3_step
-    global qi_starts, qi_steps, Hg, q_hkl
-    global _loaded_kernel_path
-
     if pkl_path is None:
         raise ValueError(
             "_load_default_kernel requires an explicit `pkl_path` after sub-project D. "
@@ -558,13 +430,8 @@ def _load_default_kernel(
     qi1_start, qi1_step = -qi1_range / 2, qi1_range / npoints1
     qi2_start, qi2_step = -qi2_range / 2, qi2_range / npoints2
     qi3_start, qi3_step = -qi3_range / 2, qi3_range / npoints3
-    qi_starts = np.asarray([qi1_start, qi2_start, qi3_start])
-    qi_steps = 1 / np.asarray([qi1_step, qi2_step, qi3_step])
 
-    if compute_Hg:
-        Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
-
-    _loaded_kernel_path = Path(pkl_path)
+    loaded_kernel_path = Path(pkl_path)
 
     return ResolutionContext(
         Resq_i=Resq_i,
@@ -578,7 +445,7 @@ def _load_default_kernel(
         npoints2=npoints2,
         npoints3=npoints3,
         analytic_eval=None,
-        loaded_kernel_path=_loaded_kernel_path,
+        loaded_kernel_path=loaded_kernel_path,
     )
 
 
@@ -690,11 +557,10 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> "ResolutionContext"
     """Build the closed-form resolution evaluator and register it for forward().
 
     Derives theta from (hkl, keV) the same way the MC bootstrap does, then
-    builds an AnalyticResolution from the config's instrument params. Also
-    computes the default Hg/q_hkl if not already present (parity with
-    _load_default_kernel(compute_Hg=True)).
+    builds an AnalyticResolution from the config's instrument params. #16 Slice 5:
+    no module-global side effects — the evaluator is returned on the
+    ResolutionContext and threaded into build_forward_context.
     """
-    global _analytic_eval, Hg, q_hkl
     from dfxm_geo.reciprocal_space.analytic_resolution import AnalyticResolution
     from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
@@ -705,7 +571,7 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> "ResolutionContext"
     lattice_a = float(getattr(config, "lattice_a", 4.0495e-10))
     theta = _validate_reflection(config.hkl, config.keV, lattice_a)
     eta_val = float(getattr(config, "eta", 0.0))  # safe default for v2.2.0-era configs
-    _analytic_eval = AnalyticResolution(
+    analytic_eval = AnalyticResolution(
         theta=theta,
         eta=eta_val,
         zeta_v_fwhm=config.zeta_v_fwhm,
@@ -714,8 +580,6 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> "ResolutionContext"
         eps_rms=config.eps_rms,
         zeta_v_clip=config.zeta_v_clip,
     )
-    if Hg is None:
-        Hg, q_hkl = Find_Hg(dis, ndis, psize, zl_rms)
 
     return ResolutionContext(
         Resq_i=None,
@@ -728,7 +592,7 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> "ResolutionContext"
         npoints1=None,
         npoints2=None,
         npoints3=None,
-        analytic_eval=_analytic_eval,
+        analytic_eval=analytic_eval,
         loaded_kernel_path=None,
     )
 
@@ -760,11 +624,11 @@ def build_instrument_context() -> InstrumentContext:
 def build_geometry_context(theta_0_: float, instrument: InstrumentContext) -> GeometryContext:
     """Build a ``GeometryContext`` for the given Bragg angle.
 
-    Uses the same expressions as ``reflection_theta_if_oblique``'s rebuild
-    block so that the oblique path remains bit-for-bit identical when
-    constructed through this function.  ``yl_range`` and ``zl_range`` are
-    module-level constants (not in ``InstrumentContext``) and are referenced
-    directly.
+    The single source of truth for the theta-dependent geometry (Theta, the
+    ray grid ``rl``, ``prob_z``, ``xl_start``/``xl_range``): both simplified and
+    oblique runs construct their geometry here from ``run_theta(config)``.
+    ``yl_range`` and ``zl_range`` are theta-independent module-level constants
+    (not in ``InstrumentContext``) and are referenced directly.
 
     Args:
         theta_0_: Bragg angle in radians.
@@ -792,48 +656,6 @@ def build_geometry_context(theta_0_: float, instrument: InstrumentContext) -> Ge
     )
 
 
-def _context_from_globals() -> ForwardContext:
-    """Build a ForwardContext snapshotting the current module globals.
-
-    The migration fallback: lets ctx-threaded functions run for callers that
-    have not yet been converted. Deleted in Slice 5.
-    """
-    instr = build_instrument_context()
-    geom = GeometryContext(
-        # Use `theta` (the mutable angle, modified by reflection_theta_if_oblique
-        # during oblique runs), not `theta_0` (the import-time constant).  In
-        # simplified mode they are identical; in oblique mode `theta` carries the
-        # solver result.  Deleted in Slice 5.
-        theta_0=theta,
-        Theta=Theta,
-        xl_start=xl_start,
-        xl_range=xl_range,
-        rl=rl,
-        prob_z=prob_z,
-    )
-    # qi*_start/step are None before a kernel is loaded; fall back to 0.0 so
-    # the frozen dataclass (which types them as float) stays constructible. The
-    # runtime guard in forward_from_static will still raise before these values
-    # are ever used if neither Resq_i nor _analytic_eval is set.
-    res = ResolutionContext(
-        Resq_i=Resq_i,
-        qi1_start=qi1_start or 0.0,
-        qi1_step=qi1_step or 0.0,
-        qi2_start=qi2_start or 0.0,
-        qi2_step=qi2_step or 0.0,
-        qi3_start=qi3_start or 0.0,
-        qi3_step=qi3_step or 0.0,
-        npoints1=npoints1,
-        npoints2=npoints2,
-        npoints3=npoints3,
-        analytic_eval=_analytic_eval,
-        loaded_kernel_path=_loaded_kernel_path,
-    )
-    # Populate q_hkl from the module global (may be None before Find_Hg is called).
-    _q = np.asarray(q_hkl, dtype=float) if q_hkl is not None else np.zeros(3)
-    return ForwardContext(instrument=instr, geometry=geom, resolution=res, q_hkl=_q)
-
-
 def build_forward_context(
     theta_run: float,
     resolution: "ResolutionContext",
@@ -842,10 +664,10 @@ def build_forward_context(
 ) -> "ForwardContext":
     """Compose a context for a run from explicit theta, resolution, and hkl.
 
-    S2a (#16): breaks the globals round-trip.  ``theta_run`` is sourced from
-    ``run_theta(config)`` (the *correct* Bragg angle for the reflection), not
-    the stale ``fm.theta_0`` import-time global.  ``resolution`` comes from the
-    ``_load_resolution`` return value.  ``hkl`` drives the q_hkl unit vector.
+    #16: the sole forward-geometry entry point.  ``theta_run`` is sourced from
+    ``run_theta(config)`` (the correct Bragg angle for the reflection);
+    ``resolution`` comes from the ``_load_resolution`` return value; ``hkl``
+    drives the q_hkl unit vector.
 
     ``instrument`` is optional; when omitted it is built from the current
     module globals (psize/Npixels/Nsub/…).
@@ -859,7 +681,7 @@ def build_forward_context(
 
 def precompute_forward_static(
     Hg: np.ndarray,
-    ctx: "ForwardContext | None" = None,
+    ctx: "ForwardContext",
 ) -> np.ndarray:
     """Compute the phi/chi/2theta-independent part of the forward model.
 
@@ -870,17 +692,9 @@ def precompute_forward_static(
     read-only and safe to share across worker threads (the dynamic half never
     mutates it).
 
-    ``ctx`` is optional; when provided, ``Us`` and ``q_hkl`` are sourced from
-    it instead of the module globals.  When ``ctx`` is None the module globals
-    are used as a fallback (deleted in Slice 5).
+    ``ctx`` is required (#16 Slice 5): ``Us`` and ``q_hkl`` are sourced from it.
     """
-    if ctx is None:
-        Us_ = Us
-        q_hkl_ = q_hkl  # module global fallback
-    else:
-        Us_ = ctx.instrument.Us
-        q_hkl_ = ctx.q_hkl
-    qs = Us_ @ Hg @ q_hkl_
+    qs = ctx.instrument.Us @ Hg @ ctx.q_hkl
     return qs.squeeze().T
 
 
@@ -956,7 +770,7 @@ def _mc_lut_forward(
 
 def forward_from_static(
     base_qc: np.ndarray,
-    ctx: "ForwardContext | None" = None,
+    ctx: "ForwardContext",
     phi: float = 0,
     chi: float = 0,
     TwoDeltaTheta: float = 0,
@@ -969,11 +783,8 @@ def forward_from_static(
     operations of the historical monolithic ``forward()`` tail (no
     reassociation), so output is bit-identical.
 
-    ``ctx`` is optional; when provided, all former-global reads are sourced
-    from it instead of module globals. When None, a ``ForwardContext`` is
-    built from the current globals via ``_context_from_globals()``.
+    ``ctx`` is required (#16 Slice 5): all former-global reads are sourced from it.
     """
-    ctx = ctx if ctx is not None else _context_from_globals()
     res = ctx.resolution
     geom = ctx.geometry
     instr = ctx.instrument
@@ -1063,7 +874,7 @@ def forward_from_static(
 
 def forward(
     Hg: np.ndarray,
-    ctx: "ForwardContext | None" = None,
+    ctx: "ForwardContext",
     phi: float = 0,
     chi: float = 0,
     TwoDeltaTheta: float = 0,
@@ -1097,7 +908,7 @@ def forward(
 
     Args:
         Hg: Displacement gradient field, shape (X, 3, 3) where X = NN1*NN2*NN3.
-        ctx: Optional ``ForwardContext``; when None, built from current globals.
+        ctx: Required ``ForwardContext`` (#16 Slice 5 — no module-globals fallback).
         phi: Radians off the Bragg condition (rotation around y_l axis).
         chi: Radians off the Bragg condition (rotation around x_l axis).
         TwoDeltaTheta: Radians off the Bragg angle (2theta shift).
@@ -1107,8 +918,7 @@ def forward(
         Forward-model image of shape (NN2//Nsub, NN1//Nsub). If qi_return is
         True, returns (image, qi_field) where qi_field has shape (3, NN1, NN2, NN3).
     """
-    ctx = ctx if ctx is not None else _context_from_globals()
-    # Guard BEFORE precompute so an uninitialized call (e.g. forward(Hg=None)
+    # Guard BEFORE precompute so an uninitialized call (e.g. forward(Hg, ctx)
     # with no kernel loaded) raises the clear RuntimeError rather than a
     # TypeError from `Us @ None`.
     if ctx.resolution.Resq_i is None and ctx.resolution.analytic_eval is None:
@@ -1123,13 +933,13 @@ def forward(
     )
 
 
-def Z_shift(offset_um: float, *, xl_range_override: float | None = None) -> np.ndarray:
+def Z_shift(offset_um: float, *, xl_range: float) -> np.ndarray:
     """Return an `rl` grid shifted along the z axis by `offset_um` µm.
 
-    Uses the module's existing detector ray-grid parameters (xl_range,
-    xl_steps, yl_range, yl_steps, zl_range, zl_steps) to build the same
-    mgrid as `rl` does at import time, but with the z range translated by
-    ``-offset_um * 1e-6`` m. The module-level ``rl`` is not modified.
+    Uses the theta-independent detector ray-grid parameters (xl_steps,
+    yl_range, yl_steps, zl_range, zl_steps) plus the per-reflection
+    ``xl_range`` to build the same mgrid as the geometry's ``rl``, but with
+    the z range translated by ``-offset_um * 1e-6`` m.
 
     Used by the z-scan pipeline mode to scan dislocations through the
     sample depth without rebuilding the detector ray grid for each layer.
@@ -1138,16 +948,15 @@ def Z_shift(offset_um: float, *, xl_range_override: float | None = None) -> np.n
         offset_um: z offset in micrometres. Positive values move the
             dislocation core "up" in the lab z direction (equivalent to
             shifting `rl` "down" by the same amount).
-        xl_range_override: when provided, overrides the module-level
-            ``xl_range`` (which is the default, simplified-geometry value).
-            Pass ``ctx.geometry.xl_range`` for oblique runs so the shifted
-            grid uses the correct oblique x-lateral extent. S3 of #16.
+        xl_range: the x-lateral range (metres) for this reflection. Pass
+            ``ctx.geometry.xl_range`` so oblique runs use the correct extent.
+            #16 Slice 5: required (the module-level ``xl_range`` global is gone).
 
     Returns:
         (3, X) coordinates in metres, same shape as `rl`.
     """
     offset_m = offset_um * 1e-6
-    xl_range_ = xl_range if xl_range_override is None else xl_range_override
+    xl_range_ = xl_range
     return np.vstack(  # type: ignore[call-overload]
         np.mgrid[
             -xl_range_ : xl_range_ : complex(xl_steps),
@@ -1405,7 +1214,7 @@ def _find_hg_from_population_numpy(
     *,
     S: np.ndarray,
     rl: np.ndarray | None,
-    ctx: "ForwardContext | None" = None,
+    ctx: "ForwardContext",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Reference NumPy implementation of the population Hg field.
 
@@ -1416,26 +1225,17 @@ def _find_hg_from_population_numpy(
     truth the kernel is checked against at rtol=1e-12.
 
     Args:
-        ctx: Optional ForwardContext. When provided, ``Us``, ``Theta``, and
-            ``rl`` (when the explicit kwarg is None) are sourced from it
-            instead of the module globals — mirrors the convention in
-            ``Find_Hg_from_population`` so parity holds for both the default
-            and oblique reflections.  S5 (#16) will delete the globals
-            fallback; passing ``ctx`` is the forward-compatible form.
+        ctx: Required ForwardContext (#16 Slice 5). ``Us``, ``Theta``, and
+            ``rl`` (when the explicit kwarg is None) are sourced from it —
+            mirrors ``Find_Hg_from_population`` so parity holds for both the
+            default and oblique reflections.
     """
     from dfxm_geo.crystal.dislocations import Fd_find_multi_dislocs_mixed, MixedDislocSpec
 
-    # rl precedence: explicit kwarg > ctx.geometry.rl > module global.
-    if rl is not None:
-        rl_eff = rl
-    elif ctx is not None:
-        rl_eff = ctx.geometry.rl
-    else:
-        rl_eff = globals()["rl"]
-
-    # Us/Theta precedence: ctx > module global (S5 will delete the fallback).
-    Us_ = ctx.instrument.Us if ctx is not None else Us
-    Theta_ = ctx.geometry.Theta if ctx is not None else Theta
+    # rl precedence: explicit kwarg > ctx.geometry.rl.
+    rl_eff = rl if rl is not None else ctx.geometry.rl
+    Us_ = ctx.instrument.Us
+    Theta_ = ctx.geometry.Theta
 
     Q_norm = np.sqrt(h * h + k * k + l * l)
     q_hkl = np.asarray([h, k, l]) / Q_norm
@@ -1483,7 +1283,7 @@ def Find_Hg_from_population(
     *,
     S: np.ndarray = _S_IDENTITY,
     rl: np.ndarray | None = None,
-    ctx: "ForwardContext | None" = None,
+    ctx: "ForwardContext",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute Hg + q_hkl from an arbitrary DislocationPopulation.
 
@@ -1499,33 +1299,28 @@ def Find_Hg_from_population(
         population: DislocationPopulation from `build_dislocation_population`.
         h, k, l: Miller indices of the active reflection.
         S: 3x3 sample-remount rotation (default identity).
-        rl: Detector ray grid to evaluate the strain on. Defaults to the
-            module-level `fm.rl`. Pass `Z_shift(z_um)` to evaluate at a
-            non-zero sample-depth offset (z-scan support).
-        ctx: Optional ForwardContext; when provided, ``Us`` and ``Theta`` are
-            sourced from it instead of the module globals.  ``rl`` (explicit
-            kwarg) takes precedence over ``ctx.geometry.rl`` when both are
-            supplied, preserving the z-scan caller convention.
+        rl: Detector ray grid to evaluate the strain on. Defaults to
+            ``ctx.geometry.rl``. Pass `Z_shift(z_um, xl_range=ctx.geometry.xl_range)`
+            to evaluate at a non-zero sample-depth offset (z-scan support).
+        ctx: Required ForwardContext (#16 Slice 5); ``Us`` and ``Theta`` are
+            sourced from it. ``rl`` (explicit kwarg) takes precedence over
+            ``ctx.geometry.rl`` when both are supplied, preserving the z-scan
+            caller convention.
 
     Returns:
         (Hg, q_hkl) where Hg has shape (X, 3, 3) and q_hkl has shape (3,).
     """
     from dfxm_geo.crystal.dislocations import find_hg_population
 
-    # rl precedence: explicit kwarg > ctx.geometry.rl > module global.
-    if rl is not None:
-        rl_eff = rl
-    elif ctx is not None:
-        rl_eff = ctx.geometry.rl
-    else:
-        rl_eff = globals()["rl"]
+    # rl precedence: explicit kwarg > ctx.geometry.rl.
+    rl_eff = rl if rl is not None else ctx.geometry.rl
     Q_norm = np.sqrt(h * h + k * k + l * l)
     q_hkl = np.asarray([h, k, l]) / Q_norm
 
     n = len(population.positions_um)
     # Collapse the per-dislocation transform to M_d = Ud_d.T @ Us.T @ S.T @ Theta.
-    Us_ = ctx.instrument.Us if ctx is not None else Us
-    Theta_ = ctx.geometry.Theta if ctx is not None else Theta
+    Us_ = ctx.instrument.Us
+    Theta_ = ctx.geometry.Theta
     base = Us_.T @ S.T @ Theta_  # (3, 3), shared across dislocations
     M = np.empty((n, 3, 3))
     Ud = np.empty((n, 3, 3))

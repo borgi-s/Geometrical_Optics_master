@@ -24,14 +24,12 @@ from dfxm_geo.pipeline import (
 def test_run_simulation_writes_hdf5(tmp_path: Path) -> None:
     from pathlib import Path as _P
 
-    # Skip if no real bootstrapped kernel is available (the multi-reflection tests
-    # may have left a toy zero kernel in fm.Hg, but that's not the real kernel).
+    # Skip if no real bootstrapped kernel npz is on disk. #16 Slice 5: gate only
+    # on file presence (the loader no longer sets a module-global Hg).
     kernel_dir = _P(fm.pkl_fpath)
     matches = sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz"))
     if not matches:
         pytest.skip(f"No bootstrapped kernel npz found in {kernel_dir}; skipping.")
-    if fm.Hg is None:
-        pytest.skip("kernel not loaded")
 
     cfg = SimulationConfig(
         crystal=CrystalConfig(

@@ -59,9 +59,11 @@ class TestForwardMultiReflection:
         in _lookup_and_load_kernel could (in pathological cases) skip a
         reload it should perform.
         """
-        import dfxm_geo.direct_space.forward_model as fm
+        import dfxm_geo.pipeline as p
 
-        monkeypatch.setattr(fm, "_loaded_kernel_path", None)
+        # #16 Slice 5: the per-process kernel-path global is gone; idempotency is
+        # the module-level _KERNEL_CTX_CACHE, so clear it to avoid cross-test bleed.
+        monkeypatch.setattr(p, "_KERNEL_CTX_CACHE", {})
 
     def test_happy_path_with_explicit_hkl(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -88,7 +90,9 @@ class TestForwardMultiReflection:
         monkeypatch.setattr(
             p,
             "write_simulation_h5",
-            lambda *a, **k: _captured.__setitem__("path", fm._loaded_kernel_path),
+            # #16 Slice 5: the loaded kernel path now rides on the run's ctx
+            # (ctx.resolution.loaded_kernel_path), not a module global.
+            lambda *a, **k: _captured.__setitem__("path", k["ctx"].resolution.loaded_kernel_path),
         )
 
         cfg = tmp_path / "config.toml"
@@ -106,8 +110,8 @@ class TestForwardMultiReflection:
         config = SimulationConfig.from_toml(cfg)
         p.run_simulation(config, tmp_path / "out")
 
-        # Verify the actually-loaded path (captured during the guarded run, since
-        # the state guard restores fm._loaded_kernel_path to None on exit).
+        # Verify the actually-loaded path (captured from the run's ctx that
+        # write_simulation_h5 received).
         assert _captured["path"] == kernel_path
 
     def test_lookup_miss_errors_cleanly(
@@ -177,9 +181,11 @@ class TestRunSimulationCrystalModes:
     @pytest.fixture(autouse=True)
     def _reset_kernel_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Reset fm module-level state between tests."""
-        import dfxm_geo.direct_space.forward_model as fm
+        import dfxm_geo.pipeline as p
 
-        monkeypatch.setattr(fm, "_loaded_kernel_path", None)
+        # #16 Slice 5: the per-process kernel-path global is gone; idempotency is
+        # the module-level _KERNEL_CTX_CACHE, so clear it to avoid cross-test bleed.
+        monkeypatch.setattr(p, "_KERNEL_CTX_CACHE", {})
 
     def _make_kernel(self, tmp_path: Path) -> Path:
         return _make_kernel_npz(

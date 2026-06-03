@@ -16,6 +16,27 @@ from dfxm_geo.pipeline import (
 )
 
 
+def _stub_ctx() -> fm.ForwardContext:
+    """A minimal valid ForwardContext for tests that only build per-frame args
+    (no real render): real geometry + q_hkl, empty resolution. #16 Slice 5
+    replaced the deleted fm._context_from_globals()."""
+    res = fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=None,
+        loaded_kernel_path=None,
+    )
+    return fm.build_forward_context(0.15661142, res, (-1, 1, -1))
+
+
 def test_zero_scanned_axes_yields_one_frame():
     """Single mode: all axes fixed -> n_frames = 1, all per-frame arrays length 1."""
     cfg = ScanConfig()
@@ -134,7 +155,7 @@ def test_scan_frames_args_returns_6_tuples():
     )
     frames = _build_scan_frames_at_z(cfg, z_value=0.0)
     Hg = np.zeros((10, 3, 3))
-    ctx = fm._context_from_globals()
+    ctx = _stub_ctx()
     args_list, positioners = _scan_frames_args(Hg, frames, cfg, ctx)
     assert len(args_list) == 4
     for tup in args_list:
@@ -230,7 +251,7 @@ def test_scan_frames_args_positioners_contain_all_four_axes():
     )
     frames = _build_scan_frames_at_z(cfg, z_value=5.0)
     Hg = np.zeros((10, 3, 3))
-    ctx = fm._context_from_globals()
+    ctx = _stub_ctx()
     _, positioners = _scan_frames_args(Hg, frames, cfg, ctx)
     assert set(positioners.keys()) == {"phi", "chi", "two_dtheta", "z"}
     # Scanned axes are arrays

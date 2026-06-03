@@ -88,10 +88,10 @@ class AxisScanConfig:
 
 _CANONICAL_AXES = ("phi", "chi", "two_dtheta", "z")
 
-# S1 (#16): module-level cache so repeated _lookup_and_load_kernel calls for
-# the same kernel path return the already-loaded ResolutionContext without
-# hitting disk again.  Replaces the old fm._loaded_kernel_path == target
-# idempotent check; the global is still set belt-and-suspenders until S5.
+# #16: module-level cache so repeated _lookup_and_load_kernel calls for the same
+# kernel path return the already-loaded ResolutionContext without hitting disk
+# again. The sole idempotency authority (Slice 5 removed the per-process
+# kernel-path global the check used to cross-reference).
 _KERNEL_CTX_CACHE: dict[Path, fm.ResolutionContext] = {}
 
 _AXIS_TO_LABEL = {
@@ -756,9 +756,9 @@ def _lookup_and_load_kernel(
     oblique bootstrap records them too.
 
     Idempotent: returns the cached ResolutionContext if the resolved target was
-    already loaded this process (re-homed from fm._loaded_kernel_path check in
-    S1 of #16).  The global fm._loaded_kernel_path is still set belt-and-
-    suspenders until S5.
+    already loaded this process. The module-level _KERNEL_CTX_CACHE is the sole
+    authority (#16 Slice 5 removed the per-process kernel-path global it used to
+    cross-check against).
 
     Raises KeyError on lookup miss, ValueError on metadata mismatch,
     KeyError on pre-sub-project-D legacy npz lacking metadata.
@@ -781,13 +781,11 @@ def _lookup_and_load_kernel(
         )
     else:
         target = fm._lookup_kernel_path(directory=fm.pkl_fpath, mode="simplified", hkl=hkl, keV=keV)
-    # Belt-and-suspenders: skip reload only when BOTH the cache holds a context
-    # AND the module globals still agree (i.e. not wiped by _forward_state_guard
-    # restore or monkeypatching).  If the guard restored the globals to None the
-    # cache holds a stale snapshot; we fall through and reload so globals are
-    # re-set, then update the cache.
+    # The module-level cache is authoritative now that no per-run globals exist
+    # to fall out of sync with it (#16 Slice 5): a cache hit on the resolved path
+    # returns the previously-built context without a disk reload.
     cached = _KERNEL_CTX_CACHE.get(target)
-    if cached is not None and fm._loaded_kernel_path == target:
+    if cached is not None:
         return cached
     res = fm._load_default_kernel(
         str(target),
@@ -834,9 +832,8 @@ def _load_resolution(
     SimulationConfig.from_toml). Defaults to simplified when omitted.
 
     Returns:
-        ResolutionContext snapshotting the loaded/cached backend.  Callers in
-        S1 may discard it (globals are still set); S2 will wire it into
-        build_forward_context.
+        ResolutionContext snapshotting the loaded/cached backend. Threaded into
+        build_forward_context by the run functions (#16 Slice 5).
     """
     use_analytic = config.backend == "analytic" or (
         config.backend == "auto" and not config.beamstop
@@ -847,22 +844,14 @@ def _load_resolution(
             "knife-edge/aperture stop cannot be represented in closed form). "
             "Use backend='mc', or disable the beamstop."
         )
+    # #16 Slice 5: the chosen backend is carried entirely on the returned
+    # ResolutionContext (analytic_eval set for analytic, None for the LUT path),
+    # so forward() reads ctx.resolution — no module-global toggling needed.
     if use_analytic:
-        fm._analytic_eval = None  # clear any stale evaluator
         return fm._load_analytic_resolution(config)
-    fm._analytic_eval = None  # ensure forward() uses the LUT
-    res = _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
-    if res is None:
-        # Production _lookup_and_load_kernel never returns None (it returns a
-        # ResolutionContext or raises); this path is test-only — for mocks that
-        # monkeypatch it to return None while separately setting
-        # fm._loaded_kernel_path directly. Build a ResolutionContext from the
-        # (monkeypatch-set, live) module globals. Deleted in Slice 5.
-        res = fm._context_from_globals().resolution
-    return res
+    return _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
 
 
-@fm._forward_state_guard()
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
     """Execute a DFXM forward-simulation run from a config object.
 
@@ -872,10 +861,9 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
     res = _load_resolution(config.reciprocal, config.geometry)
-    # S3 (#16): CM call site retired. Geometry is built from run_theta(config)
-    # inside build_forward_context (called in _run_simulation_inner), which uses
-    # the same expressions the CM used to rebuild Theta/rl/prob_z. Z_shift callers
-    # pass xl_range_override=ctx.geometry.xl_range so oblique z-scans stay correct.
+    # #16: geometry is built from run_theta(config) inside build_forward_context
+    # (called in _run_simulation_inner); Z_shift callers pass
+    # xl_range=ctx.geometry.xl_range so oblique z-scans stay correct.
     return _run_simulation_inner(config, output_dir, res)
 
 
@@ -913,7 +901,7 @@ def _run_simulation_inner(
     print(
         f"[dfxm-forward] effective config:\n"
         f"  Nsub={fm.Nsub}  Npixels={fm.Npixels}  NN1={fm.NN1}  NN2={fm.NN2}\n"
-        f"  kernel={fm._loaded_kernel_path}\n"
+        f"  kernel={res.loaded_kernel_path}\n"
         f"  crystal.mode={config.crystal.mode}  ndis={len(population.positions_um)}\n"
         f"  scan.mode={config.scan.derived_mode_name()}  "
         f"axes_scanned={config.scan.scanned_axes()}",
@@ -963,9 +951,9 @@ def _run_simulation_inner(
             # z != 0: use Z_shift for the per-z-layer rl (takes precedence over ctx).
             # z == 0: no explicit rl → Find_Hg_from_population uses ctx.geometry.rl
             # (the oblique-aware grid built above).
-            # Pass xl_range_override so oblique runs use the correct x-lateral extent
+            # Pass xl_range so oblique runs use the correct x-lateral extent
             # (S3 of #16: CM removed, ctx carries the oblique geometry).
-            rl_eff = fm.Z_shift(z, xl_range_override=ctx.geometry.xl_range) if z != 0.0 else None
+            rl_eff = fm.Z_shift(z, xl_range=ctx.geometry.xl_range) if z != 0.0 else None
             return fm.Find_Hg_from_population(
                 population,
                 h=config.reciprocal.hkl[0],
@@ -1144,24 +1132,22 @@ def _resolve_postprocess_Hg(h5_path: Path, Hg: np.ndarray | None) -> np.ndarray:
 
     1. explicit ``Hg`` argument;
     2. persisted ``/1.1/dfxm_geo/Hg`` from the run's HDF5 (written when
-       ``io.write_strain_provenance`` is True);
-    3. the legacy ``fm.Hg`` module global (deprecated shim; one release only).
+       ``io.write_strain_provenance`` is True).
+
+    #16 Slice 5 removed the legacy module-global ``Hg`` fallback — provenance is
+    now always recovered from the HDF5 (or passed explicitly).
     """
     if Hg is not None:
         return np.asarray(Hg, dtype=float)
     with h5py.File(h5_path, "r") as f:
         if "/1.1/dfxm_geo/Hg" in f:
             return np.asarray(f["/1.1/dfxm_geo/Hg"][()], dtype=float)
-    if fm.Hg is not None:
-        return np.asarray(fm.Hg, dtype=float)
     raise RuntimeError(
-        "Cannot postprocess: no Hg passed, none persisted at "
-        "/1.1/dfxm_geo/Hg (run with io.write_strain_provenance=true), and "
-        "fm.Hg is unset."
+        "Cannot postprocess: no Hg passed and none persisted at "
+        "/1.1/dfxm_geo/Hg (run with io.write_strain_provenance=true)."
     )
 
 
-@fm._forward_state_guard()
 def run_postprocess(
     output_dir: Path,
     config: SimulationConfig,
@@ -1178,24 +1164,23 @@ def run_postprocess(
 
     1. the explicit ``Hg`` keyword argument (if supplied);
     2. ``/1.1/dfxm_geo/Hg`` persisted in the HDF5 (written when
-       ``io.write_strain_provenance`` is True, the default);
-    3. the legacy ``fm.Hg`` module global (deprecated shim; one release only).
+       ``io.write_strain_provenance`` is True, the default).
 
     This means ``--postprocess-only`` on a fresh process works without any manual
-    ``fm.Hg`` assignment, as long as the HDF5 was produced with strain provenance
-    enabled (the default).
+    setup, as long as the HDF5 was produced with strain provenance enabled
+    (the default).
 
     Args:
         output_dir: Directory containing ``dfxm_geo.h5`` from a prior run.
         config: ``SimulationConfig`` matching the original run.
         Hg: Optional explicit strain-gradient tensor to use for qi computation.
-            Overrides both the persisted HDF5 value and ``fm.Hg``.
+            Overrides the persisted HDF5 value.
         q_hkl: Accepted for API symmetry; currently unused by the postprocess body.
 
     Raises:
         FileNotFoundError: if the expected dfxm_geo.h5 file is absent.
         FileNotFoundError: if /2.1 (perfect crystal scan) is missing from the .h5.
-        RuntimeError: if no Hg source can be found (explicit, HDF5, or global).
+        RuntimeError: if no Hg source can be found (explicit or HDF5).
     """
     h5_path = output_dir / "dfxm_geo.h5"
     if not h5_path.is_file():
@@ -1659,8 +1644,8 @@ def _iter_identification_single(
         # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); rl_
         # and fm.Z_shift(...) are both in metres, so scale by 1e6 — matching the
         # forward path (strain_cache.py:61, forward_model.py:1139).
-        # xl_range_override keeps the oblique x-lateral extent correct (S3 #16).
-        rl_eff = (fm.Z_shift(z_float, xl_range_override=xl_range_) if z_float != 0.0 else rl_) * 1e6
+        # xl_range keeps the oblique x-lateral extent correct (S3 #16).
+        rl_eff = (fm.Z_shift(z_float, xl_range=xl_range_) if z_float != 0.0 else rl_) * 1e6
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for plane in planes:
@@ -1744,6 +1729,7 @@ def _run_identification_single(
         config_toml=config_toml,
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
+        ctx=ctx,
     )
     _maybe_apply_poisson_noise(config, output_dir, n_scans)
     return {
@@ -1860,8 +1846,8 @@ def _iter_identification_multi(
         # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); rl_
         # and fm.Z_shift(...) are both in metres, so scale by 1e6 — matching the
         # forward path (strain_cache.py:61, forward_model.py:1139).
-        # xl_range_override keeps the oblique x-lateral extent correct (S3 #16).
-        rl_eff = (fm.Z_shift(z_float, xl_range_override=xl_range_) if z_float != 0.0 else rl_) * 1e6
+        # xl_range keeps the oblique x-lateral extent correct (S3 #16).
+        rl_eff = (fm.Z_shift(z_float, xl_range=xl_range_) if z_float != 0.0 else rl_) * 1e6
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for _ in range(mc.n_samples):
@@ -1965,6 +1951,7 @@ def _run_identification_multi(
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
+        ctx=ctx,
     )
     _maybe_apply_poisson_noise(config, output_dir, n_scans)
     return {
@@ -2065,8 +2052,8 @@ def _iter_identification_zscan(
         n_frames = frames_at_z.n_frames
         # Fd_find_* expect the ray grid in MICROMETRES (b is in µm); Z_shift
         # returns metres, so scale by 1e6 — matching the forward path.
-        # xl_range_override keeps the oblique x-lateral extent correct (S3 #16).
-        rl_shifted = fm.Z_shift(z_off, xl_range_override=xl_range_) * 1e6
+        # xl_range keeps the oblique x-lateral extent correct (S3 #16).
+        rl_shifted = fm.Z_shift(z_off, xl_range=xl_range_) * 1e6
         for plane in planes:
             b_table = _burgers_vectors(plane)
             b_indices = (
@@ -2215,6 +2202,7 @@ def _run_identification_zscan(
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
+        ctx=ctx,
     )
     _maybe_apply_poisson_noise(config, output_dir, n_scans)
     return {
@@ -2224,7 +2212,6 @@ def _run_identification_zscan(
     }
 
 
-@fm._forward_state_guard()
 def run_identification(
     config: IdentificationConfig,
     output_dir: Path,
@@ -2234,7 +2221,7 @@ def run_identification(
 
     # S3 (#16): CM call site retired. build_forward_context uses run_theta(config)
     # (the correct Bragg angle) to rebuild Theta/rl/prob_z via build_geometry_context
-    # — same expressions the CM used. Z_shift callers pass xl_range_override so
+    # — same expressions the CM used. Z_shift callers pass xl_range so
     # oblique z-scans remain correct without touching module globals.
     ctx = fm.build_forward_context(
         run_theta(config),

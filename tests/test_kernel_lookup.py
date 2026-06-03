@@ -112,13 +112,14 @@ class TestLoadDefaultKernelVerification:
         from dfxm_geo.direct_space import forward_model as fm
 
         p = _make_kernel_npz(tmp_path / "Resq_i_h-1_k1_l-1_17keV_test.npz")
-        fm._load_default_kernel(
+        # #16 Slice 5: the loader returns a ResolutionContext; the loaded path
+        # lives on res.loaded_kernel_path, not a module global.
+        res = fm._load_default_kernel(
             str(p),
             expected_hkl=(-1, 1, -1),
             expected_keV=17.0,
-            compute_Hg=False,
         )
-        assert fm._loaded_kernel_path == p
+        assert res.loaded_kernel_path == p
 
     def test_hkl_mismatch_raises(self, tmp_path: Path) -> None:
         from dfxm_geo.direct_space import forward_model as fm

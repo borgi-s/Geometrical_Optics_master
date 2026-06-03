@@ -159,11 +159,12 @@ def _make_kernel_npz_for_provenance(
 
 class TestHdf5NewAttrs:
     @pytest.fixture(autouse=True)
-    def _reset_kernel_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Reset fm module-level state between tests."""
-        import dfxm_geo.direct_space.forward_model as fm
+    def _reset_kernel_state(self) -> None:
+        """Clear the module-level kernel cache between tests (#16 Slice 5 replaced
+        the fm._loaded_kernel_path global with pipeline._KERNEL_CTX_CACHE)."""
+        import dfxm_geo.pipeline as p
 
-        monkeypatch.setattr(fm, "_loaded_kernel_path", None)
+        p._KERNEL_CTX_CACHE.clear()
 
     def test_scan_mode_attrs_written(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import dfxm_geo.direct_space.forward_model as fm

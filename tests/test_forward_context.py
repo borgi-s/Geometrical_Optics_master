@@ -30,58 +30,54 @@ def test_build_instrument_context_matches_globals():
     )
 
 
-def test_build_geometry_context_matches_default_globals():
+def test_build_geometry_context_is_internally_consistent():
+    # build_geometry_context is the sole source of the theta-dependent geometry
+    # (#16 Slice 5 deleted the module globals Theta/rl/prob_z/xl_* it used to
+    # mirror), so assert it reproduces the geometry from theta directly.
     instr = fm.build_instrument_context()
-    geom = fm.build_geometry_context(fm.theta_0, instr)
-    assert geom.theta_0 == fm.theta_0
-    assert np.array_equal(geom.Theta, fm.Theta)
-    assert geom.xl_start == fm.xl_start
-    assert geom.xl_range == fm.xl_range
-    assert np.array_equal(geom.rl, fm.rl)
-    assert np.array_equal(geom.prob_z, fm.prob_z)
+    theta = 0.15661142  # true Bragg for (-1,1,-1) @ 17 keV (rad)
+    geom = fm.build_geometry_context(theta, instr)
+    assert geom.theta_0 == theta
+    assert np.allclose(
+        geom.Theta,
+        np.array(
+            [[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]]
+        ),
+    )
+    assert geom.xl_start == instr.yl_start / np.tan(2 * theta) / 3
+    assert geom.xl_range == -geom.xl_start
+    assert geom.rl.shape == (3, instr.xl_steps * instr.yl_steps * instr.zl_steps)
+    assert geom.prob_z.shape == (geom.rl.shape[1],)
 
 
 _KERNELS = sorted(Path(fm.pkl_fpath).glob("Resq_i_h-1_k1_l-1_17keV_*.npz"))
 
 
 @pytest.mark.skipif(not _KERNELS, reason="no bootstrapped kernel on disk")
-def test_context_from_globals_roundtrips():
-    fm._load_default_kernel(_KERNELS[0], compute_Hg=False)
-    ctx = fm._context_from_globals()
-    assert np.array_equal(ctx.geometry.Theta, fm.Theta)
-    assert np.array_equal(ctx.geometry.rl, fm.rl)
-    assert np.array_equal(ctx.resolution.Resq_i, fm.Resq_i)
-    assert ctx.geometry.theta_0 == fm.theta_0
-    assert ctx.instrument.Nsub == fm.Nsub
+def test_forward_ctx_path_does_not_recompile_kernel():
+    # Threading ctx must not trigger a numba recompile of _mc_lut_forward
+    # (the dtype/shape signature is stable across calls) and is deterministic.
+    from dfxm_geo.pipeline import ReciprocalConfig, SimulationConfig, run_theta
 
-
-@pytest.mark.skipif(not _KERNELS, reason="no bootstrapped kernel on disk")
-def test_forward_ctx_path_bit_identical_to_globals_path():
-    fm._load_default_kernel(_KERNELS[0], compute_Hg=True)
-    Hg = fm.Hg
-    # Warm up the JIT so the signature count reflects the already-compiled
-    # kernel; the first in-process call compiles it.
-    _ = fm.forward(Hg, phi=1e-4, chi=2e-4)
+    res = fm._load_default_kernel(_KERNELS[0])
+    cfg = SimulationConfig(reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0))
+    ctx = fm.build_forward_context(run_theta(cfg), res, (-1, 1, -1))
+    Hg, _ = fm.Find_Hg(4.0, 151, fm.psize, fm.zl_rms, ctx=ctx)
+    # Warm up the JIT; the first in-process call compiles the kernel.
+    _ = fm.forward(Hg, ctx, phi=1e-4, chi=2e-4)
     n_sig_before = len(fm._mc_lut_forward.signatures)
-    img_globals = fm.forward(Hg, phi=1e-4, chi=2e-4)
-    ctx = fm._context_from_globals()
-    img_ctx = fm.forward(Hg, ctx=ctx, phi=1e-4, chi=2e-4)
-    assert np.array_equal(img_ctx, img_globals)  # bit-exact, not allclose
-    assert len(fm._mc_lut_forward.signatures) == n_sig_before  # ctx path: no new compile
+    img1 = fm.forward(Hg, ctx, phi=1e-4, chi=2e-4)
+    img2 = fm.forward(Hg, ctx, phi=1e-4, chi=2e-4)
+    assert np.array_equal(img1, img2)  # bit-exact, deterministic
+    assert len(fm._mc_lut_forward.signatures) == n_sig_before  # no new compile
 
 
 @pytest.mark.skipif(not _KERNELS, reason="no bootstrapped kernel on disk")
-def test_load_default_kernel_returns_matching_resolution_context():
-    res = fm._load_default_kernel(_KERNELS[0], compute_Hg=False)
+def test_load_default_kernel_returns_populated_resolution_context():
+    res = fm._load_default_kernel(_KERNELS[0])
     assert res is not None
-    assert np.array_equal(res.Resq_i, fm.Resq_i)
-    assert res.qi1_start == fm.qi1_start and res.qi1_step == fm.qi1_step
-    assert res.qi2_start == fm.qi2_start and res.qi2_step == fm.qi2_step
-    assert res.qi3_start == fm.qi3_start and res.qi3_step == fm.qi3_step
-    assert (res.npoints1, res.npoints2, res.npoints3) == (
-        fm.npoints1,
-        fm.npoints2,
-        fm.npoints3,
-    )
+    assert res.Resq_i is not None
+    assert res.qi1_step != 0.0 and res.qi2_step != 0.0 and res.qi3_step != 0.0
+    assert res.npoints1 is not None and res.npoints2 is not None and res.npoints3 is not None
     assert res.analytic_eval is None
-    assert res.loaded_kernel_path == fm._loaded_kernel_path
+    assert res.loaded_kernel_path == Path(_KERNELS[0])

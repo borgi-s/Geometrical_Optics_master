@@ -66,7 +66,9 @@ def test_pipeline_persists_true_bragg_theta_not_legacy_global(
     run_simulation(cfg, out)
 
     expected = run_theta(cfg)  # true Bragg ≈ 0.15661142 rad (8.97317°)
-    legacy = fm.theta_0  # import-time global ≈ 0.15666948 rad (8.97650°)
+    # The former import-time global ≈ 0.15666948 rad (8.97650°); deleted in #16
+    # Slice 5, retained here as the literal the fix must diverge from.
+    legacy = 17.953 / 2 * np.pi / 180
 
     # Sanity: the two values must actually differ so the assertion is meaningful.
     assert abs(expected - legacy) > 1e-5, (

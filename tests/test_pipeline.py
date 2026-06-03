@@ -307,15 +307,19 @@ class TestRunPostprocess:
                 (fake_im, fake_qi) if qi_return else (fake_im, None)
             ),
         )
-        # Sidestep the geometry globals — provide defaults that match the fake qi shape.
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.xl_start", 1e-5)
+        # Shrink the instrument ray-grid steps so plot_qi_cross_section indexes
+        # the fake (4,4,4) qi_field consistently. These are kept module-level
+        # constants; xl_start is now derived per-reflection in ctx.geometry, and
+        # Hg is recovered from the run's HDF5 provenance (#16 Slice 5).
         monkeypatch.setattr("dfxm_geo.pipeline.fm.yl_start", 1e-5)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.xl_steps", 4)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.yl_steps", 4)
         monkeypatch.setattr("dfxm_geo.pipeline.fm.zl_steps", 4)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", np.zeros((3, 3, 4, 4, 4)))
 
-        result = run_postprocess(output_dir, config)
+        # The fixture HDF5 carries no /1.1/dfxm_geo/Hg, so pass Hg explicitly
+        # (#16 Slice 5 removed the fm.Hg module-global fallback). forward() is
+        # mocked above, so the value is never actually used.
+        result = run_postprocess(output_dir, config, Hg=np.zeros((1, 3, 3)))
 
         # Analysis stored in /1.1/dfxm_geo/analysis/ inside the .h5
         h5_path = output_dir / "dfxm_geo.h5"
@@ -374,14 +378,14 @@ class TestRunPostprocess:
         tiny_h5_simulation_output: tuple[Path, SimulationConfig],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When no Hg source exists (no explicit arg, no /1.1/dfxm_geo/Hg in the
-        file, fm.Hg None, and the kernel load supplies none), run_postprocess
-        fails fast via the _resolve_postprocess_Hg priority-4 guard rather than
-        crashing inside fm.forward()."""
+        """When no Hg source exists (no explicit arg and no /1.1/dfxm_geo/Hg in
+        the file), run_postprocess fails fast via the _resolve_postprocess_Hg
+        guard rather than crashing inside fm.forward()."""
         output_dir, config = tiny_h5_simulation_output
-        # Neutralise the Task-3 self-load so it cannot fill fm.Hg from a kernel.
+        # Stub resolution loading so the (kernel-independent) Hg-resolution guard
+        # is what trips; #16 Slice 5 removed the fm.Hg module-global fallback, so
+        # the HDF5 simply has no /1.1/dfxm_geo/Hg to recover.
         monkeypatch.setattr("dfxm_geo.pipeline._load_resolution", lambda *a, **k: None)
-        monkeypatch.setattr("dfxm_geo.pipeline.fm.Hg", None)
         with pytest.raises(RuntimeError, match="Cannot postprocess"):
             run_postprocess(output_dir, config)
 

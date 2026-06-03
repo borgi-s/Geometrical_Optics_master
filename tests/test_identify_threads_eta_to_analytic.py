@@ -9,11 +9,16 @@ production code.
 
 Verification strategy (per Task 17 spec):
   - No HDF5 goldens generated (multi-minute LUT bootstrap avoided).
-  - Monkeypatch fm.Find_Hg + fm.Hg so no kernel is needed.
   - For each sub-mode, call run_identification() with a minimal config that
     carries eta=0.3 in reciprocal.  Short-circuit the sub-runner so it
     returns immediately without doing any simulation work.
-  - Assert fm._analytic_eval.eta == 0.3 after the call.
+  - Assert the ForwardContext handed to the sub-runner carries
+    ctx.resolution.analytic_eval.eta == 0.3.
+
+#16 Slice 5: _load_analytic_resolution no longer sets a module global; it
+RETURNS a ResolutionContext threaded into the ForwardContext that
+run_identification() passes to the sub-runner. We capture that ctx in the
+stub rather than reading a (deleted) fm._analytic_eval global.
 
 The test also independently verifies the shared gate directly, matching the
 style of test_forward_threads_eta_to_analytic.py (Task 16).
@@ -25,10 +30,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import numpy as np
 import pytest
 
-import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     IdentificationConfig,
     IdentificationMonteCarloConfig,
@@ -53,28 +56,21 @@ def _reciprocal_analytic(eta: float) -> ReciprocalConfig:
     )
 
 
-def _patch_fm_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Patch fm so _load_analytic_resolution doesn't need a kernel on disk."""
-    dummy_Hg = np.zeros((1, 3, 3))
-    dummy_q = np.array([1.0, 0.0, 0.0])
-    monkeypatch.setattr(fm, "Find_Hg", lambda *a, **kw: (dummy_Hg, dummy_q))
-    monkeypatch.setattr(fm, "Hg", dummy_Hg)
-
-
 # ---------------------------------------------------------------------------
 # Direct gate test — mirrors test_forward_threads_eta_to_analytic.py
 # ---------------------------------------------------------------------------
 
 
-def test_identify_reciprocal_config_eta_threads_to_analytic_eval(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """_load_resolution(IdentificationConfig.reciprocal) propagates eta to _analytic_eval."""
-    _patch_fm_kernel(monkeypatch)
+def test_identify_reciprocal_config_eta_threads_to_analytic_eval() -> None:
+    """_load_resolution(IdentificationConfig.reciprocal) propagates eta to analytic_eval.
+
+    #16 Slice 5: _load_resolution RETURNS a ResolutionContext; the analytic
+    backend lives on res.analytic_eval (no module global).
+    """
     cfg = IdentificationConfig(reciprocal=_reciprocal_analytic(eta=0.3))
-    _load_resolution(cfg.reciprocal)
-    assert fm._analytic_eval is not None
-    assert fm._analytic_eval.eta == pytest.approx(0.3)
+    res = _load_resolution(cfg.reciprocal)
+    assert res.analytic_eval is not None
+    assert res.analytic_eval.eta == pytest.approx(0.3)
 
 
 # ---------------------------------------------------------------------------
@@ -98,24 +94,22 @@ def _make_identify_config(mode: str, eta: float) -> IdentificationConfig:
 @pytest.mark.parametrize("mode", ["single", "multi", "z-scan"])
 def test_run_identification_threads_eta_for_each_sub_mode(
     mode: str,
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """run_identification() with eta=0.3 sets fm._analytic_eval.eta=0.3 for every sub-mode.
+    """run_identification() with eta=0.3 threads eta=0.3 into the sub-runner ctx.
 
     The sub-runner is short-circuited so no actual simulation runs.
     We only need to verify that _load_resolution is called (and thus eta is
-    threaded) before the sub-runner is ever reached — which is guaranteed by
-    the code structure at pipeline.py line ~1841.
+    threaded into the ForwardContext) before the sub-runner is ever reached.
 
-    fm._analytic_eval is captured at sub-runner dispatch (inside the guard),
-    since the state guard restores fm._analytic_eval to None on exit.
+    #16 Slice 5: run_identification builds a ForwardContext from the
+    _load_resolution return value and passes it as the 3rd positional arg to
+    each sub-runner. We capture that ctx in the stub and assert on
+    ctx.resolution.analytic_eval.eta (no module global).
     """
-    _patch_fm_kernel(monkeypatch)
-
     # Short-circuit the sub-runner dispatch so no kernel/HDF5 work runs.
-    # run_identification() calls _load_resolution *before* dispatching, so
-    # fm._analytic_eval is already set when this stub is invoked.
+    # run_identification() calls _load_resolution + build_forward_context
+    # *before* dispatching, so ctx is already built when this stub is invoked.
     stub_result: dict[str, Any] = {"n_images": 0, "output_dir": tmp_path}
 
     runner_map = {
@@ -127,9 +121,9 @@ def test_run_identification_threads_eta_for_each_sub_mode(
     captured: dict[str, Any] = {}
 
     def _capture_stub(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        # Runs inside run_identification's state guard, AFTER _load_resolution
-        # has threaded eta → fm._analytic_eval and BEFORE the guard restores it.
-        captured["eval"] = fm._analytic_eval
+        # Sub-runner signature is (config, output_dir, ctx); ctx is args[2].
+        ctx = kwargs.get("ctx", args[2] if len(args) > 2 else None)
+        captured["eval"] = ctx.resolution.analytic_eval if ctx is not None else None
         return stub_result
 
     from dfxm_geo.pipeline import run_identification
@@ -138,9 +132,9 @@ def test_run_identification_threads_eta_for_each_sub_mode(
         run_identification(_make_identify_config(mode, eta=0.3), tmp_path)
 
     assert captured["eval"] is not None, (
-        f"fm._analytic_eval was None at sub-runner dispatch (mode={mode!r}); "
+        f"ctx.resolution.analytic_eval was None at sub-runner dispatch (mode={mode!r}); "
         "_load_resolution did not run or did not select the analytic path."
     )
     assert captured["eval"].eta == pytest.approx(0.3), (
-        f"Expected eta=0.3 in _analytic_eval, got {captured['eval'].eta} (mode={mode!r})"
+        f"Expected eta=0.3 in analytic_eval, got {captured['eval'].eta} (mode={mode!r})"
     )

@@ -149,10 +149,16 @@ def test_fanout_end_to_end_runs_two_configs(tmp_path: Path) -> None:
         (manifest_dir / name).write_text(cfg_text)
 
     out_root = tmp_path / "out"
+    # Run the two configs SERIALLY (n_workers=1): each dfxm-forward subprocess
+    # builds a full px510 Hg (~100 MB), and two concurrent renders plus the
+    # resident pytest process exceed a memory-constrained box's RAM. The
+    # scheduler's concurrency itself is covered by the mock-runner tests above
+    # (the `active["max"] <= n_workers` assertion); this end-to-end test only
+    # needs to confirm both real configs produce valid float32 HDF5.
     results = fanout.run_manifest(
         fanout.discover_configs(manifest_dir),
         out_root,
-        n_workers=2,
+        n_workers=1,
         threads_per_worker=2,
     )
     assert len(results) == 2

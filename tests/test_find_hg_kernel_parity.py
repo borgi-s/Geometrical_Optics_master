@@ -21,6 +21,59 @@ from dfxm_geo.pipeline import (
 )
 
 
+def _default_ctx() -> fm.ForwardContext:
+    """A small-grid ForwardContext for the parity check (10x10x3 = 300 points).
+
+    Geometry is built at an arbitrary theta (0.30 rad) — its exact value is
+    immaterial because parity (fused kernel vs NumPy oracle) is a per-point
+    computation and both sides use this same ctx. The q_hkl/(h,k,l) used below
+    are the default (-1,1,-1) reflection. A small grid exercises the kernel
+    identically while keeping the test fast and memory-light
+    (the project's small-grid smoke-test convention; a full px510 grid would
+    materialize ~100 MB Fg arrays per side for no added coverage). #16 Slice 5:
+    geometry/instrument come from explicit builders, not module globals. The
+    resolution backend is a no-op stub — the population strain path only reads
+    ctx.geometry and ctx.instrument, so no kernel npz is required on disk.
+    """
+    instr = fm.InstrumentContext(
+        psize=fm.psize,
+        zl_rms=fm.zl_rms,
+        Npixels=30,
+        Nsub=1,
+        NN1=10,
+        NN2=10,
+        NN3=3,
+        Ud=fm.Ud,
+        Us=fm.Us,
+        flat_indices=np.zeros(300, dtype=np.int64),
+        yl_start=fm.yl_start,
+        xl_steps=10,
+        yl_steps=10,
+        zl_steps=3,
+    )
+    geom = fm.build_geometry_context(0.30, instr)
+    res = fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=None,
+        loaded_kernel_path=None,
+    )
+    return fm.ForwardContext(
+        instrument=instr,
+        geometry=geom,
+        resolution=res,
+        q_hkl=np.array([-1.0, 1.0, -1.0]) / np.sqrt(3),
+    )
+
+
 def _centered_pop():
     crystal = CrystalConfig(mode="centered", centered=CenteredCrystalConfig())
     return fm.build_dislocation_population(crystal, fov_lateral_um=abs(fm.yl_start) * 2e6, rng=None)
@@ -41,8 +94,8 @@ def _random_pop(ndis: int = 4, seed: int = 42):
 def test_fused_matches_numpy_oracle(pop_factory):
     pop = pop_factory()
     # S4 (#16): pass explicit ctx to both sides so parity holds for
-    # oblique reflections (globals are defaults here; S5 removes the fallback).
-    ctx = fm._context_from_globals()
+    # oblique reflections (#16 Slice 5 — no module-globals fallback).
+    ctx = _default_ctx()
     Hg_fast, q_fast = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1, ctx=ctx)
     Hg_ref, q_ref = fm._find_hg_from_population_numpy(
         pop, -1, 1, -1, S=fm._S_IDENTITY, rl=None, ctx=ctx
