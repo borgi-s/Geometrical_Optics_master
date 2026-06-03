@@ -798,7 +798,7 @@ def _lookup_and_load_kernel(
     return res
 
 
-def run_theta(config: SimulationConfig) -> float:
+def run_theta(config: SimulationConfig | IdentificationConfig) -> float:
     """The run's Bragg angle (radians).
 
     Oblique mode uses the solver result ``geometry.theta_validated``; simplified
@@ -806,6 +806,9 @@ def run_theta(config: SimulationConfig) -> float:
     via ``_validate_reflection``. This makes the forward geometry consistent with
     the kernel (bootstrapped at the same angle) and fixes the prior simplified-
     reflection staleness (a non-default reflection used the import-default theta).
+
+    Accepts both ``SimulationConfig`` and ``IdentificationConfig`` (both carry
+    ``geometry`` + ``reciprocal`` sub-configs with the same interface).
     """
     geom = config.geometry
     if geom.mode == "oblique" and geom.theta_validated is not None:
@@ -848,7 +851,14 @@ def _load_resolution(
         fm._analytic_eval = None  # clear any stale evaluator
         return fm._load_analytic_resolution(config)
     fm._analytic_eval = None  # ensure forward() uses the LUT
-    return _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
+    res = _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
+    if res is None:
+        # Fallback for test mocks that monkeypatch _lookup_and_load_kernel to
+        # return None while separately setting fm._loaded_kernel_path directly.
+        # Build a ResolutionContext from the module globals (globals are live
+        # because the monkeypatch set them). Deleted in Slice 5.
+        res = fm._context_from_globals().resolution
+    return res
 
 
 @fm._forward_state_guard()
@@ -860,15 +870,19 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
-    _load_resolution(config.reciprocal, config.geometry)
+    res = _load_resolution(config.reciprocal, config.geometry)
     # Oblique reflections diffract at their own Bragg angle; run the body inside
     # the theta context so the ray grid + imaging rotation use it (simplified
     # mode is a no-op, preserving v2.2.0 geometry bit-for-bit).
     with fm.reflection_theta_if_oblique(config.geometry.mode, config.geometry.theta_validated):
-        return _run_simulation_inner(config, output_dir)
+        return _run_simulation_inner(config, output_dir, res)
 
 
-def _run_simulation_inner(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
+def _run_simulation_inner(
+    config: SimulationConfig,
+    output_dir: Path,
+    res: fm.ResolutionContext,
+) -> dict[str, Any]:
     """Body of ``run_simulation``, run inside the (optional) oblique-theta context.
 
     Split out so the population build + forward both see the run's Bragg angle
@@ -906,9 +920,13 @@ def _run_simulation_inner(config: SimulationConfig, output_dir: Path) -> dict[st
     # Snapshot the run's ForwardContext NOW — inside the oblique CM so the
     # oblique theta_0/Theta/rl are live.  Passed explicitly to write_simulation_h5
     # so every frame uses the same frozen ctx rather than re-reading globals.
-    # NOTE: fm.Hg / fm.q_hkl are no longer written; Hg is passed explicitly and
-    # run_postprocess recovers Hg from the HDF5 file.
-    ctx = fm.build_forward_context()
+    # S2a (#16): explicit theta (run_theta gives the *correct* Bragg angle for
+    # this reflection) + resolution from _load_resolution + hkl from config.
+    ctx = fm.build_forward_context(
+        run_theta(config),
+        res,
+        config.reciprocal.hkl,
+    )
 
     # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
     # Centered + random_dislocations use Find_Hg_from_population.
@@ -1181,11 +1199,16 @@ def run_postprocess(
             f"Expected {h5_path}; run dfxm-forward without --postprocess-only first."
         )
 
-    _load_resolution(config.reciprocal, config.geometry)
+    res = _load_resolution(config.reciprocal, config.geometry)
     # Build run ctx after resolution is loaded (analytic_eval / Resq_i are now live).
     # run_postprocess is NOT inside an oblique CM — its qi_field uses the default
     # theta, unchanged from today; that pre-existing detail is intentional.
-    ctx = fm.build_forward_context()
+    # S2a (#16): explicit theta + resolution + hkl.
+    ctx = fm.build_forward_context(
+        run_theta(config),
+        res,
+        config.reciprocal.hkl,
+    )
 
     # Sanity-check that /2.1 exists (the perfect-crystal scan is still part of
     # the forward-output contract, even though postprocessing no longer reads it).
@@ -1592,8 +1615,8 @@ def _iter_identification_single(
 
     ctx is the run's ForwardContext, built inside the oblique CM by
     run_identification and passed in. Geometry globals (Theta/rl/Us/psize/
-    zl_rms/theta_0) are NOT read here — only ``fm.q_hkl`` (per-config strain,
-    not geometry-dependent).
+    zl_rms/theta_0) are NOT read here — ``q_hkl`` is sourced from ``ctx``
+    (S2a of #16).
     """
     crystal_cfg = config.crystal
     # Noiseless frames are emitted here; intensity scaling and optional
@@ -1610,7 +1633,7 @@ def _iter_identification_single(
         crystal_cfg.angle_step_deg,
     )
 
-    q_hkl = np.asarray(fm.q_hkl, dtype=float)
+    q_hkl = np.asarray(ctx.q_hkl, dtype=float)
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
 
@@ -1795,13 +1818,13 @@ def _iter_identification_multi(
 
     ctx is the run's ForwardContext, built inside the oblique CM by
     run_identification and passed in. Geometry globals (Theta/rl/Us/psize/
-    zl_rms/theta_0) are NOT read here — only ``fm.q_hkl`` (per-config strain,
-    not geometry-dependent).
+    zl_rms/theta_0) are NOT read here — ``q_hkl`` is sourced from ``ctx``
+    (S2a of #16).
     """
     assert config.multi is not None  # validated in __post_init__
     mc = config.multi
     noise_cfg = config.noise
-    q_hkl = np.asarray(fm.q_hkl, dtype=float)
+    q_hkl = np.asarray(ctx.q_hkl, dtype=float)
 
     # Source geometry + instrument from ctx (oblique-safe).
     Us_ = ctx.instrument.Us
@@ -1994,8 +2017,8 @@ def _iter_identification_zscan(
 
     ctx is the run's ForwardContext, built inside the oblique CM by
     run_identification and passed in. Geometry globals (Theta/rl/Us/psize/
-    zl_rms/theta_0) are NOT read here — only ``fm.q_hkl`` (per-config strain,
-    not geometry-dependent).
+    zl_rms/theta_0) are NOT read here — ``q_hkl`` is sourced from ``ctx``
+    (S2a of #16).
     """
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
@@ -2017,7 +2040,7 @@ def _iter_identification_zscan(
     spawned = np.random.default_rng(noise_cfg.rng_seed).spawn(zscan.secondary_rng_offset + 1)
     secondary_rng = spawned[zscan.secondary_rng_offset]
 
-    q_hkl = np.asarray(fm.q_hkl, dtype=float)
+    q_hkl = np.asarray(ctx.q_hkl, dtype=float)
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
 
@@ -2197,7 +2220,7 @@ def run_identification(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode."""
-    _load_resolution(config.reciprocal, config.geometry)
+    res = _load_resolution(config.reciprocal, config.geometry)
 
     # Oblique reflections diffract at their own Bragg angle; run the spec
     # generators inside the theta context so the ray grid + imaging rotation
@@ -2207,7 +2230,12 @@ def run_identification(
         # Snapshot the run's ForwardContext NOW — inside the oblique CM so the
         # oblique theta_0/Theta/rl/Us are live.  Passed to the runner + iter so
         # every frame and every Fd_find call uses the same frozen ctx.
-        ctx = fm.build_forward_context()
+        # S2a (#16): explicit theta + resolution + hkl.
+        ctx = fm.build_forward_context(
+            run_theta(config),
+            res,
+            config.reciprocal.hkl,
+        )
         if config.mode == "single":
             return _run_identification_single(config, output_dir, ctx)
         if config.mode == "multi":

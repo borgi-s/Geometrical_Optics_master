@@ -610,8 +610,11 @@ def write_identification_h5(
     """
 
     if kernel_npz is None:
-        kernel_npz = _fm._loaded_kernel_path
-        if kernel_npz is None and _fm._analytic_eval is None:
+        # S2a (#16): prefer ctx.resolution when ctx is available.
+        _res = ctx.resolution if ctx is not None else None
+        kernel_npz = _res.loaded_kernel_path if _res is not None else _fm._loaded_kernel_path
+        _analytic = _res.analytic_eval if _res is not None else _fm._analytic_eval
+        if kernel_npz is None and _analytic is None:
             raise RuntimeError(
                 "no resolution backend loaded — call _lookup_and_load_kernel(hkl, "
                 "keV) or _load_analytic_resolution(config) before writing "
@@ -714,9 +717,14 @@ def write_simulation_h5(
         when None.
     """
 
+    # Build (or adopt) a ForwardContext once per write call; shared read-only
+    # across all frames and scans.  Current callers that don't pass ctx get the
+    # globals snapshot so behaviour is unchanged.
+    _ctx = _fm._context_from_globals() if ctx is None else ctx
+
     if kernel_npz is None:
-        kernel_npz = _fm._loaded_kernel_path
-        if kernel_npz is None and _fm._analytic_eval is None:
+        kernel_npz = _ctx.resolution.loaded_kernel_path
+        if kernel_npz is None and _ctx.resolution.analytic_eval is None:
             raise RuntimeError(
                 "no resolution backend loaded — call _lookup_and_load_kernel(hkl, "
                 "keV) or _load_analytic_resolution(config) before writing HDF5 "
@@ -728,11 +736,6 @@ def write_simulation_h5(
 
     out_dir = path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build (or adopt) a ForwardContext once per write call; shared read-only
-    # across all frames and scans.  Current callers that don't pass ctx get the
-    # globals snapshot so behaviour is unchanged.
-    _ctx = _fm._context_from_globals() if ctx is None else ctx
 
     n = frames.n_frames
     phi_per_frame = frames.phi_pf
@@ -781,7 +784,7 @@ def write_simulation_h5(
         _resolved_mount = _DEFAULT_AL_CRYSTAL
     attrs_1_1["geometry_mode"] = geometry_mode
     attrs_1_1["eta"] = float(eta)
-    attrs_1_1["theta"] = float(_fm.theta)
+    attrs_1_1["theta"] = float(_ctx.geometry.theta_0)
     attrs_1_1["lattice"] = _resolved_mount.lattice
     attrs_1_1["a"] = float(_resolved_mount.a)
     attrs_1_1["mount_x"] = np.array(_resolved_mount.mount_x, dtype=np.int64)
@@ -862,7 +865,7 @@ def write_simulation_h5(
                 sample["dis"] = float(sample_dis)
             dfxm_geo_meta: dict = {
                 "q_hkl": q_hkl,
-                "theta": float(_fm.theta),
+                "theta": float(_ctx.geometry.theta_0),
                 "psize": float(_fm.psize),
                 "zl_rms": float(_fm.zl_rms),
             }

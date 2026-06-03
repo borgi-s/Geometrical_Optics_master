@@ -93,6 +93,7 @@ class ForwardContext:
     instrument: InstrumentContext
     geometry: GeometryContext
     resolution: ResolutionContext
+    q_hkl: np.ndarray  # unit reciprocal-lattice vector for this reflection
 
 
 # Repo root: the directory containing pyproject.toml. Derived from this
@@ -792,7 +793,11 @@ def _context_from_globals() -> ForwardContext:
     """
     instr = build_instrument_context()
     geom = GeometryContext(
-        theta_0=theta_0,
+        # Use `theta` (the mutable angle, modified by reflection_theta_if_oblique
+        # during oblique runs), not `theta_0` (the import-time constant).  In
+        # simplified mode they are identical; in oblique mode `theta` carries the
+        # solver result.  Deleted in Slice 5.
+        theta_0=theta,
         Theta=Theta,
         xl_start=xl_start,
         xl_range=xl_range,
@@ -817,28 +822,32 @@ def _context_from_globals() -> ForwardContext:
         analytic_eval=_analytic_eval,
         loaded_kernel_path=_loaded_kernel_path,
     )
-    return ForwardContext(instrument=instr, geometry=geom, resolution=res)
+    # Populate q_hkl from the module global (may be None before Find_Hg is called).
+    _q = np.asarray(q_hkl, dtype=float) if q_hkl is not None else np.zeros(3)
+    return ForwardContext(instrument=instr, geometry=geom, resolution=res, q_hkl=_q)
 
 
-def build_forward_context(theta_0_: "float | None" = None) -> ForwardContext:
-    """Compose a context for a run. theta_0_ defaults to the current global."""
-    instr = build_instrument_context()
-    geom = build_geometry_context(theta_0 if theta_0_ is None else theta_0_, instr)
-    res = ResolutionContext(
-        Resq_i=Resq_i,
-        qi1_start=qi1_start or 0.0,
-        qi1_step=qi1_step or 0.0,
-        qi2_start=qi2_start or 0.0,
-        qi2_step=qi2_step or 0.0,
-        qi3_start=qi3_start or 0.0,
-        qi3_step=qi3_step or 0.0,
-        npoints1=npoints1,
-        npoints2=npoints2,
-        npoints3=npoints3,
-        analytic_eval=_analytic_eval,
-        loaded_kernel_path=_loaded_kernel_path,
-    )
-    return ForwardContext(instrument=instr, geometry=geom, resolution=res)
+def build_forward_context(
+    theta_run: float,
+    resolution: "ResolutionContext",
+    hkl: "tuple[int, int, int]",
+    instrument: "InstrumentContext | None" = None,
+) -> "ForwardContext":
+    """Compose a context for a run from explicit theta, resolution, and hkl.
+
+    S2a (#16): breaks the globals round-trip.  ``theta_run`` is sourced from
+    ``run_theta(config)`` (the *correct* Bragg angle for the reflection), not
+    the stale ``fm.theta_0`` import-time global.  ``resolution`` comes from the
+    ``_load_resolution`` return value.  ``hkl`` drives the q_hkl unit vector.
+
+    ``instrument`` is optional; when omitted it is built from the current
+    module globals (psize/Npixels/Nsub/…).
+    """
+    instr = instrument if instrument is not None else build_instrument_context()
+    geom = build_geometry_context(theta_run, instr)
+    q = np.asarray(hkl, dtype=float)
+    q_hkl_ = q / np.sqrt(float(q @ q))
+    return ForwardContext(instrument=instr, geometry=geom, resolution=resolution, q_hkl=q_hkl_)
 
 
 def precompute_forward_static(
@@ -854,12 +863,17 @@ def precompute_forward_static(
     read-only and safe to share across worker threads (the dynamic half never
     mutates it).
 
-    ``ctx`` is optional; when provided, ``Us`` is sourced from it instead of
-    the module global. ``q_hkl`` is a per-config strain global and is NOT
-    part of ``ForwardContext`` by design — it is always read from the module.
+    ``ctx`` is optional; when provided, ``Us`` and ``q_hkl`` are sourced from
+    it instead of the module globals.  When ``ctx`` is None the module globals
+    are used as a fallback (deleted in Slice 5).
     """
-    Us_ = Us if ctx is None else ctx.instrument.Us
-    qs = Us_ @ Hg @ q_hkl  # q_hkl: per-config strain (module global), not in ForwardContext
+    if ctx is None:
+        Us_ = Us
+        q_hkl_ = q_hkl  # module global fallback
+    else:
+        Us_ = ctx.instrument.Us
+        q_hkl_ = ctx.q_hkl
+    qs = Us_ @ Hg @ q_hkl_
     return qs.squeeze().T
 
 
