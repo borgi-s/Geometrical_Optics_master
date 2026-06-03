@@ -872,11 +872,11 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
     res = _load_resolution(config.reciprocal, config.geometry)
-    # Oblique reflections diffract at their own Bragg angle; run the body inside
-    # the theta context so the ray grid + imaging rotation use it (simplified
-    # mode is a no-op, preserving v2.2.0 geometry bit-for-bit).
-    with fm.reflection_theta_if_oblique(config.geometry.mode, config.geometry.theta_validated):
-        return _run_simulation_inner(config, output_dir, res)
+    # S3 (#16): CM call site retired. Geometry is built from run_theta(config)
+    # inside build_forward_context (called in _run_simulation_inner), which uses
+    # the same expressions the CM used to rebuild Theta/rl/prob_z. Z_shift callers
+    # pass xl_range_override=ctx.geometry.xl_range so oblique z-scans stay correct.
+    return _run_simulation_inner(config, output_dir, res)
 
 
 def _run_simulation_inner(
@@ -884,10 +884,12 @@ def _run_simulation_inner(
     output_dir: Path,
     res: fm.ResolutionContext,
 ) -> dict[str, Any]:
-    """Body of ``run_simulation``, run inside the (optional) oblique-theta context.
+    """Body of ``run_simulation``.
 
-    Split out so the population build + forward both see the run's Bragg angle
-    (see ``forward_model.reflection_theta_if_oblique``).
+    Builds the dislocation population, snapshots a ForwardContext via
+    ``build_forward_context(run_theta(config), ...)`` (oblique-safe: geometry
+    is derived from the correct Bragg angle rather than module globals), then
+    runs the scan frames and writes the HDF5 output.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -918,11 +920,10 @@ def _run_simulation_inner(
         flush=True,
     )
 
-    # Snapshot the run's ForwardContext NOW — inside the oblique CM so the
-    # oblique theta_0/Theta/rl are live.  Passed explicitly to write_simulation_h5
-    # so every frame uses the same frozen ctx rather than re-reading globals.
-    # S2a (#16): explicit theta (run_theta gives the *correct* Bragg angle for
-    # this reflection) + resolution from _load_resolution + hkl from config.
+    # Snapshot the run's ForwardContext.  build_forward_context calls
+    # build_geometry_context(run_theta(config), ...) which computes Theta/rl/prob_z
+    # from the correct Bragg angle (oblique or simplified) — no module globals needed.
+    # S2a+S3 (#16): CM call site removed; ctx is the sole geometry source.
     ctx = fm.build_forward_context(
         run_theta(config),
         res,
@@ -962,7 +963,9 @@ def _run_simulation_inner(
             # z != 0: use Z_shift for the per-z-layer rl (takes precedence over ctx).
             # z == 0: no explicit rl → Find_Hg_from_population uses ctx.geometry.rl
             # (the oblique-aware grid built above).
-            rl_eff = fm.Z_shift(z) if z != 0.0 else None
+            # Pass xl_range_override so oblique runs use the correct x-lateral extent
+            # (S3 of #16: CM removed, ctx carries the oblique geometry).
+            rl_eff = fm.Z_shift(z, xl_range_override=ctx.geometry.xl_range) if z != 0.0 else None
             return fm.Find_Hg_from_population(
                 population,
                 h=config.reciprocal.hkl[0],
@@ -1614,10 +1617,10 @@ def _iter_identification_single(
     with `rl_eff = fm.Z_shift(z)` substituted into `Fd_find_mixed`.
     When z is fixed, z_samples has length 1 (no extra scans emitted).
 
-    ctx is the run's ForwardContext, built inside the oblique CM by
-    run_identification and passed in. Geometry globals (Theta/rl/Us/psize/
-    zl_rms/theta_0) are NOT read here — ``q_hkl`` is sourced from ``ctx``
-    (S2a of #16).
+    ctx is the run's ForwardContext, built by run_identification via
+    build_forward_context(run_theta(config), ...) and passed in. Geometry globals
+    (Theta/rl/Us/psize/zl_rms/theta_0) are NOT read here — all geometry is
+    sourced from ``ctx`` (S2a+S3 of #16).
     """
     crystal_cfg = config.crystal
     # Noiseless frames are emitted here; intensity scaling and optional
@@ -1642,6 +1645,7 @@ def _iter_identification_single(
     Us_ = ctx.instrument.Us
     Theta_ = ctx.geometry.Theta
     rl_ = ctx.geometry.rl
+    xl_range_ = ctx.geometry.xl_range
     psize_ = ctx.instrument.psize
     zl_rms_ = ctx.instrument.zl_rms
     theta_0_ = ctx.geometry.theta_0
@@ -1655,7 +1659,8 @@ def _iter_identification_single(
         # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); rl_
         # and fm.Z_shift(...) are both in metres, so scale by 1e6 — matching the
         # forward path (strain_cache.py:61, forward_model.py:1139).
-        rl_eff = (fm.Z_shift(z_float) if z_float != 0.0 else rl_) * 1e6
+        # xl_range_override keeps the oblique x-lateral extent correct (S3 #16).
+        rl_eff = (fm.Z_shift(z_float, xl_range_override=xl_range_) if z_float != 0.0 else rl_) * 1e6
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for plane in planes:
@@ -1817,10 +1822,10 @@ def _iter_identification_multi(
     When z is fixed, z_samples has length 1 — identical to pre-z-aware
     behaviour.
 
-    ctx is the run's ForwardContext, built inside the oblique CM by
-    run_identification and passed in. Geometry globals (Theta/rl/Us/psize/
-    zl_rms/theta_0) are NOT read here — ``q_hkl`` is sourced from ``ctx``
-    (S2a of #16).
+    ctx is the run's ForwardContext, built by run_identification via
+    build_forward_context(run_theta(config), ...) and passed in. Geometry globals
+    (Theta/rl/Us/psize/zl_rms/theta_0) are NOT read here — all geometry is
+    sourced from ``ctx`` (S2a+S3 of #16).
     """
     assert config.multi is not None  # validated in __post_init__
     mc = config.multi
@@ -1831,6 +1836,7 @@ def _iter_identification_multi(
     Us_ = ctx.instrument.Us
     Theta_ = ctx.geometry.Theta
     rl_ = ctx.geometry.rl
+    xl_range_ = ctx.geometry.xl_range
     psize_ = ctx.instrument.psize
     zl_rms_ = ctx.instrument.zl_rms
     theta_0_ = ctx.geometry.theta_0
@@ -1854,7 +1860,8 @@ def _iter_identification_multi(
         # Fd_find_mixed expects the ray grid in MICROMETRES (b is in µm); rl_
         # and fm.Z_shift(...) are both in metres, so scale by 1e6 — matching the
         # forward path (strain_cache.py:61, forward_model.py:1139).
-        rl_eff = (fm.Z_shift(z_float) if z_float != 0.0 else rl_) * 1e6
+        # xl_range_override keeps the oblique x-lateral extent correct (S3 #16).
+        rl_eff = (fm.Z_shift(z_float, xl_range_override=xl_range_) if z_float != 0.0 else rl_) * 1e6
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for _ in range(mc.n_samples):
@@ -2016,10 +2023,10 @@ def _iter_identification_zscan(
     All frames are noiseless; intensity scaling / Poisson noise are
     applied post-write by ``_maybe_apply_poisson_noise``.
 
-    ctx is the run's ForwardContext, built inside the oblique CM by
-    run_identification and passed in. Geometry globals (Theta/rl/Us/psize/
-    zl_rms/theta_0) are NOT read here — ``q_hkl`` is sourced from ``ctx``
-    (S2a of #16).
+    ctx is the run's ForwardContext, built by run_identification via
+    build_forward_context(run_theta(config), ...) and passed in. Geometry globals
+    (Theta/rl/Us/psize/zl_rms/theta_0) are NOT read here — all geometry is
+    sourced from ``ctx`` (S2a+S3 of #16).
     """
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
@@ -2048,6 +2055,7 @@ def _iter_identification_zscan(
     # Source geometry + instrument from ctx (oblique-safe).
     Us_ = ctx.instrument.Us
     Theta_ = ctx.geometry.Theta
+    xl_range_ = ctx.geometry.xl_range
     psize_ = ctx.instrument.psize
     zl_rms_ = ctx.instrument.zl_rms
     theta_0_ = ctx.geometry.theta_0
@@ -2057,7 +2065,8 @@ def _iter_identification_zscan(
         n_frames = frames_at_z.n_frames
         # Fd_find_* expect the ray grid in MICROMETRES (b is in µm); Z_shift
         # returns metres, so scale by 1e6 — matching the forward path.
-        rl_shifted = fm.Z_shift(z_off) * 1e6
+        # xl_range_override keeps the oblique x-lateral extent correct (S3 #16).
+        rl_shifted = fm.Z_shift(z_off, xl_range_override=xl_range_) * 1e6
         for plane in planes:
             b_table = _burgers_vectors(plane)
             b_indices = (
@@ -2223,25 +2232,20 @@ def run_identification(
     """Dispatch to single / multi / z-scan runner based on config.mode."""
     res = _load_resolution(config.reciprocal, config.geometry)
 
-    # Oblique reflections diffract at their own Bragg angle; run the spec
-    # generators inside the theta context so the ray grid + imaging rotation
-    # use it (simplified mode is a no-op, preserving v2.2.0 geometry exactly).
-    # Mirrors run_simulation.
-    with fm.reflection_theta_if_oblique(config.geometry.mode, config.geometry.theta_validated):
-        # Snapshot the run's ForwardContext NOW — inside the oblique CM so the
-        # oblique theta_0/Theta/rl/Us are live.  Passed to the runner + iter so
-        # every frame and every Fd_find call uses the same frozen ctx.
-        # S2a (#16): explicit theta + resolution + hkl.
-        ctx = fm.build_forward_context(
-            run_theta(config),
-            res,
-            config.reciprocal.hkl,
-        )
-        if config.mode == "single":
-            return _run_identification_single(config, output_dir, ctx)
-        if config.mode == "multi":
-            return _run_identification_multi(config, output_dir, ctx)
-        return _run_identification_zscan(config, output_dir, ctx)
+    # S3 (#16): CM call site retired. build_forward_context uses run_theta(config)
+    # (the correct Bragg angle) to rebuild Theta/rl/prob_z via build_geometry_context
+    # — same expressions the CM used. Z_shift callers pass xl_range_override so
+    # oblique z-scans remain correct without touching module globals.
+    ctx = fm.build_forward_context(
+        run_theta(config),
+        res,
+        config.reciprocal.hkl,
+    )
+    if config.mode == "single":
+        return _run_identification_single(config, output_dir, ctx)
+    if config.mode == "multi":
+        return _run_identification_multi(config, output_dir, ctx)
+    return _run_identification_zscan(config, output_dir, ctx)
 
 
 def cli_main_identify(argv: list[str] | None = None) -> int:

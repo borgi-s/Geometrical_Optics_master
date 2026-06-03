@@ -2,12 +2,11 @@
 
 The forward path (`SimulationConfig` / `run_simulation`) already threads the
 TOML `[geometry]` block into a `GeometryConfig`, routes it to the resolution
-backend, and runs the body inside `reflection_theta_if_oblique` so the ray
-grid + imaging rotation use the run reflection's Bragg angle
-(test_pipeline_oblique_wiring.py). The identification path had none of this:
-`IdentificationConfig` carried no geometry field, `load_identification_config`
-ignored `[geometry]`, and `run_identification` called `_load_resolution`
-without geometry and never entered the theta context — so an oblique
+backend, and builds a ForwardContext via ``build_forward_context(run_theta(config),
+...)`` so the ray grid + imaging rotation use the run reflection's Bragg angle.
+The identification path had none of this: `IdentificationConfig` carried no
+geometry field, `load_identification_config` ignored `[geometry]`, and
+`run_identification` called `_load_resolution` without geometry — so an oblique
 `dfxm-identify` run silently fell back to the simplified Al-111 kernel.
 
 These tests pin the identify-side wiring as the mirror of the forward side:
@@ -17,7 +16,9 @@ These tests pin the identify-side wiring as the mirror of the forward side:
      (eta + validated theta + mount), propagates eta onto ReciprocalConfig,
      and still builds the IdentificationCrystalConfig (mount keys stripped).
   4. run_identification threads config.geometry into _load_resolution AND
-     wraps the dispatch in reflection_theta_if_oblique(mode, theta).
+     builds a ForwardContext whose geometry.theta_0 equals run_theta(config)
+     (S3 of #16: the reflection_theta_if_oblique CM call site is retired;
+     geometry is sourced from build_forward_context, not module globals).
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     GeometryConfig,
     IdentificationConfig,
@@ -115,26 +115,45 @@ def test_load_identification_config_parses_oblique_geometry(tmp_path: Path) -> N
 def test_run_identification_threads_geometry(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """run_identification passes config.geometry to _load_resolution and runs
-    the dispatch inside reflection_theta_if_oblique(mode, theta)."""
-    import contextlib
+    """run_identification passes config.geometry to _load_resolution and
+    builds a ForwardContext whose geometry.theta_0 equals run_theta(config).
 
+    S3 of #16: the reflection_theta_if_oblique CM call site is retired;
+    geometry now comes from build_forward_context(run_theta(config), ...) so
+    the ctx passed to the runners carries the correct oblique Bragg angle.
+    """
     captured: dict = {}
+
+    # Build a stub ResolutionContext so build_forward_context can be called
+    # without needing a kernel on disk.  We only care that ctx.geometry.theta_0
+    # is set correctly; the resolution fields are not exercised by this test.
+    from dfxm_geo.direct_space.forward_model import ResolutionContext
+
+    stub_resolution = ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=1.0,
+        qi2_start=0.0,
+        qi2_step=1.0,
+        qi3_start=0.0,
+        qi3_step=1.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=None,
+        loaded_kernel_path=None,
+    )
 
     def fake_load_resolution(reciprocal, geometry=None):
         captured["geometry"] = geometry
-
-    @contextlib.contextmanager
-    def spy_theta_ctx(mode, theta):
-        captured["theta_ctx"] = (mode, theta)
-        yield
+        return stub_resolution
 
     def fake_single(config, output_dir, ctx):
         captured["ran"] = True
+        captured["ctx_theta"] = ctx.geometry.theta_0
         return {"n_images": 0, "output_dir": output_dir}
 
     monkeypatch.setattr("dfxm_geo.pipeline._load_resolution", fake_load_resolution)
-    monkeypatch.setattr(fm, "reflection_theta_if_oblique", spy_theta_ctx)
     monkeypatch.setattr("dfxm_geo.pipeline._run_identification_single", fake_single)
 
     cfg = IdentificationConfig(
@@ -143,8 +162,11 @@ def test_run_identification_threads_geometry(
     )
     run_identification(cfg, tmp_path)
 
+    # Geometry config threaded through to _load_resolution.
     assert captured["geometry"].mode == "oblique"
-    assert captured["theta_ctx"] == ("oblique", pytest.approx(_OBLIQUE_THETA))
+    # ctx passed to the runner carries the oblique Bragg angle (not the
+    # simplified default ~0.1567 rad = 8.98 deg).
+    assert captured["ctx_theta"] == pytest.approx(_OBLIQUE_THETA, abs=1e-6)
     assert captured["ran"] is True
 
 

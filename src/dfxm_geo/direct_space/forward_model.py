@@ -1116,7 +1116,7 @@ def forward(
     )
 
 
-def Z_shift(offset_um: float) -> np.ndarray:
+def Z_shift(offset_um: float, *, xl_range_override: float | None = None) -> np.ndarray:
     """Return an `rl` grid shifted along the z axis by `offset_um` µm.
 
     Uses the module's existing detector ray-grid parameters (xl_range,
@@ -1131,14 +1131,19 @@ def Z_shift(offset_um: float) -> np.ndarray:
         offset_um: z offset in micrometres. Positive values move the
             dislocation core "up" in the lab z direction (equivalent to
             shifting `rl` "down" by the same amount).
+        xl_range_override: when provided, overrides the module-level
+            ``xl_range`` (which is the default, simplified-geometry value).
+            Pass ``ctx.geometry.xl_range`` for oblique runs so the shifted
+            grid uses the correct oblique x-lateral extent. S3 of #16.
 
     Returns:
         (3, X) coordinates in metres, same shape as `rl`.
     """
     offset_m = offset_um * 1e-6
+    xl_range_ = xl_range if xl_range_override is None else xl_range_override
     return np.vstack(  # type: ignore[call-overload]
         np.mgrid[
-            -xl_range : xl_range : complex(xl_steps),
+            -xl_range_ : xl_range_ : complex(xl_steps),
             -yl_range : yl_range : complex(yl_steps),
             -zl_range - offset_m : zl_range - offset_m : complex(zl_steps),
         ]
