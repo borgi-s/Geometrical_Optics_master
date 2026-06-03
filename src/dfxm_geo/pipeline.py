@@ -1270,17 +1270,17 @@ def run_postprocess(
     plot_mosaicity_maps(
         phi_list,
         chi_list,
-        fm.xl_start,
-        fm.yl_start,
+        ctx.geometry.xl_start,  # S4 (#16): xl_start is geometry (theta-dependent; deleted in S5)
+        ctx.instrument.yl_start,
         fig_dir / "mosaicity_maps.svg",
     )
     plot_qi_cross_section(
         qi_field,
-        fm.xl_start,
-        fm.yl_start,
-        fm.xl_steps,
-        fm.yl_steps,
-        fm.zl_steps,
+        ctx.geometry.xl_start,  # S4 (#16): xl_start is geometry (theta-dependent; deleted in S5)
+        ctx.instrument.yl_start,
+        ctx.instrument.xl_steps,
+        ctx.instrument.yl_steps,
+        ctx.instrument.zl_steps,
         fig_dir / "qi_cross_section.svg",
     )
     return {
