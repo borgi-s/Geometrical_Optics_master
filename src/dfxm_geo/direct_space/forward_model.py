@@ -409,8 +409,15 @@ def Find_Hg(
     )
 
     # Pick the rl grid: shifted if z_offset_um != 0, else ctx or module-level rl.
+    # Z_shift must use the run's xl_range (oblique-dependent) when a ctx is given,
+    # else the default global — mirror the 4 pipeline Z_shift call sites (#16 S3).
     rl_eff = (
-        Z_shift(z_offset_um) if z_offset_um != 0.0 else (ctx.geometry.rl if ctx is not None else rl)
+        Z_shift(
+            z_offset_um,
+            xl_range_override=ctx.geometry.xl_range if ctx is not None else None,
+        )
+        if z_offset_um != 0.0
+        else (ctx.geometry.rl if ctx is not None else rl)
     )
     Theta_ = ctx.geometry.Theta if ctx is not None else Theta
     Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta_, dis, ndis, Fg_path, S=S)
