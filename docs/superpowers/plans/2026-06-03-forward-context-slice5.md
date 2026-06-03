@@ -119,6 +119,7 @@ Verify `q / np.sqrt(q @ q)` is bit-identical to `Find_Hg`'s `np.asarray([h,k,l])
 
 - [ ] **`_find_hg_from_population_numpy`:** add a `ctx` param (mirror `Find_Hg_from_population`); source `Theta`/`Us` from `ctx` (Us via `ctx.instrument.Us`, Theta via `ctx.geometry.Theta`) with globals fallback. Update the 2 test callers to pass an explicit `ForwardContext` (a default-reflection ctx built via `build_forward_context(run_theta(default_cfg), res, q_hkl)` or a small fixture). Both sides use the same Theta → parity holds.
 - [ ] **`migrate.py`:** build a one-off `ForwardContext` for the IUCrJ-2024 Al `(-1,1,-1)`@17 keV default — load the kernel (`_load_resolution`/`_lookup_and_load_kernel`, which it needs anyway for `Find_Hg`), compute `run_theta` for that reflection, build `q_hkl`, compose the ctx. Re-source `_fm.theta`→`ctx.geometry.theta_0` (165/196), `_fm._loaded_kernel_path`→`ctx.resolution.loaded_kernel_path` (130), and pass `ctx` to its `_fm.Find_Hg(...)` call (98). Verify the migrate CLI tests pass.
+- [ ] **`run_postprocess` plot axis labels** (`pipeline.py:~1273/1279`): reads `fm.xl_start` (θ-dependent geometry global) for the mosaicity/qi figure axes — uses the simplified value even for oblique runs (pre-existing). `run_postprocess` builds `ctx` (S2), so source these from `ctx.geometry.xl_start`. (Flagged by the S3 review.)
 - [ ] **`images.py`:** delete the dead `.npy` forward path (`save_image`, `save_images_parallel`, and the `forward_from_static`/`precompute_forward_static` calls). Confirm zero `src/` callers first (already verified). Delete/adjust any test that referenced them.
 - [ ] **Verify:** `tests/test_find_hg_kernel_parity.py`, `tests/test_forward_model_backlog.py`, the migrate tests, and any images test green; mypy. Commit `refactor(#16): thread ctx into numpy oracle + migrate; delete dead images forward path`.
 
@@ -128,10 +129,10 @@ Verify `q / np.sqrt(q @ q)` is bit-identical to `Find_Hg`'s `np.asarray([h,k,l])
 
 - [ ] **Pre-deletion gate — clean grep (both forms):**
 ```
-rg "fm\.(Hg|q_hkl|theta|theta_0|Theta|rl|prob_z|Resq_i|_analytic_eval|_loaded_kernel_path)\b" src/   # external readers → must be 0 (except intra-file none)
+rg "fm\.(Hg|q_hkl|theta|theta_0|Theta|rl|prob_z|xl_start|xl_range|Resq_i|_analytic_eval|_loaded_kernel_path)\b" src/   # external readers → must be 0 (xl_start/xl_range incl. — run_postprocess reads them)
 rg "_context_from_globals|reflection_theta_if_oblique" src/
 # intra-module bare-name readers (the grep above misses these):
-rg "\b(Theta|rl|prob_z|theta_0|theta|Resq_i|qi1_start|qi1_step|qi2_start|qi2_step|qi3_start|qi3_step|npoints1|npoints2|npoints3|qi_starts|qi_steps|_analytic_eval|Hg|q_hkl|_loaded_kernel_path)\b\s*[^=]" src/dfxm_geo/direct_space/forward_model.py
+rg "\b(Theta|rl|prob_z|theta_0|theta|xl_start|xl_range|Resq_i|qi1_start|qi1_step|qi2_start|qi2_step|qi3_start|qi3_step|npoints1|npoints2|npoints3|qi_starts|qi_steps|_analytic_eval|Hg|q_hkl|_loaded_kernel_path)\b\s*[^=]" src/dfxm_geo/direct_space/forward_model.py
 ```
 Resolve every remaining reader before deleting. Expected legitimate remaining readers: only `_context_from_globals`/`build_forward_context`'s OWN reads (deleted here) and the loaders' own `global ...; X = ...` assignments (removed here).
 - [ ] **Loaders stop setting globals:** remove the `global ...` declarations + assignments in `_load_default_kernel`/`_load_analytic_resolution` (they return the `ResolutionContext` only). Remove `compute_Hg`'s global write (and the param if now unused) — production passes `Hg` explicitly; the loader no longer computes/stores it. Keep `q_hkl` computation only insofar as it flows into the returned context / the run's `build_forward_context` call.
