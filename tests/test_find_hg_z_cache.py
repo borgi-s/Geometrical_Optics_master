@@ -76,9 +76,10 @@ def test_z_offset_nonzero_uses_shifted_rl(tmp_path, monkeypatch):
     calls: list[float] = []
     real_z_shift = fm.Z_shift
 
-    def spy(offset_um: float):
+    def spy(offset_um: float, **kwargs: object):
+        # Accept Find_Hg's xl_range_override kwarg (#16 S3) and forward it.
         calls.append(float(offset_um))
-        return real_z_shift(offset_um)
+        return real_z_shift(offset_um, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(fm, "Z_shift", spy)
     fm.Find_Hg(
