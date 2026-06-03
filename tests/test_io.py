@@ -1,12 +1,11 @@
-"""Unit tests for dfxm_geo.io.images (save_images_parallel writer) and io.strain_cache.
+"""Unit tests for dfxm_geo.io.images (_auto_max_workers) and io.strain_cache.
 
 Note: load_image, load_images, load_images_parallel, and save_edfs were removed
-in v1.1.0.  Their tests are deleted here accordingly.  The HDF5 equivalents live
-in io/hdf5.py; the migration helper is in io/migrate.py.
+in v1.1.0.  save_image and save_images_parallel were removed in S4 of the
+ForwardContext refactor (#16) — identification migrated to HDF5 output in
+v1.2.0.  The HDF5 equivalents live in io/hdf5.py; the migration helper is in
+io/migrate.py.
 """
-
-from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
-from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -156,74 +155,6 @@ def test_check_folder_no_op_when_exists(tmp_path):
     assert (tmp_path / target).is_dir()
 
 
-def test_save_images_parallel_uses_explicit_max_workers(tmp_path, monkeypatch):
-    """The max_workers kwarg overrides env var and auto-default."""
-    import dfxm_geo.direct_space.forward_model as fm_mod
-    import dfxm_geo.io.images as images_mod
-
-    # Mock the compute so we don't need the real kernel. save_images_parallel
-    # precomputes base_qc via precompute_forward_static(Hg) and save_image calls
-    # forward_from_static(base_qc, ...) — patch both source module attributes.
-    monkeypatch.setattr(fm_mod, "precompute_forward_static", lambda Hg: np.zeros((3, 1)))
-    monkeypatch.setattr(
-        fm_mod, "forward_from_static", lambda base_qc, phi=0, chi=0: np.zeros((4, 4))
-    )
-
-    captured = {}
-
-    class _SpyExecutor(_ThreadPoolExecutor):
-        def __init__(self, max_workers=None, **kwargs):
-            captured["max_workers"] = max_workers
-            super().__init__(max_workers=max_workers, **kwargs)
-
-    monkeypatch.setenv("DFXM_MAX_WORKERS", "99")  # env var should be ignored
-    with patch.object(images_mod, "ThreadPoolExecutor", _SpyExecutor):
-        images_mod.save_images_parallel(
-            Hg=np.zeros((1, 3, 3)),
-            phi_range=0.01,
-            phi_steps=2,
-            chi_range=0.01,
-            chi_steps=2,
-            fpath=str(tmp_path),
-            fn_prefix="/x_",
-            ftype=".npy",
-            max_workers=3,
-        )
-    assert captured["max_workers"] == 3
-
-
-def test_save_images_parallel_falls_back_to_env_var(tmp_path, monkeypatch):
-    """When max_workers is None, DFXM_MAX_WORKERS env var is honored."""
-    import dfxm_geo.direct_space.forward_model as fm_mod
-    import dfxm_geo.io.images as images_mod
-
-    monkeypatch.setattr(fm_mod, "precompute_forward_static", lambda Hg: np.zeros((3, 1)))
-    monkeypatch.setattr(
-        fm_mod, "forward_from_static", lambda base_qc, phi=0, chi=0: np.zeros((4, 4))
-    )
-
-    captured = {}
-
-    class _SpyExecutor(_ThreadPoolExecutor):
-        def __init__(self, max_workers=None, **kwargs):
-            captured["max_workers"] = max_workers
-            super().__init__(max_workers=max_workers, **kwargs)
-
-    monkeypatch.setenv("DFXM_MAX_WORKERS", "5")
-    with patch.object(images_mod, "ThreadPoolExecutor", _SpyExecutor):
-        images_mod.save_images_parallel(
-            Hg=np.zeros((1, 3, 3)),
-            phi_range=0.01,
-            phi_steps=2,
-            chi_range=0.01,
-            chi_steps=2,
-            fpath=str(tmp_path),
-            fn_prefix="/x_",
-            ftype=".npy",
-        )
-    assert captured["max_workers"] == 5
-
-
 def test_auto_max_workers_returns_positive_int(monkeypatch):
     """_auto_max_workers must always return a positive int regardless of psutil presence."""
     from dfxm_geo.io.images import _auto_max_workers
@@ -293,39 +224,6 @@ def test_auto_max_workers_shared_between_io_modules():
     from dfxm_geo.io import hdf5, images
 
     assert hdf5._auto_max_workers is images._auto_max_workers
-
-
-def test_save_image_does_not_misunpack_forward(tmp_path, monkeypatch):
-    """save_image unpacked forward() as a 2-tuple; this regression pins the single-array contract.
-
-    Mocks forward_from_static() to return a single np.ndarray (the default) and
-    confirms save_image writes the file without raising ValueError.
-    """
-    import dfxm_geo.direct_space.forward_model as fm_mod
-    import dfxm_geo.io.images as images_mod
-
-    expected_array = np.arange(12, dtype=float).reshape(3, 4)
-
-    def fake_forward_from_static(base_qc, phi=0.0, chi=0.0, *args, **kwargs):
-        return expected_array
-
-    monkeypatch.setattr(fm_mod, "forward_from_static", fake_forward_from_static)
-    args = (
-        np.zeros((3, 1)),  # base_qc (unused by fake_forward_from_static)
-        0.0,  # phi
-        0.0,  # chi
-        0,  # j
-        0,  # i
-        str(tmp_path),  # fpath
-        "/test_",  # fn_prefix
-        ".npy",  # ftype
-    )
-    images_mod.save_image(args)
-
-    out_file = tmp_path / "test_0000_0000.npy"
-    assert out_file.is_file()
-    loaded = np.load(out_file)
-    np.testing.assert_array_equal(loaded, expected_array)
 
 
 class TestLoadOrGenerateHgSampleRemount:
