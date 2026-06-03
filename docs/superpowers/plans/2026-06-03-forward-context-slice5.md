@@ -18,6 +18,10 @@
 
 ---
 
+## θ decision (Sina, 2026-06-03): **true Bragg everywhere; regenerate the default goldens**
+
+`run_theta` uses `_validate_reflection(hkl, keV, lattice_a)` for ALL simplified reflections (no default special-casing) — making the forward geometry θ consistent with the kernel (which is already bootstrapped at the true Bragg angle) and fixing non-default staleness. This shifts the DEFAULT `(-1,1,-1)@17keV` geometry by **5.8e-5 rad** (8.97650°→8.97317°), so the canonical default-reflection goldens **are regenerated** at S2 as a deliberate, documented physics correction. S0/S1 are additive (no behavior change → no golden change); the shift manifests ONLY at S2 when `build_forward_context` starts using `run_theta`. At S2: first enumerate every golden that depends on the default geometry θ (`tests/data/golden/Fd_find_smoke.npy` + any forward/identification golden), regenerate them with the venv python, and commit them in a SEPARATE, clearly-messaged commit ("regenerate goldens: true-Bragg θ-fix, Sina-authorized, +5.8e-5 rad"). The `*bit_equivalent_to_legacy*` golden (already a documented pre-existing failure) tests equivalence to the PICKLE-ERA legacy output — the θ-fix intentionally diverges from it, so convert it to xfail-with-reason or retire it (it no longer has a valid premise), don't regenerate it to pass.
+
 ## Design decisions for this slice
 
 1. **`q_hkl` joins `ForwardContext`.** It is a per-reflection constant (`[h,k,l]/‖hkl‖`), same lifetime as geometry/resolution. Add `q_hkl: np.ndarray` to `ForwardContext` (top-level). This lets `precompute_forward_static` and the generators read `ctx.q_hkl` and lets the `q_hkl` global be deleted. (The spec originally excluded it as "strain"; it is really per-reflection — treating it as a context field is cleaner and is what makes the global deletable.)
@@ -62,7 +66,7 @@ def run_theta(config: "SimulationConfig") -> float:
     r = config.reciprocal
     return float(_validate_reflection(r.hkl, r.keV, r.lattice_a))
 ```
-- [ ] **Step 4:** run → PASS. mypy. **Audit hazard:** grep for any golden/regression test pinning *simplified* output at a NON-default hkl — `run_theta` will (correctly) shift it. For the DEFAULT `(-1,1,-1)`@17 keV, `_validate_reflection` ≈ the old `theta_0` (8.97°) but not bit-identical (`17.953/2`=8.9765° vs `_validate_reflection`≈8.9732°). **This is the one place the default-reflection geometry changes by ~3e-4 rad.** Before committing, run the forward + bit-equiv goldens to see the blast radius; if a default-reflection golden shifts, STOP and report — we then decide (regenerate the golden as the intentional θ-fix, or pin `run_theta` to the legacy constant for the default reflection). Do NOT silently regenerate.
+- [ ] **Step 4:** run → PASS. mypy. **S0 is purely additive** — `run_theta` is defined + unit-tested but NOT yet wired into the geometry build (that's S2), so NO golden changes here and the full suite stays green. (The 5.8e-5 rad default-reflection shift + golden regeneration happen at S2, per the θ decision above.)
 - [ ] **Step 5:** commit `feat(#16): run_theta resolver (simplified reflections use their own Bragg angle)`.
 
 ## Sub-task S1 — loaders RETURN the ResolutionContext (globals still set)
