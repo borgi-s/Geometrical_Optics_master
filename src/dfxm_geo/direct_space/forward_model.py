@@ -846,7 +846,7 @@ def build_forward_context(
     instr = instrument if instrument is not None else build_instrument_context()
     geom = build_geometry_context(theta_run, instr)
     q = np.asarray(hkl, dtype=float)
-    q_hkl_ = q / np.sqrt(float(q @ q))
+    q_hkl_ = q / np.sqrt(float(q @ q))  # B_0=I form; bit-identical to Find_Hg (~line 385)
     return ForwardContext(instrument=instr, geometry=geom, resolution=resolution, q_hkl=q_hkl_)
 
 

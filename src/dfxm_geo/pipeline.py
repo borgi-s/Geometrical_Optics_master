@@ -853,10 +853,11 @@ def _load_resolution(
     fm._analytic_eval = None  # ensure forward() uses the LUT
     res = _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
     if res is None:
-        # Fallback for test mocks that monkeypatch _lookup_and_load_kernel to
-        # return None while separately setting fm._loaded_kernel_path directly.
-        # Build a ResolutionContext from the module globals (globals are live
-        # because the monkeypatch set them). Deleted in Slice 5.
+        # Production _lookup_and_load_kernel never returns None (it returns a
+        # ResolutionContext or raises); this path is test-only — for mocks that
+        # monkeypatch it to return None while separately setting
+        # fm._loaded_kernel_path directly. Build a ResolutionContext from the
+        # (monkeypatch-set, live) module globals. Deleted in Slice 5.
         res = fm._context_from_globals().resolution
     return res
 
