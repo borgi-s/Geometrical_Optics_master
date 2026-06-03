@@ -24,7 +24,7 @@
 
 ## Design decisions for this slice
 
-1. **`q_hkl` joins `ForwardContext`.** It is a per-reflection constant (`[h,k,l]/‖hkl‖`), same lifetime as geometry/resolution. Add `q_hkl: np.ndarray` to `ForwardContext` (top-level). This lets `precompute_forward_static` and the generators read `ctx.q_hkl` and lets the `q_hkl` global be deleted. (The spec originally excluded it as "strain"; it is really per-reflection — treating it as a context field is cleaner and is what makes the global deletable.)
+1. **`q_hkl` joins `ForwardContext`, computed from `hkl`.** It is a per-reflection constant (`[h,k,l]/√(h²+k²+l²)`, the `B_0=I` form `Find_Hg` uses at `forward_model.py:379-380`), same lifetime as geometry/resolution. Add `q_hkl: np.ndarray` to `ForwardContext` (top-level). **`build_forward_context` takes the reflection `hkl` and computes `q_hkl` internally** (NOT threaded from the `Hg_provider`) — bit-identical to the old global, and every caller already has `config.reciprocal.hkl`, so `run_postprocess` (which has no provider) is covered too. This lets `precompute_forward_static` and the generators read `ctx.q_hkl` and lets the `q_hkl` global be deleted.
 2. **The `Hg` loader side-effect goes away.** Production already passes `Hg` explicitly. Drop `compute_Hg`'s global write; the loaders return resolution only. Remove the `_resolve_postprocess_Hg` priority-3 `fm.Hg` fallback (it was "one release only" — Tasks 1-2 already made file-recovery the real path).
 3. **`_forward_state_guard` is deleted.** Once no per-run mutable globals exist (loaders return contexts; everything threads `ctx`), cross-config leakage is impossible by construction — the guard guards nothing. Remove it, its `_GUARDED_GLOBALS`, the 3 decorators, and its tests. (The Task-1 `fm.q_hkl`-write guard test also goes, since the `q_hkl` global is gone.)
 4. **`migrate.py` builds its own one-off `ForwardContext`** for the legacy IUCrJ-2024 Al `(-1,1,-1)`@17 keV reflection (it already loads/needs a kernel for its `Find_Hg` call); source θ + kernel-path from that ctx.
@@ -83,21 +83,24 @@ def run_theta(config: "SimulationConfig") -> float:
 
 **Files:** `forward_model.py` (`ForwardContext`, `build_forward_context`, `precompute_forward_static`), `pipeline.py` (3 call sites + the Hg_provider/generator q_hkl threading), `io/hdf5.py`.
 
-- [ ] **Add `q_hkl` to `ForwardContext`:** `q_hkl: np.ndarray` (top-level field). Update `_context_from_globals` (reads the `q_hkl` global) and the new `build_forward_context` to populate it.
-- [ ] **New `build_forward_context` signature:**
+- [ ] **Add `q_hkl` to `ForwardContext`:** `q_hkl: np.ndarray` (top-level field). Update `_context_from_globals` (set `q_hkl=q_hkl` from the global) and the new `build_forward_context` (compute it from `hkl`) to populate it.
+- [ ] **New `build_forward_context` signature** (takes `hkl`, computes `q_hkl`):
 ```python
 def build_forward_context(
     theta_run: float,
     resolution: "ResolutionContext",
-    q_hkl: "np.ndarray",
+    hkl: "tuple[int, int, int]",
     instrument: "InstrumentContext | None" = None,
 ) -> ForwardContext:
     instr = instrument if instrument is not None else build_instrument_context()
     geom = build_geometry_context(theta_run, instr)
+    q = np.asarray(hkl, dtype=float)
+    q_hkl = q / np.sqrt(float(q @ q))   # B_0=I form, matches Find_Hg:379-380 bit-for-bit
     return ForwardContext(instrument=instr, geometry=geom, resolution=resolution, q_hkl=q_hkl)
 ```
+Verify `q / np.sqrt(q @ q)` is bit-identical to `Find_Hg`'s `np.asarray([h,k,l]) / np.sqrt(h*h+k*k+l*l)` (it is, for integer hkl). If any float discrepancy, MATCH Find_Hg's exact expression.
 - [ ] **`precompute_forward_static`** reads `ctx.q_hkl` instead of the `q_hkl` global: `qs = ctx.instrument.Us @ Hg @ ctx.q_hkl`. (When `ctx is None` it still falls back to `_context_from_globals()` for this slice.)
-- [ ] **The 3 call sites** (`pipeline.py:868`, `:1145` run_postprocess, `:2167` run_identification): build `ctx = fm.build_forward_context(run_theta(config), res, q_hkl, instr)` where `res` is the S1 return value and `q_hkl` comes from the loader/Hg_provider. **`run_postprocess` now passes `run_theta(config)`** — this *fixes* its previously-silent default-θ behavior (aligns with the slice goal; verify the postprocess qi_field golden still matches for default-reflection configs — see S0's ~3e-4 caveat).
+- [ ] **The 3 call sites** (`pipeline.py:868`, `:1145` run_postprocess, `:2167` run_identification): build `ctx = fm.build_forward_context(run_theta(config), res, config.reciprocal.hkl, instr)` where `res` is the S1 `_load_resolution` return value (capture it now). **`run_postprocess` now passes `run_theta(config)`** — this *fixes* its previously-silent default-θ behavior (the default-reflection qi_field golden shifts by the 5.8e-5 rad correction → regenerate per the θ decision).
 - [ ] **Thread `q_hkl` to the generators:** the 3 `_iter_identification_*` read `ctx.q_hkl` instead of `fm.q_hkl`.
 - [ ] **`io/hdf5.py`:** `write_simulation_h5` builds `_ctx = ctx` (require ctx; drop the `_context_from_globals()` default once callers always pass it — they do); re-source `_fm.theta`→`_ctx.geometry.theta_0` (784/865), `_fm._loaded_kernel_path`→`_ctx.resolution.loaded_kernel_path` (718), `_fm._analytic_eval`→`_ctx.resolution.analytic_eval` (719). `write_identification_h5`: source 613/614 from `ctx.resolution`.
 - [ ] **Verify (bit-identity gate):** dual-path — `build_forward_context(run_theta, res, q_hkl)` for the DEFAULT reflection vs the legacy globals path must be `np.array_equal` EXCEPT the known ~3e-4 θ shift (if S0 chose to regenerate). Run forward + identification + hdf5 + oblique gates. mypy. Commit `feat(#16): build_forward_context takes explicit theta/resolution/q_hkl; break the globals round-trip`.
