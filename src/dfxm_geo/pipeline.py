@@ -88,6 +88,12 @@ class AxisScanConfig:
 
 _CANONICAL_AXES = ("phi", "chi", "two_dtheta", "z")
 
+# S1 (#16): module-level cache so repeated _lookup_and_load_kernel calls for
+# the same kernel path return the already-loaded ResolutionContext without
+# hitting disk again.  Replaces the old fm._loaded_kernel_path == target
+# idempotent check; the global is still set belt-and-suspenders until S5.
+_KERNEL_CTX_CACHE: dict[Path, fm.ResolutionContext] = {}
+
 _AXIS_TO_LABEL = {
     "phi": "rocking",
     "chi": "rolling",
@@ -733,7 +739,7 @@ def _lookup_and_load_kernel(
     keV: float,
     *,
     geometry: GeometryConfig | None = None,
-) -> None:
+) -> fm.ResolutionContext:
     """Pre-flight: look up the kernel npz for this geometry and load it.
 
     Sub-project D replacement for `_ensure_kernel_loaded()`. Composes a lookup
@@ -749,11 +755,16 @@ def _lookup_and_load_kernel(
     Both modes still verify the npz's bundled (hkl, keV) metadata on load — the
     oblique bootstrap records them too.
 
-    Idempotent: if `fm._loaded_kernel_path` already matches the resolved target,
-    skip the reload. (Helpful for test loops and interactive REPL.)
+    Idempotent: returns the cached ResolutionContext if the resolved target was
+    already loaded this process (re-homed from fm._loaded_kernel_path check in
+    S1 of #16).  The global fm._loaded_kernel_path is still set belt-and-
+    suspenders until S5.
 
     Raises KeyError on lookup miss, ValueError on metadata mismatch,
     KeyError on pre-sub-project-D legacy npz lacking metadata.
+
+    Returns:
+        ResolutionContext snapshotting the newly (or previously) loaded kernel.
     """
     if geometry is not None and geometry.mode == "oblique":
         if geometry.theta_validated is None:
@@ -770,13 +781,21 @@ def _lookup_and_load_kernel(
         )
     else:
         target = fm._lookup_kernel_path(directory=fm.pkl_fpath, mode="simplified", hkl=hkl, keV=keV)
-    if fm._loaded_kernel_path == target:
-        return
-    fm._load_default_kernel(
+    # Belt-and-suspenders: skip reload only when BOTH the cache holds a context
+    # AND the module globals still agree (i.e. not wiped by _forward_state_guard
+    # restore or monkeypatching).  If the guard restored the globals to None the
+    # cache holds a stale snapshot; we fall through and reload so globals are
+    # re-set, then update the cache.
+    cached = _KERNEL_CTX_CACHE.get(target)
+    if cached is not None and fm._loaded_kernel_path == target:
+        return cached
+    res = fm._load_default_kernel(
         str(target),
         expected_hkl=hkl,
         expected_keV=keV,
     )
+    _KERNEL_CTX_CACHE[target] = res
+    return res
 
 
 def run_theta(config: SimulationConfig) -> float:
@@ -797,7 +816,9 @@ def run_theta(config: SimulationConfig) -> float:
     return float(_validate_reflection(r.hkl, r.keV, r.lattice_a))
 
 
-def _load_resolution(config: ReciprocalConfig, geometry: GeometryConfig | None = None) -> None:
+def _load_resolution(
+    config: ReciprocalConfig, geometry: GeometryConfig | None = None
+) -> fm.ResolutionContext:
     """Select and load the resolution backend per config (spec sec. 5.4).
 
     auto     -> analytic if beamstop off, else MC
@@ -808,6 +829,11 @@ def _load_resolution(config: ReciprocalConfig, geometry: GeometryConfig | None =
     ``geometry.mode == 'oblique'``; the analytic backend reads ``eta`` straight
     off ``config`` (already propagated from [geometry] by
     SimulationConfig.from_toml). Defaults to simplified when omitted.
+
+    Returns:
+        ResolutionContext snapshotting the loaded/cached backend.  Callers in
+        S1 may discard it (globals are still set); S2 will wire it into
+        build_forward_context.
     """
     use_analytic = config.backend == "analytic" or (
         config.backend == "auto" and not config.beamstop
@@ -820,10 +846,9 @@ def _load_resolution(config: ReciprocalConfig, geometry: GeometryConfig | None =
         )
     if use_analytic:
         fm._analytic_eval = None  # clear any stale evaluator
-        fm._load_analytic_resolution(config)
-    else:
-        fm._analytic_eval = None  # ensure forward() uses the LUT
-        _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
+        return fm._load_analytic_resolution(config)
+    fm._analytic_eval = None  # ensure forward() uses the LUT
+    return _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
 
 
 @fm._forward_state_guard()
