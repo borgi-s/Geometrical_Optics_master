@@ -779,6 +779,24 @@ def _lookup_and_load_kernel(
     )
 
 
+def run_theta(config: SimulationConfig) -> float:
+    """The run's Bragg angle (radians).
+
+    Oblique mode uses the solver result ``geometry.theta_validated``; simplified
+    mode computes the reflection's true Bragg angle from ``(hkl, keV, lattice_a)``
+    via ``_validate_reflection``. This makes the forward geometry consistent with
+    the kernel (bootstrapped at the same angle) and fixes the prior simplified-
+    reflection staleness (a non-default reflection used the import-default theta).
+    """
+    geom = config.geometry
+    if geom.mode == "oblique" and geom.theta_validated is not None:
+        return float(geom.theta_validated)
+    from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+    r = config.reciprocal
+    return float(_validate_reflection(r.hkl, r.keV, r.lattice_a))
+
+
 def _load_resolution(config: ReciprocalConfig, geometry: GeometryConfig | None = None) -> None:
     """Select and load the resolution backend per config (spec sec. 5.4).
 
