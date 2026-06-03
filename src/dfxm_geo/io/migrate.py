@@ -95,7 +95,23 @@ def migrate_npy_dir_to_h5(
     )
 
     S = SAMPLE_REMOUNT_OPTIONS[sample_remount]
-    Hg, q_hkl = _fm.Find_Hg(dis, ndis, _fm.psize, _fm.zl_rms, S=S, remount_name=sample_remount)
+
+    # S4 (#16): Build a one-off ForwardContext from the already-loaded module
+    # state so Find_Hg and provenance reads no longer touch bare globals.
+    # migrate_npy_dir_to_h5 always runs outside an oblique CM (the shim
+    # reflection_theta_if_oblique is never active here), so _context_from_globals()
+    # is correct: theta == theta_0 (the default Al 17 keV Bragg angle).
+    # The kernel_npz guard is promoted before the ctx build so that the
+    # RuntimeError is raised before any heavy work.
+    kernel_npz = _fm._loaded_kernel_path
+    if kernel_npz is None:
+        raise RuntimeError("no kernel loaded — migration requires a loaded kernel for provenance.")
+
+    ctx = _fm._context_from_globals()
+
+    Hg, q_hkl = _fm.Find_Hg(
+        dis, ndis, _fm.psize, _fm.zl_rms, S=S, remount_name=sample_remount, ctx=ctx
+    )
 
     dislocs = _load_images_legacy(
         str(npy_dir / dislocs_dirname),
@@ -126,10 +142,6 @@ def migrate_npy_dir_to_h5(
     chi_pf = _chi_per_frame(phi_steps, chi_steps, chi_range_rad)
     out_dir = h5_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    kernel_npz = _fm._loaded_kernel_path
-    if kernel_npz is None:
-        raise RuntimeError("no kernel loaded — migration requires a loaded kernel for provenance.")
 
     with MasterWriter(
         h5_path,
@@ -162,7 +174,7 @@ def migrate_npy_dir_to_h5(
             dfxm_geo={
                 "Hg": Hg,
                 "q_hkl": q_hkl,
-                "theta": float(_fm.theta),
+                "theta": float(ctx.geometry.theta_0),  # S4 (#16): theta_0 from ctx
                 "psize": float(_fm.psize),
                 "zl_rms": float(_fm.zl_rms),
             },
@@ -193,7 +205,7 @@ def migrate_npy_dir_to_h5(
                 dfxm_geo={
                     "Hg": np.zeros_like(Hg),
                     "q_hkl": q_hkl,
-                    "theta": float(_fm.theta),
+                    "theta": float(ctx.geometry.theta_0),  # S4 (#16): theta_0 from ctx
                     "psize": float(_fm.psize),
                     "zl_rms": float(_fm.zl_rms),
                 },
