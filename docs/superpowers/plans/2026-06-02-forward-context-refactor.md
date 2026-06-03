@@ -934,7 +934,9 @@ git commit -m "feat(#16): identify generators + Find_Hg* thread ForwardContext"
 
 ## SLICE 5 — delete the shim
 
-### Task 12: PEP-562 `__getattr__` shim (transitional) then deletion
+> **SUPERSEDED 2026-06-03.** Scoping found Slice 5 is not a mechanical "delete + grep": the loader→context flow round-trips through the globals, so deletion requires inverting the loaders to return their `ResolutionContext` and threading it. The full staged re-plan (sub-tasks S0–S5: `run_theta` resolver + simplified-θ fix → loaders return ctx → break the round-trip → retire the oblique CM → convert migrate/images/numpy-oracle readers → delete globals + guard) lives in **`docs/superpowers/plans/2026-06-03-forward-context-slice5.md`**. Execute that; the Task-12 sketch below is retained only for history.
+
+### Task 12 (HISTORICAL SKETCH — see the Slice 5 doc above): PEP-562 `__getattr__` shim (transitional) then deletion
 
 **Files:**
 - Modify: `src/dfxm_geo/direct_space/forward_model.py`
