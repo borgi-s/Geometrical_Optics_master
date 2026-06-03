@@ -72,8 +72,12 @@ def test_population_numpy_oracle_honours_rotation_deg() -> None:
     """The NumPy parity oracle must apply the SAME rotation_deg as the fused
     kernel, so the rtol=1e-12 parity test keeps holding for mixed populations."""
     pop_screw = _single_disloc_population(90.0)
-    Hg_fast, _ = fm.Find_Hg_from_population(pop_screw, h=-1, k=1, l=-1)
-    Hg_ref, _ = fm._find_hg_from_population_numpy(pop_screw, -1, 1, -1, S=fm._S_IDENTITY, rl=None)
+    # S4 (#16): pass explicit ctx to both sides — same geometry, guaranteed parity.
+    ctx = fm._context_from_globals()
+    Hg_fast, _ = fm.Find_Hg_from_population(pop_screw, h=-1, k=1, l=-1, ctx=ctx)
+    Hg_ref, _ = fm._find_hg_from_population_numpy(
+        pop_screw, -1, 1, -1, S=fm._S_IDENTITY, rl=None, ctx=ctx
+    )
     np.testing.assert_allclose(Hg_fast, Hg_ref, rtol=1e-12, atol=1e-14)
 
 

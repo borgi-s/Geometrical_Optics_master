@@ -40,8 +40,13 @@ def _random_pop(ndis: int = 4, seed: int = 42):
 @pytest.mark.parametrize("pop_factory", [_centered_pop, _random_pop])
 def test_fused_matches_numpy_oracle(pop_factory):
     pop = pop_factory()
-    Hg_fast, q_fast = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1)
-    Hg_ref, q_ref = fm._find_hg_from_population_numpy(pop, -1, 1, -1, S=fm._S_IDENTITY, rl=None)
+    # S4 (#16): pass explicit ctx to both sides so parity holds for
+    # oblique reflections (globals are defaults here; S5 removes the fallback).
+    ctx = fm._context_from_globals()
+    Hg_fast, q_fast = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1, ctx=ctx)
+    Hg_ref, q_ref = fm._find_hg_from_population_numpy(
+        pop, -1, 1, -1, S=fm._S_IDENTITY, rl=None, ctx=ctx
+    )
     np.testing.assert_allclose(q_fast, q_ref, rtol=1e-12, atol=0.0)
     np.testing.assert_allclose(Hg_fast, Hg_ref, rtol=1e-12, atol=1e-14)
 

@@ -1405,6 +1405,7 @@ def _find_hg_from_population_numpy(
     *,
     S: np.ndarray,
     rl: np.ndarray | None,
+    ctx: "ForwardContext | None" = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Reference NumPy implementation of the population Hg field.
 
@@ -1413,10 +1414,28 @@ def _find_hg_from_population_numpy(
     Fd_find_multi_dislocs_mixed (Fg) with fast_inverse2 (Fg -> Hg). Do not
     "optimize" this; its whole purpose is to be the slow, obviously-correct
     truth the kernel is checked against at rtol=1e-12.
+
+    Args:
+        ctx: Optional ForwardContext. When provided, ``Us``, ``Theta``, and
+            ``rl`` (when the explicit kwarg is None) are sourced from it
+            instead of the module globals — mirrors the convention in
+            ``Find_Hg_from_population`` so parity holds for both the default
+            and oblique reflections.  S5 (#16) will delete the globals
+            fallback; passing ``ctx`` is the forward-compatible form.
     """
     from dfxm_geo.crystal.dislocations import Fd_find_multi_dislocs_mixed, MixedDislocSpec
 
-    rl_eff = rl if rl is not None else globals()["rl"]
+    # rl precedence: explicit kwarg > ctx.geometry.rl > module global.
+    if rl is not None:
+        rl_eff = rl
+    elif ctx is not None:
+        rl_eff = ctx.geometry.rl
+    else:
+        rl_eff = globals()["rl"]
+
+    # Us/Theta precedence: ctx > module global (S5 will delete the fallback).
+    Us_ = ctx.instrument.Us if ctx is not None else Us
+    Theta_ = ctx.geometry.Theta if ctx is not None else Theta
 
     Q_norm = np.sqrt(h * h + k * k + l * l)
     q_hkl = np.asarray([h, k, l]) / Q_norm
@@ -1445,7 +1464,7 @@ def _find_hg_from_population_numpy(
     # Fd_find_mixed(rl * 1e6, ...). Omitting this made |rd| 1e6x too small and
     # the 1/r field 1e6x too large (sub-project C regression).
     # Returns shape (X, 3, 3) with identity already added (Fg, not Fdd).
-    Fg = Fd_find_multi_dislocs_mixed(rl_eff * 1e6, Us, crystals, Theta, S=S)
+    Fg = Fd_find_multi_dislocs_mixed(rl_eff * 1e6, Us_, crystals, Theta_, S=S)
 
     # Convert Fg → Hg using the same convention as load_or_generate_Hg:
     #   Hg = transpose(Fg^-1) - I
