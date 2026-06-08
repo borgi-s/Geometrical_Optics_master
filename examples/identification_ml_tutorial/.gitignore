@@ -1,0 +1,6 @@
+# Regenerable tutorial outputs — rebuilt by running the notebook.
+out_demo/
+sweep_configs/
+kernel/
+preview.png
+*.log

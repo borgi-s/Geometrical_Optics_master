@@ -1,0 +1,44 @@
+# Tutorial demo config - dfxm-identify, mode = "multi".
+#
+# Generates a tiny labeled ML dataset: each image is a fresh scene of 2
+# randomly-drawn dislocations (random slip plane, Burgers vector, rotation,
+# in-plane position). Per-instance ground truth + optional noiseless
+# per-dislocation renders are written into the HDF5.
+#
+# This is the *spine* of the ML-data-generation tutorial. To scale to 100k,
+# raise n_samples and/or fan out across seeds (see the notebook's "scale to
+# 100k" section).
+
+mode = "multi"
+
+[reciprocal]
+hkl = [-1, 1, -1]   # Al 111 reflection
+keV = 17.0
+# Reciprocal-space resolution-kernel Monte Carlo (read by dfxm-bootstrap).
+# Nrays sets kernel quality: 1e8 is production (sharp, ~1 min to build on a
+# laptop). For this tutorial demo we use 2e6 -- builds in ~2 s, slightly
+# grainier kernel, but fast enough for a walkthrough. Raise to 100_000_000
+# for a production-quality kernel.
+# NOTE: TOML needs a plain integer -- `Nrays = int(2e6)` is a TOML *parse error*;
+# use underscores like 2_000_000.
+Nrays = 2_000_000
+seed = 0            # reproducible kernel; omit for an entropy-seeded run
+
+[scan.phi]
+value = 1.25e-4      # phi FIXED (no range/steps) -> exactly one image per sample
+
+[noise]
+poisson_noise = true
+rng_seed = 3
+intensity_scale = 7.0
+
+[multi]
+n_samples = 8                    # tutorial size; raise this for real datasets
+pos_std_um = 5.0                 # std of in-plane (x, y) dislocation positions
+render_per_dislocation = true    # also emit noiseless per-instance renders (labels)
+
+[io]
+dislocs_dirname = "identify_multi"
+perfect_dirname = "ignored"
+include_perfect_crystal = false
+write_strain_provenance = false  # ML/batch lever: drop the 106 MB per-scan Hg dump
