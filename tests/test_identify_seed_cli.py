@@ -12,6 +12,8 @@ draws — without invoking the kernel-dependent forward model.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -71,7 +73,7 @@ def test_different_seed_produces_different_dislocation_draw() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cli_identify_accepts_seed_argument(tmp_path: pytest.fixture, capsys) -> None:  # type: ignore[valid-type]
+def test_cli_identify_accepts_seed_argument(tmp_path: Path) -> None:
     """--seed N is accepted and does not cause argparse errors.
 
     We use a minimal TOML that exercises the multi code path up to the
@@ -109,15 +111,14 @@ def test_cli_identify_accepts_seed_argument(tmp_path: pytest.fixture, capsys) ->
         # If it reaches here the kernel was found and the run succeeded
         assert rc == 0
     except SystemExit as exc:
-        # rc=2 means argparse error — that must NOT happen
-        assert exc.code != 2, f"argparse rejected --seed: {exc}"
+        raise AssertionError("argparse rejected --seed") from exc
     except Exception:
         # KeyError from missing kernel, etc. — acceptable; the point is that
         # argparse passed without error (we got past parse_args).
         pass
 
 
-def test_cli_identify_seed_overrides_config_rng_seed(tmp_path: pytest.fixture) -> None:  # type: ignore[valid-type]
+def test_cli_identify_seed_overrides_config_rng_seed(tmp_path: Path) -> None:
     """--seed overrides noise.rng_seed in the loaded IdentificationConfig.
 
     We monkey-patch run_identification to capture the config it receives,
@@ -166,7 +167,7 @@ def test_cli_identify_seed_overrides_config_rng_seed(tmp_path: pytest.fixture) -
     )
 
 
-def test_cli_identify_seed_none_leaves_config_rng_seed(tmp_path: pytest.fixture) -> None:  # type: ignore[valid-type]
+def test_cli_identify_seed_none_leaves_config_rng_seed(tmp_path: Path) -> None:
     """Without --seed the config's own rng_seed is preserved."""
     import dfxm_geo.pipeline as pipeline_mod
 

@@ -176,11 +176,10 @@ def test_build_cmd_forward_is_unchanged_regression(tmp_path: Path) -> None:
 
 
 def test_run_manifest_forward_mode_uses_build_cmd(tmp_path: Path) -> None:
-    """run_manifest in forward mode passes correct mode to the runner seam.
+    """Smoke test: run_manifest accepts mode='forward' kwarg without crashing.
 
-    The fake_runner inspects the *mode* argument that _default_runner would have
-    consumed when building the command; we verify no --no-postprocess leaks into
-    identify mode and that the runner seam still fires for both modes.
+    The actual mode dispatch to build_cmd is verified by the build_cmd tests
+    and test_run_manifest_routes_mode_to_default_runner.
     """
     configs = [tmp_path / "c0.toml"]
     configs[0].write_text("")
@@ -200,7 +199,11 @@ def test_run_manifest_forward_mode_uses_build_cmd(tmp_path: Path) -> None:
 
 
 def test_run_manifest_identify_mode_accepted(tmp_path: Path) -> None:
-    """run_manifest(mode='identify') is accepted and routes to the seam."""
+    """Smoke test: run_manifest accepts mode='identify' kwarg without crashing.
+
+    The actual mode dispatch is verified by the build_cmd tests and
+    test_run_manifest_routes_mode_to_default_runner.
+    """
     cfg = tmp_path / "id.toml"
     cfg.write_text("")
 
@@ -256,3 +259,26 @@ def test_fanout_end_to_end_runs_two_configs(tmp_path: Path) -> None:
             img = f["/entry_0000/dfxm_sim_detector/image"]
             assert img.dtype == np.float32
             assert img.shape[0] == 2  # 2 phi frames
+
+
+def test_run_manifest_routes_mode_to_default_runner(tmp_path: Path, monkeypatch) -> None:
+    """With runner=None (the production path main() takes), run_manifest must
+    thread `mode` through to _default_runner."""
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("")
+    seen: dict[str, str] = {}
+
+    def capturing_default_runner(config, output_dir, env, log_path, *, mode="forward"):
+        seen["mode"] = mode
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return 0
+
+    monkeypatch.setattr(fanout, "_default_runner", capturing_default_runner)
+    fanout.run_manifest([cfg], tmp_path / "out", n_workers=1, mode="identify")
+    assert seen["mode"] == "identify"
+
+
+def test_build_cmd_rejects_unknown_mode(tmp_path: Path) -> None:
+    """build_cmd is a public function; an unknown mode must fail loudly."""
+    with pytest.raises(ValueError):
+        fanout.build_cmd("nonsense", tmp_path / "c.toml", tmp_path / "out")

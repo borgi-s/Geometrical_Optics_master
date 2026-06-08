@@ -18,7 +18,7 @@ import argparse
 import sys
 import tomllib
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -2072,14 +2072,10 @@ def cli_main_identify(argv: list[str] | None = None) -> int:
 
     cfg = load_identification_config(args.config)
     if args.mode is not None and args.mode != cfg.mode:
-        from dataclasses import replace
-
         cfg = replace(cfg, mode=args.mode)
         cfg.__post_init__()  # re-run validation
 
     if args.seed is not None:
-        from dataclasses import replace
-
         cfg = replace(cfg, noise=replace(cfg.noise, rng_seed=args.seed))
         cfg.__post_init__()  # re-run validation
 
