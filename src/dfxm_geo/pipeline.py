@@ -2061,6 +2061,13 @@ def cli_main_identify(argv: list[str] | None = None) -> int:
         default=None,
         help="Override the config's mode field",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Override the config's noise.rng_seed (integer). Useful for per-task "
+        "reproducibility in array jobs (e.g. --seed $LSB_JOBINDEX).",
+    )
     args = parser.parse_args(argv)
 
     cfg = load_identification_config(args.config)
@@ -2068,6 +2075,12 @@ def cli_main_identify(argv: list[str] | None = None) -> int:
         from dataclasses import replace
 
         cfg = replace(cfg, mode=args.mode)
+        cfg.__post_init__()  # re-run validation
+
+    if args.seed is not None:
+        from dataclasses import replace
+
+        cfg = replace(cfg, noise=replace(cfg.noise, rng_seed=args.seed))
         cfg.__post_init__()  # re-run validation
 
     result = run_identification(cfg, args.output)
