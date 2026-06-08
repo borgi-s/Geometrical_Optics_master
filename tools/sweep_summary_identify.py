@@ -4,12 +4,13 @@
 Walks the sweep output, tallies per-scene label distributions, and saves
 up to ``--n-frames`` example detector images as PNGs for the presentation.
 
-Usage::
+Usage (the default glob finds both the single-node fanout and array layouts)::
 
-    python tools/sweep_summary_identify.py \
-        --glob "output/idsweep_*/**/dfxm_identify.h5" \
-        --out presentation_assets \
-        --n-frames 8
+    python tools/sweep_summary_identify.py --out presentation_assets --n-frames 8
+
+For a rocking scan, each scene holds ``phi_steps`` frames; the saved example
+PNG is the middle (~peak) frame, and ``summary.json`` reports both ``n_scenes``
+and ``n_images`` (= total frames = scenes x phi_steps).
 
 Outputs (all under ``--out``):
 
@@ -46,20 +47,39 @@ def _iter_scenes(f: h5py.File) -> list[str]:
 
 
 def _read_frame(scene: h5py.Group) -> np.ndarray | None:
-    """Read the detector frame from a scene group, or return None on error."""
+    """Read a single 2-D detector frame from a scene group, or None on error.
+
+    A rocking scan stores ``(n_frames, H, W)``; pick the middle (~peak) frame
+    so a multi-frame scene still yields a 2-D image that ``imsave`` can write.
+    """
     try:
-        data = scene["instrument/dfxm_sim_detector/data"][()]
-        return np.squeeze(np.asarray(data, dtype=float))
+        data = np.asarray(scene["instrument/dfxm_sim_detector/data"][()], dtype=float)
     except (KeyError, OSError):
         return None
+    data = np.squeeze(data)
+    if data.ndim == 3:  # (n_frames, H, W) rocking scan -> middle frame
+        data = data[data.shape[0] // 2]
+    if data.ndim != 2:
+        return None
+    return data
+
+
+def _scene_n_frames(scene: h5py.Group) -> int:
+    """Detector frame count for a scene (1 for fixed phi, N for an N-step rock)."""
+    try:
+        shape = scene["instrument/dfxm_sim_detector/data"].shape
+    except (KeyError, OSError):
+        return 0
+    return int(shape[0]) if len(shape) >= 3 else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--glob",
-        default="output/idsweep_*/**/dfxm_identify.h5",
-        help="Glob pattern to find master HDF5 files (recursive).",
+        default="output/**/dfxm_identify.h5",
+        help="Glob to find master HDF5 files (recursive). Matches both the "
+        "single-node fanout (output/fanout_*/) and array (output/idsweep_*/) layouts.",
     )
     ap.add_argument(
         "--out",
@@ -85,7 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No HDF5 files found matching: {args.glob}")
         return 1
 
-    n_images = 0
+    n_scenes = 0
+    n_frames_total = 0
     n_frames_saved = 0
     all_rotations: list[float] = []
     slip_plane_counter: Counter[str] = Counter()
@@ -94,10 +115,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             with h5py.File(master_path, "r") as f:
                 scenes = _iter_scenes(f)
-                n_images += len(scenes)
 
                 for scene_key in scenes:
                     scene = f[scene_key]
+                    n_scenes += 1
+                    n_frames_total += _scene_n_frames(scene)
 
                     # Collect labels from all dislocations in this scene.
                     dislocations_grp = scene.get("sample/dislocations")
@@ -139,7 +161,8 @@ def main(argv: list[str] | None = None) -> int:
     # Build and save summary JSON.
     summary = {
         "n_configs": len(master_files),
-        "n_images": n_images,
+        "n_scenes": n_scenes,
+        "n_images": n_frames_total,  # total detector frames (scenes x phi_steps)
         "dislocations_per_frame": 2,
         "slip_plane_counts": dict(slip_plane_counter),
     }
@@ -147,8 +170,9 @@ def main(argv: list[str] | None = None) -> int:
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     print(
-        f"summary: {len(master_files)} configs, {n_images} images, "
-        f"{len(all_rotations)} rotation samples, {n_frames_saved} frames saved"
+        f"summary: {len(master_files)} configs, {n_scenes} scenes, "
+        f"{n_frames_total} images (frames), {len(all_rotations)} rotation samples, "
+        f"{n_frames_saved} frames saved"
     )
     print(f"  -> {summary_path}")
     return 0
