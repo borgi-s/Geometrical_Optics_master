@@ -46,7 +46,17 @@ final_figures/
 !tests/data/golden/*.h5
 !docs/figures/*.png
 
+# Identify sweep — generated artifacts (never commit these)
+configs/identify_sweep/
+configs/_smoke_sweep/
+manifests/
+presentation_assets/
+direct_space/deformation_gradient_tensors/
+
 # Environment
 .env
 .venv/
 venv/
+
+# Rendered notebook exports — large, regenerable; delivered out-of-band, not committed.
+examples/**/*.html

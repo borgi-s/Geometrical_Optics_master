@@ -1,0 +1,88 @@
+#!/bin/bash
+# ==============================================================================
+# DTU HPC (LSF) — config fan-out array job for the identify-sweep pipeline
+# ==============================================================================
+#
+# FULL FLOW (run these steps once before submitting):
+#
+#   (1) Generate the sweep configs:
+#         python scripts/gen_identify_sweep_configs.py \
+#             --n-configs 5000 --n-samples 20 --nrays 100000000 \
+#             --out-dir configs/identify_sweep
+#
+#   (2) Bootstrap the reciprocal-space kernel once (idempotent):
+#         dfxm-bootstrap --if-missing --config configs/identify_sweep/multi_seed00001.toml
+#
+#   (3) Split configs into 10 equal slices:
+#         mkdir -p manifests
+#         ls configs/identify_sweep/*.toml > manifests/all.txt
+#         split -n l/10 -d --additional-suffix=.txt manifests/all.txt manifests/slice_
+#         # produces manifests/slice_00.txt .. manifests/slice_09.txt
+#
+#   (4) Submit:
+#         bsub < lsf/identify_sweep_array.bsub
+#
+# MONITORING:
+#   bjobs -A <ARRAYID>           # array summary
+#   bpeek <JOBID>[<INDEX>]       # tail live log
+#   cat logs/idsweep-<J>-<I>.out # post-run stdout
+#
+# RESOURCE MATH (per array task):
+#   -n 24 slots x 2GB/slot = 48 GB allocated
+#   6 workers x 4 threads = 24 threads consumed
+#   Each task runs ~500 configs (5000 configs / 10 tasks)
+# ==============================================================================
+
+#BSUB -J "idsweep[1-10]"
+#BSUB -q hpc
+#BSUB -W 4:00
+#BSUB -n 24
+#BSUB -R "rusage[mem=2GB]"
+#BSUB -R "span[hosts=1]"
+#BSUB -o logs/idsweep-%J-%I.out
+#BSUB -e logs/idsweep-%J-%I.err
+
+set -euo pipefail
+
+WORKDIR="${LS_SUBCWD:-$PWD}"
+mkdir -p "${WORKDIR}/logs"
+
+echo "===== NODE INFO ====="
+echo "host: $(hostname)"
+nproc || true
+echo "task index: ${LSB_JOBINDEX:-1}"
+echo "====================="
+
+cd "${WORKDIR}"
+
+# --- conda activation (mirrors lsf/fanout.bsub) ---
+CONDA_BASE="${CONDA_BASE:-$(dirname "$(dirname "$(command -v conda 2>/dev/null || true)")")}"
+if [ ! -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]; then
+    for cand in "${HOME}/miniforge3" "${HOME}/miniconda3"; do
+        [ -f "${cand}/etc/profile.d/conda.sh" ] && CONDA_BASE="${cand}" && break
+    done
+fi
+if [ ! -f "${CONDA_BASE:-}/etc/profile.d/conda.sh" ]; then
+    echo "ERROR: could not locate a conda install. Set CONDA_BASE explicitly above." >&2
+    exit 1
+fi
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate dfxm-geo
+
+# Select this task's manifest slice (0-indexed: task 1 -> slice_00, task 10 -> slice_09).
+SLICE="manifests/slice_$(printf '%02d' $((LSB_JOBINDEX - 1))).txt"
+
+if [ ! -f "${SLICE}" ]; then
+    echo "ERROR: slice file not found: ${SLICE}" >&2
+    echo "Run step (3) from the header to generate manifests/slice_*.txt." >&2
+    exit 1
+fi
+
+python scripts/fanout.py \
+    --manifest "${SLICE}" \
+    --output "output/idsweep_${LSB_JOBID}/task_${LSB_JOBINDEX}" \
+    --mode identify \
+    --n-workers 6 \
+    --threads-per-worker 4
+
+echo "Task ${LSB_JOBINDEX} done."

@@ -30,12 +30,18 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-# Invoke the forward CLI in a child interpreter. Using `-c` (rather than the
-# `dfxm-forward` console script) makes the launcher independent of PATH.
+# Invoke the forward/identify CLIs in a child interpreter. Using `-c` (rather
+# than the `dfxm-forward` / `dfxm-identify` console scripts) makes the launcher
+# independent of PATH — the child always uses the same interpreter as the parent.
 _FORWARD_PREFIX = [
     sys.executable,
     "-c",
     "from dfxm_geo.pipeline import cli_main; raise SystemExit(cli_main())",
+]
+_IDENTIFY_PREFIX = [
+    sys.executable,
+    "-c",
+    "from dfxm_geo.pipeline import cli_main_identify; raise SystemExit(cli_main_identify())",
 ]
 
 # Thread-budget env keys pinned to 1 per worker (frame parallelism comes from
@@ -87,16 +93,46 @@ def worker_env(
     return env
 
 
-def _default_runner(config: Path, output_dir: Path, env: Mapping[str, str], log_path: Path) -> int:
-    """Run one config via a `dfxm-forward` subprocess; tee output to log_path."""
+def build_cmd(mode: str, config: Path, output_dir: Path) -> list[str]:
+    """Build the child-process command list for one config.
+
+    Args:
+        mode: ``"forward"`` or ``"identify"``.
+        config: Path to the TOML config file.
+        output_dir: Per-config output directory.
+
+    Returns:
+        A ``list[str]`` ready to pass to ``subprocess.run``.
+
+    ``--no-postprocess`` is a forward-only flag — it is appended only in
+    forward mode. Identify mode omits it.
+    """
+    if mode == "forward":
+        prefix = _FORWARD_PREFIX
+        extra = ["--no-postprocess"]
+    elif mode == "identify":
+        prefix = _IDENTIFY_PREFIX
+        extra = []
+    else:
+        raise ValueError(f"mode must be 'forward' or 'identify', got {mode!r}")
+    return prefix + ["--config", str(config), "--output", str(output_dir)] + extra
+
+
+def _default_runner(
+    config: Path,
+    output_dir: Path,
+    env: Mapping[str, str],
+    log_path: Path,
+    *,
+    mode: str = "forward",
+) -> int:
+    """Run one config via a child `dfxm-forward` or `dfxm-identify` subprocess.
+
+    Tees stdout+stderr to *log_path*. The *mode* keyword selects which CLI is
+    called and whether ``--no-postprocess`` is appended (forward-only flag).
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
-    cmd = _FORWARD_PREFIX + [
-        "--config",
-        str(config),
-        "--output",
-        str(output_dir),
-        "--no-postprocess",
-    ]
+    cmd = build_cmd(mode, config, output_dir)
     with open(log_path, "w", encoding="utf-8") as log:
         proc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=dict(env))
     return proc.returncode
@@ -111,16 +147,41 @@ def run_manifest(
     *,
     n_workers: int = 8,
     threads_per_worker: int = 16,
-    runner: Runner = _default_runner,
+    runner: Runner | None = None,
     base_env: Mapping[str, str] | None = None,
+    mode: str = "forward",
 ) -> list[ConfigResult]:
     """Run `configs` concurrently, at most `n_workers` at once.
 
     Each config gets <output_root>/<stem>/ and <output_root>/<stem>.log. The
-    `runner` seam is injected in tests to avoid real subprocesses.
+    `runner` seam is injected in tests to avoid real subprocesses; when
+    *runner* is ``None`` (the default), ``_default_runner`` is called with the
+    *mode* captured in a closure so the correct child CLI is selected without
+    changing the ``Runner`` type signature.
+
+    *mode* selects the child CLI:
+      ``"forward"``   (default) → ``dfxm-forward`` + ``--no-postprocess``
+      ``"identify"``            → ``dfxm-identify`` (no ``--no-postprocess``)
     """
     output_root.mkdir(parents=True, exist_ok=True)
     env = worker_env(threads_per_worker, base_env)
+
+    # When no runner is injected, bind *mode* via a closure so _default_runner
+    # receives it without widening the Runner type alias.
+    effective_runner: Runner
+    if runner is None:
+        _mode = mode
+
+        def effective_runner(
+            config: Path,
+            output_dir: Path,
+            _env: Mapping[str, str],
+            log_path: Path,
+        ) -> int:
+            return _default_runner(config, output_dir, _env, log_path, mode=_mode)
+
+    else:
+        effective_runner = runner
 
     def task(config: Path) -> ConfigResult:
         out_dir = output_root / config.stem
@@ -130,7 +191,7 @@ def run_manifest(
         # exception) is recorded as a failed result with rc=-1 rather than
         # aborting the whole sweep — one bad config shouldn't kill a 100k run.
         try:
-            rc = runner(config, out_dir, env, log_path)
+            rc = effective_runner(config, out_dir, env, log_path)
         except Exception:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_text(
@@ -160,12 +221,23 @@ def main(argv: list[str] | None = None) -> int:
         default=16,
         help="DFXM_MAX_WORKERS per config (frame thread pool size).",
     )
+    ap.add_argument(
+        "--mode",
+        choices=["forward", "identify"],
+        default="forward",
+        help=(
+            "Child CLI to invoke for each config. "
+            "'forward' (default) runs `dfxm-forward` with --no-postprocess; "
+            "'identify' runs `dfxm-identify` (no --no-postprocess). "
+            "Set MODE=identify in lsf/fanout.bsub to fan out identification."
+        ),
+    )
     args = ap.parse_args(argv)
 
     configs = discover_configs(args.manifest)
     print(
         f"fanout: {len(configs)} configs, {args.n_workers} workers x "
-        f"{args.threads_per_worker} threads -> {args.output}"
+        f"{args.threads_per_worker} threads [{args.mode}] -> {args.output}"
     )
     t0 = time.perf_counter()
     results = run_manifest(
@@ -173,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output,
         n_workers=args.n_workers,
         threads_per_worker=args.threads_per_worker,
+        mode=args.mode,
     )
     wall = time.perf_counter() - t0
 

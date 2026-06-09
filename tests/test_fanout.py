@@ -122,6 +122,101 @@ def test_run_manifest_survives_runner_exception(tmp_path: Path) -> None:
     assert "cannot spawn" in by_stem["boom"].log_path.read_text()
 
 
+# ---------------------------------------------------------------------------
+# Part B: --mode {forward,identify}
+# ---------------------------------------------------------------------------
+
+
+def test_build_cmd_forward_mode_includes_no_postprocess(tmp_path: Path) -> None:
+    """Forward mode: build_cmd must produce the cli_main prefix + --no-postprocess."""
+    cfg = tmp_path / "fwd.toml"
+    cfg.write_text("")
+    out_dir = tmp_path / "out"
+    cmd = fanout.build_cmd("forward", cfg, out_dir)
+    cmd_str = " ".join(cmd)
+    # Must invoke cli_main (forward), not cli_main_identify
+    assert "cli_main" in cmd_str
+    assert "cli_main_identify" not in cmd_str
+    # Must include --no-postprocess (forward-only flag)
+    assert "--no-postprocess" in cmd
+    # Must include --config and --output
+    assert "--config" in cmd
+    assert "--output" in cmd
+
+
+def test_build_cmd_identify_mode_omits_no_postprocess(tmp_path: Path) -> None:
+    """Identify mode: build_cmd must use cli_main_identify and OMIT --no-postprocess."""
+    cfg = tmp_path / "id.toml"
+    cfg.write_text("")
+    out_dir = tmp_path / "out"
+    cmd = fanout.build_cmd("identify", cfg, out_dir)
+    cmd_str = " ".join(cmd)
+    # Must invoke cli_main_identify
+    assert "cli_main_identify" in cmd_str
+    # Must NOT include --no-postprocess (identify has no such flag)
+    assert "--no-postprocess" not in cmd
+    # Must include --config and --output
+    assert "--config" in cmd
+    assert "--output" in cmd
+
+
+def test_build_cmd_forward_is_unchanged_regression(tmp_path: Path) -> None:
+    """Regression: forward mode build_cmd must be backward-compatible with the
+    previous hardcoded _FORWARD_PREFIX + --no-postprocess behaviour."""
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("")
+    out_dir = tmp_path / "out"
+    cmd = fanout.build_cmd("forward", cfg, out_dir)
+    # The first three elements are sys.executable + -c + import-and-call fragment
+    assert cmd[0] == sys.executable
+    assert cmd[1] == "-c"
+    assert "cli_main" in cmd[2]
+    assert str(cfg) in cmd
+    assert str(out_dir) in cmd
+
+
+def test_run_manifest_forward_mode_uses_build_cmd(tmp_path: Path) -> None:
+    """Smoke test: run_manifest accepts mode='forward' kwarg without crashing.
+
+    The actual mode dispatch to build_cmd is verified by the build_cmd tests
+    and test_run_manifest_routes_mode_to_default_runner.
+    """
+    configs = [tmp_path / "c0.toml"]
+    configs[0].write_text("")
+
+    def fake_runner(config, output_dir, env, log_path):
+        # In the real impl _default_runner calls build_cmd(mode, ...).
+        # The test verifies run_manifest passes mode correctly by checking
+        # that the seam receives the right arguments (via build_cmd).
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return 0
+
+    # Just ensure run_manifest(mode="forward") doesn't raise
+    results = fanout.run_manifest(
+        configs, tmp_path / "out", n_workers=1, runner=fake_runner, mode="forward"
+    )
+    assert results[0].returncode == 0
+
+
+def test_run_manifest_identify_mode_accepted(tmp_path: Path) -> None:
+    """Smoke test: run_manifest accepts mode='identify' kwarg without crashing.
+
+    The actual mode dispatch is verified by the build_cmd tests and
+    test_run_manifest_routes_mode_to_default_runner.
+    """
+    cfg = tmp_path / "id.toml"
+    cfg.write_text("")
+
+    def fake_runner(config, output_dir, env, log_path):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return 0
+
+    results = fanout.run_manifest(
+        [cfg], tmp_path / "out", n_workers=1, runner=fake_runner, mode="identify"
+    )
+    assert results[0].returncode == 0
+
+
 def test_fanout_end_to_end_runs_two_configs(tmp_path: Path) -> None:
     """Real subprocess integration: two tiny centered configs via the actual
     dfxm-forward CLI, thread-capped, each producing a valid float32 HDF5."""
@@ -164,3 +259,26 @@ def test_fanout_end_to_end_runs_two_configs(tmp_path: Path) -> None:
             img = f["/entry_0000/dfxm_sim_detector/image"]
             assert img.dtype == np.float32
             assert img.shape[0] == 2  # 2 phi frames
+
+
+def test_run_manifest_routes_mode_to_default_runner(tmp_path: Path, monkeypatch) -> None:
+    """With runner=None (the production path main() takes), run_manifest must
+    thread `mode` through to _default_runner."""
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("")
+    seen: dict[str, str] = {}
+
+    def capturing_default_runner(config, output_dir, env, log_path, *, mode="forward"):
+        seen["mode"] = mode
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return 0
+
+    monkeypatch.setattr(fanout, "_default_runner", capturing_default_runner)
+    fanout.run_manifest([cfg], tmp_path / "out", n_workers=1, mode="identify")
+    assert seen["mode"] == "identify"
+
+
+def test_build_cmd_rejects_unknown_mode(tmp_path: Path) -> None:
+    """build_cmd is a public function; an unknown mode must fail loudly."""
+    with pytest.raises(ValueError):
+        fanout.build_cmd("nonsense", tmp_path / "c.toml", tmp_path / "out")

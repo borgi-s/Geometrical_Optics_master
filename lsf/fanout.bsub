@@ -27,6 +27,8 @@ MANIFEST="configs/sweep"                # dir of *.toml, a .toml, or a .txt list
 N_WORKERS=8                             # concurrent config processes
 THREADS_PER_WORKER=4                    # DFXM_MAX_WORKERS per config
                                         # (N_WORKERS x THREADS_PER_WORKER = 32 = -n)
+MODE="forward"                          # "forward" → dfxm-forward (default);
+                                        # "identify" → dfxm-identify (fan-out identify)
 # <<< EDIT THESE <<<
 
 set -euo pipefail
@@ -63,6 +65,7 @@ python scripts/fanout.py \
     --manifest "${MANIFEST}" \
     --output "${OUTROOT}" \
     --n-workers "${N_WORKERS}" \
-    --threads-per-worker "${THREADS_PER_WORKER}"
+    --threads-per-worker "${THREADS_PER_WORKER}" \
+    --mode "${MODE}"
 
 echo "Done. Per-config outputs under ${OUTROOT}"

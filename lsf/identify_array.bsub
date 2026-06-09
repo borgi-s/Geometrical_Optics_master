@@ -54,10 +54,16 @@ conda activate dfxm-geo
 # guard doesn't hardcode the filename.
 dfxm-bootstrap --if-missing --config "${CONFIG}"
 
-# Each task computes 10 samples; rng_seed is offset by LSB_JOBINDEX so each
-# task draws a deterministic, non-overlapping slice. NB: this assumes the
-# identification TOML's `multi` block uses n_samples=10 (per-task). Adjust
-# the LSF array range above to cover your total: tasks * 10 = total samples.
-dfxm-identify --config "${CONFIG}" --output "${TASK_OUTPUT}"
+# Each array task runs its own independent slice of n_samples samples.
+# --seed "${LSB_JOBINDEX}" makes each task's RNG draw distinct and
+# deterministic: the seed flows into noise.rng_seed before any draw, so
+# tasks are non-overlapping even with identical TOML configs.
+#
+# Per-task vs total samples:
+#   The TOML's [multi] n_samples is the PER-TASK sample count.
+#   Total samples = array_size * n_samples_per_task.
+#   Example: [1-100] array x n_samples=10 per task = 1 000 total samples.
+#   Adjust the #BSUB -J array range and n_samples together.
+dfxm-identify --config "${CONFIG}" --output "${TASK_OUTPUT}" --seed "${LSB_JOBINDEX}"
 
 echo "Task ${LSB_JOBINDEX} done. Output in ${TASK_OUTPUT}"
