@@ -57,3 +57,6 @@ direct_space/deformation_gradient_tensors/
 .env
 .venv/
 venv/
+
+# Rendered notebook exports — large, regenerable; delivered out-of-band, not committed.
+examples/**/*.html
