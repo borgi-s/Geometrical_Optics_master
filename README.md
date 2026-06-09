@@ -110,3 +110,5 @@ Developed during PhD research at DTU Physics in collaboration with ESRF (Europea
 ## Roadmap
 
 Released: v2.0.0 (2026-05-23) — empty-TOML defaults, `WallCrystalConfig` defaults stripped (breaking), BLISS-schema HDF5 output, identification → HDF5. Next: Zenodo deposit of reference datasets; expanded multi-reflection support beyond Al; darling/darfix interop polish (see follow-up issues).
+
+For the full audited roadmap to v3.0.0 — oblique full compatibility, identify fan-out optimization, multi-reflection sweeps, `.cif` crystal structures, and the final tutorial series — see [docs/roadmap-2026-06-audit.md](docs/roadmap-2026-06-audit.md).
