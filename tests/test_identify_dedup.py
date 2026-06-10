@@ -97,3 +97,47 @@ def test_multi_without_solo_renders_is_one_combined_call(monkeypatch, tmp_path):
     # Same scene, solos off -> still exactly ONE seam call, per_dislocation=False.
     calls = _spy_scene_calls(monkeypatch, _MULTI_TOML_NO_SOLOS, tmp_path)
     assert calls == [{"n_specs": 2, "per_dislocation": False}]
+
+
+_ZSCAN_TOML = """\
+mode = "z-scan"
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
+
+[scan.phi]
+value = 1.25e-4
+range = 1.25e-4
+steps = 2
+
+[noise]
+poisson_noise = true
+rng_seed = 7
+intensity_scale = 7.0
+
+[crystal]
+sweep_all_slip_planes = false
+slip_plane_normal = [1, 1, 1]
+b_vector_indices = [0]
+angle_start_deg = 0.0
+angle_stop_deg = 0.0
+angle_step_deg = 30.0
+
+[zscan]
+z_offsets_um = [0.0]
+include_secondary = true
+render_per_dislocation = true
+
+[io]
+include_perfect_crystal = false
+write_strain_provenance = false
+"""
+
+
+def test_zscan_render_per_dislocation_is_one_scene_call(monkeypatch, tmp_path):
+    # 1 z × 1 plane × 1 b × 1 angle, secondary on, render_per_dislocation on
+    # → exactly ONE find_hg_scene call with both specs and per_dislocation=True.
+    # Pre-W2: 1 combined + 2 solo Fd computations, zero seam calls.
+    calls = _spy_scene_calls(monkeypatch, _ZSCAN_TOML, tmp_path)
+    assert calls == [{"n_specs": 2, "per_dislocation": True}]

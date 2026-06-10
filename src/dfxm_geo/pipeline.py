@@ -36,7 +36,6 @@ from dfxm_geo.crystal.burgers import (
 )
 from dfxm_geo.crystal.dislocations import (
     Fd_find_mixed,
-    Fd_find_multi_dislocs_mixed,
     MixedDislocSpec,
     find_hg_scene,
 )
@@ -2106,56 +2105,40 @@ def _iter_identification_zscan(
                             rotation_deg=sec["alpha_deg"],
                             position_lab_um=sec["pos_um"],
                         )
-                        Fg = Fd_find_multi_dislocs_mixed(
+                        sample["secondary"] = _build_dislocation_sample_entry(sec)
+                        # W2 dedup: primary+secondary fields computed once;
+                        # combined = Σ(Fg_i − I) + I. The solo secondary used
+                        # to be rendered without its position offset — drawn
+                        # at pos_std_um=0.0 the offset is (0,0,0), so passing
+                        # it through the spec is bit-identical.
+                        Hg, solo_hgs = find_hg_scene(
                             rl_shifted,
                             Us_,
                             [primary_spec, secondary_spec],
                             Theta_,
+                            per_dislocation=zscan.render_per_dislocation,
                         )
-                        sample["secondary"] = _build_dislocation_sample_entry(sec)
-
                         if zscan.render_per_dislocation:
                             # Primary + secondary each rendered alone (noiseless
                             # ground-truth instance labels). Bypass the Poisson
                             # pass, which only touches `dfxm_sim_detector`.
-                            Fg_primary = Fd_find_mixed(
-                                rl_shifted,
-                                Us_,
-                                Ud_mix=Ud_primary,
-                                rotation_deg=float(alpha),
-                                Theta=Theta_,
-                            )
-                            Hg_primary = np.transpose(
-                                fast_inverse2(Fg_primary), [0, 2, 1]
-                            ) - np.identity(3)
-                            Fg_secondary = Fd_find_mixed(
-                                rl_shifted,
-                                Us_,
-                                Ud_mix=sec["Ud"],
-                                rotation_deg=sec["alpha_deg"],
-                                Theta=Theta_,
-                            )
-                            Hg_secondary = np.transpose(
-                                fast_inverse2(Fg_secondary), [0, 2, 1]
-                            ) - np.identity(3)
+                            assert solo_hgs is not None
                             prim_args, _ = _scan_frames_args(
-                                Hg_primary, frames_at_z, config.scan, ctx
+                                solo_hgs[0], frames_at_z, config.scan, ctx
                             )
                             sec_args, _ = _scan_frames_args(
-                                Hg_secondary, frames_at_z, config.scan, ctx
+                                solo_hgs[1], frames_at_z, config.scan, ctx
                             )
                             detectors["dfxm_sim_detector_primary"] = prim_args
                             detectors["dfxm_sim_detector_secondary"] = sec_args
                     else:
-                        Fg = Fd_find_mixed(
+                        Hg, _ = find_hg_scene(
                             rl_shifted,
                             Us_,
-                            Ud_mix=Ud_primary,
-                            rotation_deg=float(alpha),
-                            Theta=Theta_,
+                            [primary_spec],
+                            Theta_,
                         )
 
-                    Hg = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
                     args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan, ctx)
                     detectors["dfxm_sim_detector"] = args_list
 
