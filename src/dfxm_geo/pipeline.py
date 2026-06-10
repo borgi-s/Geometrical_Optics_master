@@ -28,6 +28,7 @@ import numpy as np
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.analysis.mosaicity import compute_com_maps
 from dfxm_geo.crystal.burgers import burgers_vectors as _burgers_vectors
+from dfxm_geo.crystal.burgers import gb_visible as _gb_visible
 from dfxm_geo.crystal.burgers import (
     rotated_t_vectors as _rotated_t_vectors,
 )
@@ -1583,8 +1584,7 @@ def _passes_invisibility(
     vector is within `threshold_deg` degrees of perpendicular to G.
     cos(90° - 10°) = cos(80°) ≈ 0.174.
     """
-    cos_angle = abs(np.dot(q_hkl, b_vec)) / (np.linalg.norm(q_hkl) * np.linalg.norm(b_vec))
-    return bool(cos_angle >= np.cos(np.deg2rad(90.0 - threshold_deg)))
+    return _gb_visible(q_hkl, b_vec, threshold_deg)
 
 
 def _iter_identification_single(
