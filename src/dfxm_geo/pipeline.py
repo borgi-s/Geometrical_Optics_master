@@ -1880,14 +1880,16 @@ def _iter_identification_multi(
             }
 
             if mc.render_per_dislocation:
-                # Per-dislocation Hg: each rendered alone (other one absent).
-                # Noiseless by design — these are ground-truth instance labels.
+                # Per-dislocation Hg: each rendered alone (other one absent), at
+                # its own scene position so the renders overlay the combined
+                # image as ground-truth instance labels. Noiseless by design.
                 Fg_dis0 = Fd_find_mixed(
                     rl_eff,
                     Us_,
                     Ud_mix=d1["Ud"],
                     rotation_deg=d1["alpha_deg"],
                     Theta=Theta_,
+                    position_lab_um=d1["pos_um"],
                 )
                 Hg_dis0 = np.transpose(fast_inverse2(Fg_dis0), [0, 2, 1]) - np.identity(3)
                 Fg_dis1 = Fd_find_mixed(
@@ -1896,6 +1898,7 @@ def _iter_identification_multi(
                     Ud_mix=d2["Ud"],
                     rotation_deg=d2["alpha_deg"],
                     Theta=Theta_,
+                    position_lab_um=d2["pos_um"],
                 )
                 Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
                 dis0_args, _ = _scan_frames_args(Hg_dis0, frames_at_z, config.scan, ctx)
