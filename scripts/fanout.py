@@ -1,17 +1,22 @@
 #!/usr/bin/env python
 """In-node config fan-out launcher for the 100k-image ML dataset.
 
-Runs many forward configs concurrently as separate `dfxm-forward` processes,
-each thread-capped, so a big node is used as config-level fan-out (~8 configs x
-~16 threads) rather than one over-threaded scan (which plateaus ~16 cores /
-memory-bandwidth bound — see the 2026-05-27 cluster profiling note). Phase 2b of
-the forward-throughput arc.
+Runs many forward configs concurrently via a persistent worker pool (v2.6.0
+W1 default) or, with ``--isolate``, as separate ``dfxm-forward`` subprocesses.
+Pool mode amortizes the ~47%-of-wall per-config import/JIT/kernel-load cost:
+workers import ``dfxm_geo`` once and reuse the kernel LUT across configs,
+so a big node is used as config-level fan-out (~8 configs x ~16 threads).
 
 Usage:
+    # default: persistent pool (amortizes import/JIT; recommended for sweeps)
     python scripts/fanout.py --manifest configs/sweep/ --output /scratch/run \\
         --n-workers 8 --threads-per-worker 16
 
-`--manifest` is a directory of *.toml configs, a single .toml, or a .txt file
+    # --isolate: one subprocess per config (pre-v2.6.0 behavior; hard isolation)
+    python scripts/fanout.py --manifest configs/sweep/ --output /scratch/run \\
+        --n-workers 8 --threads-per-worker 16 --isolate
+
+``--manifest`` is a directory of *.toml configs, a single .toml, or a .txt file
 listing config paths (one per line; blank lines and #comments ignored).
 Each config writes to <output>/<config-stem>/ with its own log at
 <output>/<config-stem>.log.
@@ -29,7 +34,14 @@ import sys
 import time
 import traceback
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Future,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    wait,
+)
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -104,6 +116,126 @@ def worker_env(
     return env
 
 
+@contextlib.contextmanager
+def _pinned_environ(threads_per_worker: int):
+    """Pin worker env keys in os.environ for the pool's lifetime, restore after.
+
+    Pool workers inherit the env at process creation (fork on Linux/LSF,
+    spawn on Windows), so the keys must be set in the PARENT before the
+    executor spawns its first worker — and restored afterwards so the
+    calling process (tests, notebooks) is not permanently mutated.
+    """
+    target = worker_env(threads_per_worker)
+    keys = ["DFXM_MAX_WORKERS", *_PINNED_SINGLE]
+    saved = {k: os.environ.get(k) for k in keys}
+    try:
+        for k in keys:
+            os.environ[k] = target[k]
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def run_pool(
+    configs: list[Path],
+    output_root: Path,
+    *,
+    n_workers: int = 8,
+    threads_per_worker: int = 16,
+    mode: str = "forward",
+    worker_fn: Callable[..., dict] | None = None,
+    executor_factory: Callable[[int], ProcessPoolExecutor | ThreadPoolExecutor] | None = None,
+    max_attempts: int = 2,
+) -> list[ConfigResult]:
+    """Run `configs` on a persistent worker pool (v2.6.0 W1, the default mode).
+
+    Workers import dfxm_geo once, JIT once, and retain the kernel LUT
+    (`pipeline._KERNEL_CTX_CACHE`) across configs — amortizing the fixed
+    ~47%-of-wall per-subprocess cost the old isolate mode pays every config.
+
+    Failure containment:
+    - worker_fn exceptions and rc!=0 dicts -> per-config failed result;
+    - a hard worker death (`BrokenProcessPool`) aborts the current executor:
+      finished results are kept, undone configs are resubmitted on a fresh
+      executor; a config still broken after `max_attempts` is rc=-2.
+
+    `worker_fn` / `executor_factory` are test seams; production uses
+    `dfxm_geo.fanout_worker.run_one` on a `ProcessPoolExecutor`.
+    """
+    if worker_fn is None:
+        from dfxm_geo import fanout_worker
+
+        worker_fn = fanout_worker.run_one
+    if executor_factory is None:
+        executor_factory = lambda n: ProcessPoolExecutor(max_workers=n)  # noqa: E731
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    results: dict[Path, ConfigResult] = {}
+    attempts: dict[Path, int] = dict.fromkeys(configs, 0)
+    pending = list(configs)
+
+    def _record(config: Path, rc: int, wall_s: float) -> None:
+        results[config] = ConfigResult(
+            config,
+            output_root / config.stem,
+            rc,
+            wall_s,
+            output_root / f"{config.stem}.log",
+        )
+
+    with _pinned_environ(threads_per_worker):
+        while pending:
+            batch, pending = pending, []
+            broken: list[Path] = []
+            with executor_factory(n_workers) as ex:
+                futs: dict[Future, Path] = {}
+                for c in batch:
+                    attempts[c] += 1
+                    out_dir = output_root / c.stem
+                    log_path = output_root / f"{c.stem}.log"
+                    futs[ex.submit(worker_fn, mode, str(c), str(out_dir), str(log_path))] = c
+                not_done: set[Future] = set(futs)
+                while not_done:
+                    done, not_done = wait(not_done, return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        c = futs[fut]
+                        try:
+                            payload = fut.result()
+                            _record(
+                                c,
+                                int(payload["returncode"]),
+                                float(payload.get("wall_s", 0.0)),
+                            )
+                        except BrokenProcessPool:
+                            broken.append(c)
+                        except Exception:
+                            # worker_fn raised (run_one's guard normally
+                            # prevents this) — failed config, not a dead pool.
+                            log_path = output_root / f"{c.stem}.log"
+                            log_path.write_text(
+                                f"fanout: pool worker raised for {c}\n\n{traceback.format_exc()}",
+                                encoding="utf-8",
+                            )
+                            _record(c, -1, 0.0)
+            for c in broken:
+                if attempts[c] < max_attempts:
+                    pending.append(c)
+                else:
+                    log_path = output_root / f"{c.stem}.log"
+                    log_path.write_text(
+                        f"fanout: worker pool died twice running {c}; giving up "
+                        f"(run with --isolate to debug this config)\n",
+                        encoding="utf-8",
+                    )
+                    _record(c, -2, 0.0)
+
+    return [results[c] for c in configs]
+
+
 def build_cmd(mode: str, config: Path, output_dir: Path) -> list[str]:
     """Build the child-process command list for one config.
 
@@ -161,6 +293,7 @@ def run_manifest(
     runner: Runner | None = None,
     base_env: Mapping[str, str] | None = None,
     mode: str = "forward",
+    isolate: bool = False,
 ) -> list[ConfigResult]:
     """Run `configs` concurrently, at most `n_workers` at once.
 
@@ -173,7 +306,25 @@ def run_manifest(
     *mode* selects the child CLI:
       ``"forward"``   (default) → ``dfxm-forward`` + ``--no-postprocess``
       ``"identify"``            → ``dfxm-identify`` (no ``--no-postprocess``)
+
+    *isolate* (v2.6.0): when True, run each config in a fresh subprocess
+    (pre-v2.6.0 behavior) instead of the persistent worker pool. An injected
+    *runner* implies isolate — the runner seam IS the subprocess abstraction.
+    Pool mode (the default) amortizes the fixed ~47% per-config import/JIT
+    cost across the whole sweep.
     """
+    # Pool is the default (v2.6.0). The subprocess-per-config path remains
+    # behind --isolate; an injected `runner` implies it (the runner seam IS
+    # the subprocess abstraction, and all pre-v2.6.0 tests use it).
+    if runner is None and not isolate:
+        return run_pool(
+            configs,
+            output_root,
+            n_workers=n_workers,
+            threads_per_worker=threads_per_worker,
+            mode=mode,
+        )
+
     output_root.mkdir(parents=True, exist_ok=True)
     env = worker_env(threads_per_worker, base_env)
 
@@ -347,12 +498,23 @@ def main(argv: list[str] | None = None) -> int:
             "throughput (configs/hour, images/sec). M1 Phase 2a baseline data."
         ),
     )
+    ap.add_argument(
+        "--isolate",
+        action="store_true",
+        help=(
+            "Run each config in a fresh subprocess (pre-v2.6.0 behavior) "
+            "instead of the persistent worker pool. Slower (re-pays import/"
+            "JIT/kernel-load per config) but gives hard crash isolation — "
+            "use it to debug a config that kills pool workers."
+        ),
+    )
     args = ap.parse_args(argv)
 
     configs = discover_configs(args.manifest)
+    run_label = f"{args.mode}, isolate" if args.isolate else f"{args.mode}, pool"
     print(
         f"fanout: {len(configs)} configs, {args.n_workers} workers x "
-        f"{args.threads_per_worker} threads [{args.mode}] -> {args.output}"
+        f"{args.threads_per_worker} threads [{run_label}] -> {args.output}"
     )
     t0 = time.perf_counter()
     results = run_manifest(
@@ -361,6 +523,7 @@ def main(argv: list[str] | None = None) -> int:
         n_workers=args.n_workers,
         threads_per_worker=args.threads_per_worker,
         mode=args.mode,
+        isolate=args.isolate,
     )
     wall = time.perf_counter() - t0
 
