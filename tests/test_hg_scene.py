@@ -152,3 +152,17 @@ def test_numba_combined_matches_numpy_with_remount_S(scene):
     hg_np, _ = find_hg_scene(rl_um, Us, specs, Theta, S=S, engine="numpy")
     hg_nb, _ = find_hg_scene(rl_um, Us, specs, Theta, S=S, engine="numba")
     np.testing.assert_allclose(hg_nb, hg_np, rtol=NUMBA_RTOL, atol=NUMBA_ATOL)
+
+
+def test_numba_per_dislocation_single_spec_matches_numpy(scene):
+    # N=1 through the perdis kernel — the indexing edge case.
+    rl_um, Us, Theta, specs = scene
+    hg_np, solos_np = find_hg_scene(
+        rl_um, Us, [specs[0]], Theta, per_dislocation=True, engine="numpy"
+    )
+    hg_nb, solos_nb = find_hg_scene(
+        rl_um, Us, [specs[0]], Theta, per_dislocation=True, engine="numba"
+    )
+    np.testing.assert_allclose(hg_nb, hg_np, rtol=NUMBA_RTOL, atol=NUMBA_ATOL)
+    assert solos_nb is not None and len(solos_nb) == 1
+    np.testing.assert_allclose(solos_nb[0], hg_np, rtol=NUMBA_RTOL, atol=NUMBA_ATOL)

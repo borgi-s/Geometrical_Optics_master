@@ -424,6 +424,9 @@ def _population_hg_kernel(
     fastmath=False keeps reassociation tame so parity holds at rtol=1e-12.
     See math reference in the Phase 1 plan
     (docs/superpowers/plans/2026-05-27-find-hg-numba-fusion.md).
+
+    NOTE: `_scene_perdis_hg_kernel` duplicates this math for the per-dislocation
+    scene path — any physics change here must be mirrored there.
     """
     X = rl_um.shape[1]
     N = M.shape[0]
@@ -717,11 +720,10 @@ def _scene_perdis_hg_kernel(
     identical to `_population_hg_kernel`; see that kernel's docstring for
     the reference.
 
-    The combined accumulation uses the same explicit expanded expressions as
-    `_population_hg_kernel` (matching FP op order for the combined output).
-    The solo Fg_d is constructed from the per-dislocation contribution after
-    each Ud @ Tmp matmul.
-    fastmath=False on both kernels keeps parity ≤ rtol=1e-12 / atol=1e-14.
+    The combined Hg is bit-identical to this module's combined-only numba path
+    (verified by ``test_numba_perdis_combined_equals_combined_only``) and at
+    parity ≤ rtol=1e-12 / atol=1e-14 with the NumPy oracle.
+    fastmath=False on both kernels keeps parity at those tolerances.
     """
     X = rl_um.shape[1]
     N = M.shape[0]
@@ -836,6 +838,14 @@ def _find_hg_scene_perdis_numba(
     b: float,
     ny: float,
 ) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Numba fused per-dislocation Hg computation via _scene_perdis_hg_kernel.
+
+    Allocates combined (X, 3, 3) and per-dislocation (n, X, 3, 3) outputs,
+    coerces inputs to C-contiguous float64, runs the kernel, and returns
+    (combined, [per-dislocation list]). The solo arrays are VIEWS into the
+    shared (n, X, 3, 3) backing array and are released together when solos go
+    out of scope; by contrast the NumPy oracle returns independent copies.
+    """
     X = rl_um.shape[1]
     n = M.shape[0]
     Hg_combined = np.empty((X, 3, 3), dtype=np.float64)
