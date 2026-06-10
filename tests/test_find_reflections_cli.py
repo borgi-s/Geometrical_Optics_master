@@ -18,6 +18,16 @@ mount_y = [0, 1, 0]
 mount_z = [0, 0, 1]
 """
 
+# Minimal config with no [reciprocal] block — used to test the keV fallback warning.
+CRYSTAL_ONLY_CONFIG = """
+[crystal]
+lattice = "cubic"
+a       = 4.0493e-10
+mount_x = [1, 0, 0]
+mount_y = [0, 1, 0]
+mount_z = [0, 0, 1]
+"""
+
 
 @pytest.fixture
 def paper_config(tmp_path):
@@ -52,13 +62,15 @@ def test_eta_target_filters(paper_config, capsys):
     out = capsys.readouterr().out
     assert "1 1 3" in out
     # Verify no {111} reflections (different eta group) appear.
-    # Parse lines: hkl is the first column, check no line has hkl matching 1 1 1 family.
-    # Checking " 1 1 1" (with leading space from right-aligned column) avoids
-    # false-match inside e.g. "-1 1 1" — but to be safe, parse each data line.
+    # Skip comment lines (start with '#') AND the column-header line (first column
+    # is the literal string 'hkl', not a Miller index).
     lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("#")]
     for line in lines:
         # The hkl field is the first 10 chars (right-aligned), strip it.
         hkl_part = line[:10].strip()
+        # Skip the column-header line — its first column is 'hkl', not a Miller index.
+        if hkl_part == "hkl":
+            continue
         # Reject any {111} family hkl
         assert hkl_part not in (
             "1 1 1",
@@ -83,3 +95,23 @@ def test_default_mount_when_no_crystal_block(tmp_path, capsys):
     rc = cli_main(["--config", str(p), "--hkl-max", "2"])
     assert rc == 0
     assert "keV" in capsys.readouterr().out
+
+
+def test_malformed_toml_returns_rc1_with_message(tmp_path, capsys):
+    """Malformed TOML must return rc=1 and print a diagnostic to stderr."""
+    bad = tmp_path / "bad.toml"
+    bad.write_text("this is not = [valid toml\n", encoding="utf-8")
+    rc = cli_main(["--config", str(bad)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "invalid TOML" in err
+
+
+def test_no_kev_in_config_warns_on_stderr(tmp_path, capsys):
+    """When neither --keV nor [reciprocal] keV is present, a warning goes to stderr."""
+    cfg = tmp_path / "crystal_only.toml"
+    cfg.write_text(CRYSTAL_ONLY_CONFIG, encoding="utf-8")
+    rc = cli_main(["--config", str(cfg), "--hkl-max", "1"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "defaulting to 17.0" in err

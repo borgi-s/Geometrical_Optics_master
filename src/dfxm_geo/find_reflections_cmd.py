@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from dfxm_geo.crystal.oblique import find_reflections
-from dfxm_geo.crystal.reflections import GROUP_TOL
+from dfxm_geo.crystal.reflections import ETA_MATCH_TOL, GROUP_TOL
 from dfxm_geo.reciprocal_space.kernel import _crystal_mount_from_toml
 
 
@@ -24,6 +24,9 @@ def cli_main(argv: list[str] | None = None) -> int:
         prog="dfxm-find-reflections",
         description="Enumerate Laue-accessible reflections (theta, eta, omega) for "
         "the crystal mount and beam energy in a config TOML.",
+        epilog="The 'group' column assigns a kernel-sharing ID based on each row's "
+        "solution-1 (theta, eta); +/- eta branches may consolidate further when "
+        "branches are chosen explicitly in [[reflections]].",
     )
     parser.add_argument(
         "--config", required=True, help="TOML with [crystal] mount + [reciprocal] keV"
@@ -37,19 +40,38 @@ def cli_main(argv: list[str] | None = None) -> int:
         "--eta-target-deg", type=float, default=None, help="keep only the group at this eta"
     )
     parser.add_argument(
-        "--eta-tol-deg", type=float, default=0.06, help="eta-target tolerance (default 0.06)"
+        "--eta-tol-deg",
+        type=float,
+        default=float(np.degrees(ETA_MATCH_TOL)),
+        help="eta-target tolerance in degrees (default: matches the [[reflections]] resolver tolerance)",
     )
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
     if not config_path.is_file():
         print(f"error: config not found: {config_path}", file=sys.stderr)
-        return 2
-    with open(config_path, "rb") as fh:
-        raw = tomllib.load(fh)
+        return 1
+
+    try:
+        with open(config_path, "rb") as fh:
+            raw = tomllib.load(fh)
+    except tomllib.TOMLDecodeError as exc:
+        print(f"error: invalid TOML in {config_path}: {exc}", file=sys.stderr)
+        return 1
 
     mount = _crystal_mount_from_toml(raw.get("crystal"))
-    keV = args.keV if args.keV is not None else float(raw.get("reciprocal", {}).get("keV", 17.0))
+
+    # Resolve keV: CLI flag > config value > hardcoded fallback (with warning).
+    if args.keV is not None:
+        keV = args.keV
+    elif raw.get("reciprocal", {}).get("keV") is not None:
+        keV = float(raw["reciprocal"]["keV"])
+    else:
+        print(
+            "warning: no [reciprocal] keV in config and no --keV given; defaulting to 17.0 keV.",
+            file=sys.stderr,
+        )
+        keV = 17.0
 
     kwargs: dict = {
         "theta_range": (0.0, float(np.deg2rad(args.theta_max_deg))),
@@ -65,6 +87,9 @@ def cli_main(argv: list[str] | None = None) -> int:
     )
     print(
         f"{'hkl':>10} {'theta_deg':>10} {'eta1_deg':>10} {'omega1_deg':>11} {'eta2_deg':>10} {'omega2_deg':>11} {'group':>6}"
+    )
+    print(
+        "# group: kernel-sharing by solution-1 (theta, eta); +/- eta branches may consolidate when branches are chosen explicitly"
     )
     reps: list[tuple[float, float]] = []
     for g in geoms:
