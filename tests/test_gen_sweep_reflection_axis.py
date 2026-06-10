@@ -103,3 +103,41 @@ def test_sweep_default_behavior_unchanged(tmp_path):
         data = tomllib.loads(p.read_text(encoding="utf-8"))
         assert tuple(data["reciprocal"]["hkl"]) == (-1, 1, -1)
         assert data["reciprocal"]["keV"] == pytest.approx(17.0)
+
+
+def test_sweep_kev_override(tmp_path):
+    """--keV overrides the default 17.0 keV in gen_sweep_configs."""
+    gen_sweep_configs.main(["--out-dir", str(tmp_path), "--keV", "19.1"])
+    p = next(iter(sorted(tmp_path.glob("*.toml"))))
+    data = tomllib.loads(p.read_text(encoding="utf-8"))
+    assert data["reciprocal"]["keV"] == pytest.approx(19.1)
+
+
+def test_hkl_token_no_collision_for_multidigit_indices(tmp_path):
+    """(1,11,1) and (11,1,1) must produce distinct filenames — no overwrite."""
+    gen_identify_sweep_configs.main(
+        [
+            "--n-configs",
+            "1",
+            "--out-dir",
+            str(tmp_path),
+            "--hkl-list",
+            "1,11,1;11,1,1",
+        ]
+    )
+    assert len(sorted(tmp_path.glob("*.toml"))) == 2  # distinct filenames, no overwrite
+
+
+def test_hkl_list_bad_input_raises(tmp_path):
+    """Non-integer hkl index must raise SystemExit with 'integers' in the message."""
+    with pytest.raises(SystemExit, match="integers"):
+        gen_identify_sweep_configs.main(
+            [
+                "--n-configs",
+                "1",
+                "--out-dir",
+                str(tmp_path),
+                "--hkl-list",
+                "1,foo,1",
+            ]
+        )

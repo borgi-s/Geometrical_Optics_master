@@ -39,16 +39,20 @@ def _parse_hkl_list(spec: str) -> list[tuple[int, int, int]]:
     """'1,1,1;2,0,0' → [(1,1,1), (2,0,0)]."""
     out = []
     for token in spec.split(";"):
-        parts = [int(x) for x in token.split(",")]
+        try:
+            parts = [int(x) for x in token.split(",")]
+        except ValueError:
+            raise SystemExit(f"--hkl-list entry must be integers, got {token!r}") from None
         if len(parts) != 3:
             raise SystemExit(f"--hkl-list entry must have 3 indices, got {token!r}")
-        out.append(tuple(parts))
+        h, k, l = parts
+        out.append((h, k, l))
     return out
 
 
 def _hkl_token(hkl: tuple[int, int, int]) -> str:
-    """(-1,1,-1) → 'hklm11m1' (m = minus; filesystem-safe filename token)."""
-    return "hkl" + "".join(f"m{abs(c)}" if c < 0 else str(c) for c in hkl)
+    """(-1,1,-1) → 'hkl_m1_1_m1' (m = minus; underscore-separated, collision-free)."""
+    return "hkl_" + "_".join(f"m{abs(c)}" if c < 0 else str(c) for c in hkl)
 
 
 # Mirrors configs/profile_rocking.toml [reciprocal] so the bootstrapped

@@ -29,16 +29,20 @@ def _parse_hkl_list(spec: str) -> list[tuple[int, int, int]]:
     """'1,1,1;2,0,0' → [(1,1,1), (2,0,0)]."""
     out = []
     for token in spec.split(";"):
-        parts = [int(x) for x in token.split(",")]
+        try:
+            parts = [int(x) for x in token.split(",")]
+        except ValueError:
+            raise SystemExit(f"--hkl-list entry must be integers, got {token!r}") from None
         if len(parts) != 3:
             raise SystemExit(f"--hkl-list entry must have 3 indices, got {token!r}")
-        out.append(tuple(parts))
+        h, k, l = parts
+        out.append((h, k, l))
     return out
 
 
 def _hkl_token(hkl: tuple[int, int, int]) -> str:
-    """(-1,1,-1) → 'hklm11m1' (m = minus; filesystem-safe filename token)."""
-    return "hkl" + "".join(f"m{abs(c)}" if c < 0 else str(c) for c in hkl)
+    """(-1,1,-1) → 'hkl_m1_1_m1' (m = minus; underscore-separated, collision-free)."""
+    return "hkl_" + "_".join(f"m{abs(c)}" if c < 0 else str(c) for c in hkl)
 
 
 def _phi_block(value: float, phi_range: float, steps: int) -> str:
@@ -191,8 +195,14 @@ def main(argv: list[str] | None = None) -> int:
         phi_desc = f"phi rocking {lo * 1e6:.0f}->{hi * 1e6:.0f} urad x {args.phi_steps} steps"
     else:
         phi_desc = f"phi fixed at {args.phi_value * 1e6:.0f} urad"
+    if use_hkl_in_filename:
+        configs_desc = (
+            f"{n_written} configs ({args.n_configs} seeds x {len(reflections)} reflections)"
+        )
+    else:
+        configs_desc = f"{n_written} configs"
     print(
-        f"wrote {n_written} configs to {out_dir}  "
+        f"wrote {configs_desc} to {out_dir}  "
         f"(n_samples={args.n_samples}, {phi_desc}, nrays={args.nrays}, "
         f"render_per_dislocation={args.render_per_dislocation})\n"
         f"total images = {n_written} configs x {args.n_samples} scenes "
