@@ -66,6 +66,7 @@ python scripts/fanout.py \
     --output "${OUTROOT}" \
     --n-workers "${N_WORKERS}" \
     --threads-per-worker "${THREADS_PER_WORKER}" \
-    --mode "${MODE}"
+    --mode "${MODE}" \
+    --timing-json "${OUTROOT}/timing.json"
 
-echo "Done. Per-config outputs under ${OUTROOT}"
+echo "Done. Per-config outputs under ${OUTROOT}; throughput manifest at ${OUTROOT}/timing.json"

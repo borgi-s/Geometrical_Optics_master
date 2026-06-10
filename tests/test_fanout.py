@@ -259,6 +259,10 @@ def test_fanout_end_to_end_runs_two_configs(tmp_path: Path) -> None:
             img = f["/entry_0000/dfxm_sim_detector/image"]
             assert img.dtype == np.float32
             assert img.shape[0] == 2  # 2 phi frames
+        # The real child emitted the machine-readable timing line.
+        timing = fanout.parse_timing_log(out_root / f"{stem}.log")
+        assert timing.get("import_s", 0) > 0, f"no DFXM_TIMING in {stem}.log"
+        assert timing.get("run_s", 0) > 0
 
 
 def test_run_manifest_routes_mode_to_default_runner(tmp_path: Path, monkeypatch) -> None:
@@ -282,3 +286,119 @@ def test_build_cmd_rejects_unknown_mode(tmp_path: Path) -> None:
     """build_cmd is a public function; an unknown mode must fail loudly."""
     with pytest.raises(ValueError):
         fanout.build_cmd("nonsense", tmp_path / "c.toml", tmp_path / "out")
+
+
+# ---------------------------------------------------------------------------
+# Part C: --timing-json (M1 Phase 2a — measure before optimizing)
+# ---------------------------------------------------------------------------
+
+
+def test_build_cmd_snippet_emits_timing_line(tmp_path: Path) -> None:
+    """The child -c snippet must time import vs run separately and print a
+    DFXM_TIMING json line, so fanout can split fixed startup cost from work."""
+    for mode in ("forward", "identify"):
+        cmd = fanout.build_cmd(mode, tmp_path / "c.toml", tmp_path / "out")
+        snippet = cmd[2]
+        assert "DFXM_TIMING" in snippet, mode
+        assert "import_s" in snippet, mode
+        assert "run_s" in snippet, mode
+
+
+def test_parse_timing_log_extracts_last_timing_line(tmp_path: Path) -> None:
+    log = tmp_path / "c.log"
+    log.write_text(
+        "Defining properties of rays\n"
+        'DFXM_TIMING {"import_s": 9.9, "run_s": 1.0}\n'
+        "Wrote 22 images to out\n"
+        'DFXM_TIMING {"import_s": 1.25, "run_s": 7.5}\n',
+        encoding="utf-8",
+    )
+    got = fanout.parse_timing_log(log)
+    assert got == {"import_s": 1.25, "run_s": 7.5, "images": 22}
+
+
+def test_parse_timing_log_captures_samples_line(tmp_path: Path) -> None:
+    """identify-multi prints 'Wrote N samples' (scenes, not frames) — captured
+    under its own key so it is never conflated with an image count."""
+    log = tmp_path / "c.log"
+    log.write_text(
+        'DFXM_TIMING {"import_s": 1.0, "run_s": 2.0}\nWrote 2 samples to out\n',
+        encoding="utf-8",
+    )
+    assert fanout.parse_timing_log(log) == {"import_s": 1.0, "run_s": 2.0, "samples": 2}
+
+
+def test_parse_timing_log_tolerates_missing_data(tmp_path: Path) -> None:
+    no_line = tmp_path / "plain.log"
+    no_line.write_text("just output, no timing\n", encoding="utf-8")
+    assert fanout.parse_timing_log(no_line) == {}
+    assert fanout.parse_timing_log(tmp_path / "nonexistent.log") == {}
+    garbled = tmp_path / "bad.log"
+    garbled.write_text("DFXM_TIMING {not json}\n", encoding="utf-8")
+    assert fanout.parse_timing_log(garbled) == {}
+
+
+def test_write_timing_json(tmp_path: Path) -> None:
+    """write_timing_json assembles per-config rows + sweep-level throughput."""
+    import json
+
+    logs = []
+    for i, (imp, run, images) in enumerate([(1.5, 8.5, 22), (1.4, 3.6, 22)]):
+        log = tmp_path / f"c{i}.log"
+        log.write_text(
+            f'DFXM_TIMING {{"import_s": {imp}, "run_s": {run}}}\nWrote {images} images to out\n',
+            encoding="utf-8",
+        )
+        logs.append(log)
+    results = [
+        fanout.ConfigResult(tmp_path / "c0.toml", tmp_path / "out" / "c0", 0, 10.0, logs[0]),
+        fanout.ConfigResult(tmp_path / "c1.toml", tmp_path / "out" / "c1", 0, 5.0, logs[1]),
+    ]
+    out_json = tmp_path / "timing.json"
+    fanout.write_timing_json(
+        out_json,
+        results,
+        total_wall_s=10.0,
+        n_workers=2,
+        threads_per_worker=4,
+        mode="identify",
+    )
+    data = json.loads(out_json.read_text(encoding="utf-8"))
+    meta = data["sweep"]
+    assert meta["n_configs"] == 2
+    assert meta["n_ok"] == 2
+    assert meta["n_workers"] == 2
+    assert meta["threads_per_worker"] == 4
+    assert meta["mode"] == "identify"
+    assert meta["total_wall_s"] == 10.0
+    assert meta["configs_per_hour"] == pytest.approx(2 / 10.0 * 3600)
+    assert meta["images_total"] == 44
+    assert meta["images_per_s"] == pytest.approx(44 / 10.0)
+    rows = data["configs"]
+    assert rows[0]["config"].endswith("c0.toml")
+    assert rows[0]["wall_s"] == 10.0
+    assert rows[0]["returncode"] == 0
+    assert rows[0]["import_s"] == 1.5
+    assert rows[0]["run_s"] == 8.5
+    assert rows[0]["images"] == 22
+
+
+def test_write_timing_json_partial_child_data(tmp_path: Path) -> None:
+    """Configs whose log lacks DFXM_TIMING (crash, old CLI) still get a row;
+    sweep aggregates that need images are omitted rather than wrong."""
+    import json
+
+    log = tmp_path / "c0.log"
+    log.write_text("crashed before timing\n", encoding="utf-8")
+    results = [fanout.ConfigResult(tmp_path / "c0.toml", tmp_path / "out" / "c0", -1, 2.0, log)]
+    out_json = tmp_path / "timing.json"
+    fanout.write_timing_json(
+        out_json, results, total_wall_s=2.0, n_workers=1, threads_per_worker=1, mode="forward"
+    )
+    data = json.loads(out_json.read_text(encoding="utf-8"))
+    assert data["sweep"]["n_ok"] == 0
+    assert "images_total" not in data["sweep"]
+    assert "images_per_s" not in data["sweep"]
+    row = data["configs"][0]
+    assert row["returncode"] == -1
+    assert "import_s" not in row

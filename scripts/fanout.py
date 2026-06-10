@@ -20,7 +20,10 @@ Each config writes to <output>/<config-stem>/ with its own log at
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -33,16 +36,24 @@ from pathlib import Path
 # Invoke the forward/identify CLIs in a child interpreter. Using `-c` (rather
 # than the `dfxm-forward` / `dfxm-identify` console scripts) makes the launcher
 # independent of PATH — the child always uses the same interpreter as the parent.
-_FORWARD_PREFIX = [
-    sys.executable,
-    "-c",
-    "from dfxm_geo.pipeline import cli_main; raise SystemExit(cli_main())",
-]
-_IDENTIFY_PREFIX = [
-    sys.executable,
-    "-c",
-    "from dfxm_geo.pipeline import cli_main_identify; raise SystemExit(cli_main_identify())",
-]
+# The snippet times the import (interpreter + module import = the fixed startup
+# cost a persistent worker pool would amortize) separately from the CLI run and
+# prints one machine-readable DFXM_TIMING line, which lands in the per-config
+# log and is harvested by --timing-json.
+_CHILD_SNIPPET = (
+    "import json, time\n"
+    "_t = time.perf_counter()\n"
+    "from dfxm_geo.pipeline import {entry}\n"
+    "_import_s = time.perf_counter() - _t\n"
+    "_t = time.perf_counter()\n"
+    "_rc = {entry}()\n"
+    "_run_s = time.perf_counter() - _t\n"
+    "print('DFXM_TIMING ' + json.dumps("
+    "{{'import_s': round(_import_s, 3), 'run_s': round(_run_s, 3)}}))\n"
+    "raise SystemExit(_rc)\n"
+)
+_FORWARD_PREFIX = [sys.executable, "-c", _CHILD_SNIPPET.format(entry="cli_main")]
+_IDENTIFY_PREFIX = [sys.executable, "-c", _CHILD_SNIPPET.format(entry="cli_main_identify")]
 
 # Thread-budget env keys pinned to 1 per worker (frame parallelism comes from
 # DFXM_MAX_WORKERS; pinning BLAS/numba avoids 8-process oversubscription).
@@ -205,6 +216,89 @@ def run_manifest(
         return list(ex.map(task, configs))
 
 
+_TIMING_PREFIX = "DFXM_TIMING "
+_IMAGES_RE = re.compile(r"^Wrote (\d+) images", re.MULTILINE)
+# identify-multi reports scenes ("Wrote N samples"), each a full rocking scan
+# of frames — kept under a separate key so it is never summed as an image count.
+_SAMPLES_RE = re.compile(r"^Wrote (\d+) samples", re.MULTILINE)
+
+
+def parse_timing_log(log_path: Path) -> dict[str, float | int]:
+    """Harvest child-emitted timing facts from one per-config log.
+
+    Returns a (possibly empty) dict with whichever of these were found:
+    ``import_s`` / ``run_s`` from the last ``DFXM_TIMING {json}`` line, and
+    ``images`` from the CLI's "Wrote N images" line. Missing files, absent
+    lines, or garbled json all degrade to ``{}`` — a config that crashed
+    before printing timing must not break the sweep summary.
+    """
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    out: dict[str, float | int] = {}
+    timing_lines = [line for line in text.splitlines() if line.startswith(_TIMING_PREFIX)]
+    if timing_lines:
+        with contextlib.suppress(json.JSONDecodeError):
+            out.update(json.loads(timing_lines[-1][len(_TIMING_PREFIX) :]))
+    images = _IMAGES_RE.findall(text)
+    if images:
+        out["images"] = int(images[-1])
+    samples = _SAMPLES_RE.findall(text)
+    if samples:
+        out["samples"] = int(samples[-1])
+    return out
+
+
+def write_timing_json(
+    path: Path,
+    results: list[ConfigResult],
+    *,
+    total_wall_s: float,
+    n_workers: int,
+    threads_per_worker: int,
+    mode: str,
+) -> None:
+    """Write the sweep timing manifest: per-config rows + throughput summary.
+
+    Sweep-level ``images_total`` / ``images_per_s`` are only emitted when every
+    successful config reported an image count — a partial sum would understate
+    throughput and look like a regression.
+    """
+    rows = []
+    image_counts: list[int] = []
+    for r in results:
+        row: dict[str, object] = {
+            "config": str(r.config),
+            "output_dir": str(r.output_dir),
+            "returncode": r.returncode,
+            "wall_s": round(r.wall_s, 3),
+            "log": str(r.log_path),
+        }
+        row.update(parse_timing_log(r.log_path))
+        rows.append(row)
+        if r.returncode == 0 and "images" in row:
+            image_counts.append(int(row["images"]))  # type: ignore[arg-type]
+
+    n_ok = sum(1 for r in results if r.returncode == 0)
+    sweep: dict[str, object] = {
+        "mode": mode,
+        "n_configs": len(results),
+        "n_ok": n_ok,
+        "n_workers": n_workers,
+        "threads_per_worker": threads_per_worker,
+        "total_wall_s": round(total_wall_s, 3),
+        "configs_per_hour": round(len(results) / total_wall_s * 3600, 2)
+        if total_wall_s > 0
+        else None,
+    }
+    if image_counts and len(image_counts) == n_ok and n_ok > 0:
+        sweep["images_total"] = sum(image_counts)
+        sweep["images_per_s"] = round(sum(image_counts) / total_wall_s, 3)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"sweep": sweep, "configs": rows}, indent=2), encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -232,6 +326,16 @@ def main(argv: list[str] | None = None) -> int:
             "Set MODE=identify in lsf/fanout.bsub to fan out identification."
         ),
     )
+    ap.add_argument(
+        "--timing-json",
+        type=Path,
+        default=None,
+        help=(
+            "Write a JSON timing manifest here: per-config wall time + the "
+            "child-reported import/run split (DFXM_TIMING log lines) + sweep "
+            "throughput (configs/hour, images/sec). M1 Phase 2a baseline data."
+        ),
+    )
     args = ap.parse_args(argv)
 
     configs = discover_configs(args.manifest)
@@ -254,6 +358,16 @@ def main(argv: list[str] | None = None) -> int:
         status = "ok" if r.returncode == 0 else f"FAIL(rc={r.returncode})"
         print(f"  {r.config.name:<30} {status:>12}  {r.wall_s:7.1f}s  log={r.log_path}")
     print(f"fanout done: {len(results) - n_fail}/{len(results)} ok in {wall:.1f}s")
+    if args.timing_json is not None:
+        write_timing_json(
+            args.timing_json,
+            results,
+            total_wall_s=wall,
+            n_workers=args.n_workers,
+            threads_per_worker=args.threads_per_worker,
+            mode=args.mode,
+        )
+        print(f"fanout: timing manifest -> {args.timing_json}")
     return 1 if n_fail else 0
 
 
