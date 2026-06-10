@@ -6,6 +6,8 @@ import importlib.util
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import pytest
@@ -255,6 +257,7 @@ def test_fanout_end_to_end_runs_two_configs(tmp_path: Path) -> None:
         out_root,
         n_workers=1,
         threads_per_worker=2,
+        isolate=True,  # subprocess path: each child pays its own import cost
     )
     assert len(results) == 2
     assert all(r.returncode == 0 for r in results), [r.log_path.read_text() for r in results]
@@ -272,8 +275,13 @@ def test_fanout_end_to_end_runs_two_configs(tmp_path: Path) -> None:
 
 
 def test_run_manifest_routes_mode_to_default_runner(tmp_path: Path, monkeypatch) -> None:
-    """With runner=None (the production path main() takes), run_manifest must
-    thread `mode` through to _default_runner."""
+    """With runner=None + isolate=True (the subprocess path), run_manifest must
+    thread `mode` through to _default_runner.
+
+    isolate=True is used here because runner=None now dispatches to the pool
+    by default (v2.6.0); isolate=True keeps this test on the subprocess path
+    without injecting a runner seam.
+    """
     cfg = tmp_path / "c.toml"
     cfg.write_text("")
     seen: dict[str, str] = {}
@@ -284,7 +292,7 @@ def test_run_manifest_routes_mode_to_default_runner(tmp_path: Path, monkeypatch)
         return 0
 
     monkeypatch.setattr(fanout, "_default_runner", capturing_default_runner)
-    fanout.run_manifest([cfg], tmp_path / "out", n_workers=1, mode="identify")
+    fanout.run_manifest([cfg], tmp_path / "out", n_workers=1, mode="identify", isolate=True)
     assert seen["mode"] == "identify"
 
 
@@ -419,3 +427,419 @@ def test_write_timing_json_partial_child_data(tmp_path: Path) -> None:
     row = data["configs"][0]
     assert row["returncode"] == -1
     assert "import_s" not in row
+
+
+# ---------------------------------------------------------------------------
+# Pool mode (v2.6.0 W1). Tests inject worker_fn + executor_factory so no real
+# process pool is spawned: a ThreadPoolExecutor exercises the same
+# submit/as_completed/recovery code paths and imposes no picklability
+# constraint on the fakes. Fidelity gap: a ThreadPoolExecutor cannot
+# reproduce the all-futures-poisoned cascade of a real broken
+# ProcessPoolExecutor — the real-pool paths are covered by the e2e tests
+# (pool-vs-isolate bit-identity gate + pool forward e2e) further below.
+# ---------------------------------------------------------------------------
+
+
+def _ok_worker(mode, config, output_dir, log_path):
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    Path(log_path).write_text(
+        'DFXM_TIMING {"import_s": 1.5, "run_s": 2.5}\nWrote 4 images to x\n',
+        encoding="utf-8",
+    )
+    return {"returncode": 0, "wall_s": 0.01}
+
+
+def test_run_pool_basic(tmp_path: Path) -> None:
+    configs = [tmp_path / f"c{i}.toml" for i in range(3)]
+    for c in configs:
+        c.write_text("")
+    results = fanout.run_pool(
+        configs,
+        tmp_path / "out",
+        n_workers=2,
+        mode="identify",
+        worker_fn=_ok_worker,
+        executor_factory=lambda n: ThreadPoolExecutor(max_workers=n),
+    )
+    assert len(results) == 3
+    assert all(r.returncode == 0 for r in results)
+    assert {r.config for r in results} == set(configs)
+    # Results come back in input order regardless of completion order.
+    assert [r.config for r in results] == configs
+    timing = fanout.parse_timing_log(results[0].log_path)
+    assert timing["import_s"] == 1.5 and timing["images"] == 4
+
+
+def test_run_pool_worker_dict_failure_is_contained(tmp_path: Path) -> None:
+    c = tmp_path / "bad.toml"
+    c.write_text("")
+
+    def failing_worker(mode, config, output_dir, log_path):
+        Path(log_path).write_text("boom\n", encoding="utf-8")
+        return {"returncode": -1, "wall_s": 0.0}
+
+    results = fanout.run_pool(
+        [c],
+        tmp_path / "out",
+        n_workers=1,
+        mode="identify",
+        worker_fn=failing_worker,
+        executor_factory=lambda n: ThreadPoolExecutor(max_workers=n),
+    )
+    assert results[0].returncode == -1
+
+
+def test_run_pool_raising_worker_is_contained(tmp_path: Path) -> None:
+    """A worker_fn that raises (not via run_one's guard) is rc=-1 + log."""
+    good, bad = tmp_path / "good.toml", tmp_path / "boom.toml"
+    good.write_text("")
+    bad.write_text("")
+
+    def worker(mode, config, output_dir, log_path):
+        if "boom" in config:
+            raise RuntimeError("worker exploded")
+        return _ok_worker(mode, config, output_dir, log_path)
+
+    results = fanout.run_pool(
+        [good, bad],
+        tmp_path / "out",
+        n_workers=1,
+        mode="identify",
+        worker_fn=worker,
+        executor_factory=lambda n: ThreadPoolExecutor(max_workers=n),
+    )
+    by_name = {r.config.name: r for r in results}
+    assert by_name["good.toml"].returncode == 0
+    assert by_name["boom.toml"].returncode == -1
+    assert "worker exploded" in by_name["boom.toml"].log_path.read_text(encoding="utf-8")
+
+
+def test_run_pool_recovers_from_broken_pool(tmp_path: Path) -> None:
+    """First executor 'hard-crashes' on one config; run_pool rebuilds the
+    executor and retries; second attempt succeeds. The other config's result
+    survives. A config that breaks the pool twice is marked rc=-2."""
+    ok = tmp_path / "ok.toml"
+    flaky = tmp_path / "flaky.toml"
+    fatal = tmp_path / "fatal.toml"
+    for c in (ok, flaky, fatal):
+        c.write_text("")
+    attempts: dict[str, int] = {}
+
+    def worker(mode, config, output_dir, log_path):
+        name = Path(config).name
+        attempts[name] = attempts.get(name, 0) + 1
+        if name == "flaky.toml" and attempts[name] == 1:
+            raise BrokenProcessPool("simulated worker death")
+        if name == "fatal.toml":
+            raise BrokenProcessPool("simulated worker death")
+        return _ok_worker(mode, config, output_dir, log_path)
+
+    results = fanout.run_pool(
+        [ok, flaky, fatal],
+        tmp_path / "out",
+        n_workers=1,
+        mode="identify",
+        worker_fn=worker,
+        executor_factory=lambda n: ThreadPoolExecutor(max_workers=n),
+    )
+    by_name = {r.config.name: r for r in results}
+    assert by_name["ok.toml"].returncode == 0
+    assert by_name["flaky.toml"].returncode == 0  # retried, then fine
+    assert by_name["fatal.toml"].returncode == -2  # gave up after 2 attempts
+    assert attempts["fatal.toml"] == 2
+
+
+def test_run_manifest_dispatches_pool_by_default(tmp_path: Path, monkeypatch) -> None:
+    c = tmp_path / "c.toml"
+    c.write_text("")
+    called = {}
+
+    def fake_run_pool(configs, output_root, **kwargs):
+        called["pool"] = True
+        return []
+
+    monkeypatch.setattr(fanout, "run_pool", fake_run_pool)
+    fanout.run_manifest([c], tmp_path / "out", n_workers=1, mode="identify")
+    assert called.get("pool") is True
+
+
+def test_run_manifest_isolate_uses_subprocess_path(tmp_path: Path, monkeypatch) -> None:
+    c = tmp_path / "c.toml"
+    c.write_text("")
+
+    def fake_run_pool(*a, **k):  # must NOT be called
+        raise AssertionError("pool path used despite isolate=True")
+
+    monkeypatch.setattr(fanout, "run_pool", fake_run_pool)
+
+    def fake_runner(config, output_dir, env, log_path):
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        return 0
+
+    results = fanout.run_manifest(
+        [c], tmp_path / "out", n_workers=1, runner=fake_runner, isolate=True
+    )
+    assert results[0].returncode == 0
+
+
+def test_run_manifest_runner_seam_implies_isolate(tmp_path: Path, monkeypatch) -> None:
+    """Back-compat: every existing test that injects `runner` keeps testing
+    the subprocess orchestration without passing isolate."""
+    c = tmp_path / "c.toml"
+    c.write_text("")
+    monkeypatch.setattr(fanout, "run_pool", lambda *a, **k: (_ for _ in ()).throw(AssertionError()))
+
+    def fake_runner(config, output_dir, env, log_path):
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        return 0
+
+    results = fanout.run_manifest([c], tmp_path / "out", n_workers=1, runner=fake_runner)
+    assert results[0].returncode == 0
+
+
+def test_run_pool_sizes_executor_to_n_workers(tmp_path: Path) -> None:
+    """Spec §7.5 concurrency cap: the executor is created with n_workers —
+    the pool's concurrency limit is delegated to the executor itself."""
+    configs = [tmp_path / f"c{i}.toml" for i in range(4)]
+    for c in configs:
+        c.write_text("")
+    sizes: list[int] = []
+
+    def recording_factory(n: int):
+        sizes.append(n)
+        return ThreadPoolExecutor(max_workers=n)
+
+    fanout.run_pool(
+        configs,
+        tmp_path / "out",
+        n_workers=3,
+        mode="identify",
+        worker_fn=_ok_worker,
+        executor_factory=recording_factory,
+    )
+    assert sizes == [3]
+
+
+def test_pool_env_pinned_during_run_and_restored_after(tmp_path: Path) -> None:
+    import os
+
+    c = tmp_path / "c.toml"
+    c.write_text("")
+    seen_env: dict[str, str | None] = {}
+
+    def env_spy_worker(mode, config, output_dir, log_path):
+        seen_env["DFXM_MAX_WORKERS"] = os.environ.get("DFXM_MAX_WORKERS")
+        seen_env["OMP_NUM_THREADS"] = os.environ.get("OMP_NUM_THREADS")
+        return _ok_worker(mode, config, output_dir, log_path)
+
+    before = os.environ.get("DFXM_MAX_WORKERS")
+    fanout.run_pool(
+        [c],
+        tmp_path / "out",
+        n_workers=1,
+        threads_per_worker=3,
+        mode="identify",
+        worker_fn=env_spy_worker,
+        executor_factory=lambda n: ThreadPoolExecutor(max_workers=n),
+    )
+    # ThreadPoolExecutor shares the parent env, so the spy observes exactly
+    # what spawned children would inherit at submit time.
+    assert seen_env["DFXM_MAX_WORKERS"] == "3"
+    assert seen_env["OMP_NUM_THREADS"] == "1"
+    assert os.environ.get("DFXM_MAX_WORKERS") == before  # restored
+
+
+# ---------------------------------------------------------------------------
+# Task 10: timing.json isolate flag continuity
+# ---------------------------------------------------------------------------
+
+
+def test_write_timing_json_records_isolate_flag(tmp_path: Path) -> None:
+    import json as _json
+
+    c = tmp_path / "c.toml"
+    c.write_text("")
+    results = fanout.run_pool(
+        [c],
+        tmp_path / "out",
+        n_workers=1,
+        mode="identify",
+        worker_fn=_ok_worker,
+        executor_factory=lambda n: ThreadPoolExecutor(max_workers=n),
+    )
+    out = tmp_path / "timing.json"
+    fanout.write_timing_json(
+        out,
+        results,
+        total_wall_s=1.0,
+        n_workers=1,
+        threads_per_worker=1,
+        mode="identify",
+        isolate=False,
+    )
+    payload = _json.loads(out.read_text(encoding="utf-8"))
+    assert payload["sweep"]["isolate"] is False
+    # Pool-mode logs carry the same DFXM_TIMING contract -> rows unchanged.
+    assert payload["configs"][0]["import_s"] == 1.5
+    assert payload["configs"][0]["run_s"] == 2.5
+    assert payload["configs"][0]["images"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Task 11: pool-vs-isolate bit-identity gate (§7.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_pool_and_isolate_produce_bit_identical_identify_output(tmp_path: Path) -> None:
+    """Spec §7.1 gate: same seeded identify-multi configs through the pool
+    path and the subprocess (--isolate) path must yield byte-identical
+    detector datasets + positioners. Compares datasets, not raw files —
+    master files embed timestamps and cli strings."""
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip("No bootstrapped kernel npz found; skipping integration run.")
+
+    import h5py
+    import numpy as np
+
+    cfg_text = """\
+mode = "multi"
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
+
+[scan.phi]
+value = 1.25e-4
+range = 1.25e-4
+steps = 2
+
+[noise]
+poisson_noise = true
+rng_seed = {seed}
+intensity_scale = 7.0
+
+[multi]
+n_samples = 1
+pos_std_um = 5.0
+render_per_dislocation = true
+
+[io]
+include_perfect_crystal = false
+write_strain_provenance = false
+"""
+    manifest_dir = tmp_path / "configs"
+    manifest_dir.mkdir()
+    for seed in (11, 12):
+        (manifest_dir / f"seed{seed}.toml").write_text(cfg_text.format(seed=seed), encoding="utf-8")
+    configs = fanout.discover_configs(manifest_dir)
+
+    out_iso = tmp_path / "out_isolate"
+    out_pool = tmp_path / "out_pool"
+    res_iso = fanout.run_manifest(
+        configs, out_iso, n_workers=1, threads_per_worker=2, mode="identify", isolate=True
+    )
+    res_pool = fanout.run_manifest(
+        configs, out_pool, n_workers=1, threads_per_worker=2, mode="identify"
+    )
+    assert all(r.returncode == 0 for r in res_iso), [
+        r.log_path.read_text() for r in res_iso if r.returncode
+    ]
+    assert all(r.returncode == 0 for r in res_pool), [
+        r.log_path.read_text() for r in res_pool if r.returncode
+    ]
+
+    def _collect_from_file(h5path: Path, root: Path, accumulator: dict[str, object]) -> None:
+        """Collect all datasets from one per-scan HDF5 into accumulator."""
+        with h5py.File(h5path, "r") as f:
+            prefix = str(h5path.relative_to(root))
+
+            def _grab(name: str, obj: object) -> None:
+                if isinstance(obj, h5py.Dataset):
+                    accumulator[f"{prefix}::{name}"] = obj[()]
+
+            f.visititems(_grab)
+
+    def _datasets(root: Path) -> dict[str, object]:
+        """name -> array/scalar for every dataset in every per-scan HDF5 under root.
+
+        Skips dfxm_identify.h5 (the master: contains cli= sys.argv, timestamps,
+        and ExternalLinks — all legitimately differ between pool and isolate runs).
+        Per-scan detector files contain only image arrays — no path-embedding data.
+        """
+        out: dict[str, object] = {}
+        for h5path in sorted(root.rglob("*.h5")):
+            if h5path.name == "dfxm_identify.h5":
+                continue  # master: external links + timestamped metadata
+            _collect_from_file(h5path, root, out)
+        return out
+
+    for stem in ("seed11", "seed12"):
+        d_iso = _datasets(out_iso / stem)
+        d_pool = _datasets(out_pool / stem)
+        # Non-empty guards FIRST: an empty-vs-empty key comparison would pass
+        # vacuously and the gate would silently compare nothing.
+        assert d_iso, f"no datasets found in isolate output for {stem}"
+        assert d_pool, f"no datasets found in pool output for {stem}"
+        assert d_iso.keys() == d_pool.keys(), f"dataset key mismatch for {stem}"
+        for key in d_iso:
+            a, b_ = d_iso[key], d_pool[key]
+            if isinstance(a, np.ndarray) and a.dtype.kind == "f":
+                np.testing.assert_array_equal(a, b_, err_msg=key)  # BIT-identical
+            elif isinstance(a, np.ndarray):
+                assert np.array_equal(a, b_), f"mismatch for {key}"
+            else:
+                assert a == b_, f"mismatch for {key}"
+
+
+# ---------------------------------------------------------------------------
+# Task 12: pool-mode forward e2e smoke
+# ---------------------------------------------------------------------------
+
+
+def test_fanout_pool_end_to_end_forward(tmp_path: Path) -> None:
+    """Pool-mode twin of test_fanout_end_to_end_runs_two_configs: real
+    ProcessPoolExecutor + run_one, two tiny forward configs, n_workers=1."""
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip("No bootstrapped kernel npz found; skipping integration run.")
+
+    import h5py
+    import numpy as np
+
+    cfg_text = (
+        "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n\n"
+        "[scan.phi]\nrange = 0.001\nsteps = 2\n\n"
+        "[io]\ninclude_perfect_crystal = false\n\n"
+        "[postprocess]\nenabled = false\n"
+    )
+    manifest_dir = tmp_path / "configs"
+    manifest_dir.mkdir()
+    for name in ("alpha.toml", "beta.toml"):
+        (manifest_dir / name).write_text(cfg_text)
+
+    out_root = tmp_path / "out"
+    results = fanout.run_manifest(
+        fanout.discover_configs(manifest_dir),
+        out_root,
+        n_workers=1,
+        threads_per_worker=2,
+        mode="forward",
+    )
+    assert all(r.returncode == 0 for r in results), [r.log_path.read_text() for r in results]
+    for stem in ("alpha", "beta"):
+        det = out_root / stem / "scan0001" / "dfxm_sim_detector_0000.h5"
+        assert det.is_file()
+        with h5py.File(det, "r") as f:
+            img = f["/entry_0000/dfxm_sim_detector/image"]
+            assert img.dtype == np.float32
+            assert img.shape[0] == 2
+        timing = fanout.parse_timing_log(out_root / f"{stem}.log")
+        assert timing.get("run_s", 0) > 0
+    # One worker, two configs: exactly one config paid the import.
+    imports = [
+        fanout.parse_timing_log(out_root / f"{s}.log").get("import_s") for s in ("alpha", "beta")
+    ]
+    assert None not in imports
+    assert min(imports) == 0.0  # the warm config reports 0.0

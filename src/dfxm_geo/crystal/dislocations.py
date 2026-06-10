@@ -5,6 +5,10 @@ crystals containing one or more edge dislocations arranged in a wall.
 
 Public functions:
     Fd_find — main entry: returns Fg given lab-frame coords + rotations.
+    Fd_find_mixed — single mixed-character dislocation (edge+screw).
+    Fd_find_multi_dislocs_mixed — sum of N mixed-character dislocations.
+    find_hg_population — numba-fused Hg kernel for population of dislocations.
+    find_hg_scene — unified Hg entry (numpy oracle or numba engine) for identify.
     multi_dislocs_parallel — internal worker for parallel ndis>100 path.
 """
 
@@ -17,6 +21,7 @@ from joblib import cpu_count
 from numba import jit, njit
 
 from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
+from dfxm_geo.crystal.rotations import fast_inverse2
 
 # Module-level identity used as the default for the S kwarg in Fd_find.
 # Defined here (not inline) to satisfy ruff B008 (no function calls in defaults).
@@ -419,6 +424,9 @@ def _population_hg_kernel(
     fastmath=False keeps reassociation tame so parity holds at rtol=1e-12.
     See math reference in the Phase 1 plan
     (docs/superpowers/plans/2026-05-27-find-hg-numba-fusion.md).
+
+    NOTE: `_scene_perdis_hg_kernel` duplicates this math for the per-dislocation
+    scene path — any physics change here must be mirrored there.
     """
     X = rl_um.shape[1]
     N = M.shape[0]
@@ -556,3 +564,385 @@ def find_hg_population(
         Hg_out,
     )
     return Hg_out
+
+
+def find_hg_scene(
+    rl_um: np.ndarray,
+    Us: np.ndarray,
+    specs: list[MixedDislocSpec],
+    Theta: np.ndarray,
+    *,
+    per_dislocation: bool = False,
+    b: float = BURGERS_VECTOR,
+    ny: float = POISSON_RATIO,
+    S: np.ndarray = _S_IDENTITY,
+    engine: str = "numba",
+) -> tuple[np.ndarray, list[np.ndarray] | None]:
+    """Hg for a scene of mixed dislocations, optionally with per-dislocation Hg.
+
+    The single seam used by all three identify orchestrators (v2.6.0 W2/W3).
+    Replaces the per-call composition
+    ``transpose(fast_inverse2(Fd_find_*)) - I`` and, when
+    ``per_dislocation=True``, computes each dislocation's field ONCE — the
+    combined scene is derived as ``Σ(Fg_i − I) + I`` (the exact accumulation
+    `Fd_find_multi_dislocs_mixed` performs), so the solo renders come for
+    free instead of doubling the Fd work (spec §4).
+
+    **Computation details:**
+
+    - **Single-spec fast path** (one spec, per_dislocation=False): Calls
+      ``Fd_find_mixed`` once and returns Hg_combined; solos=None. No
+      accumulation or intermediate memory.
+    - **Multi-spec accumulation invariant**: For >1 spec (or per_dislocation=True),
+      each Fg_i is computed once in spec order, then combined as
+      ``Fg_combined = (Σ(Fg_i − I) + I)``. This is the exact formula
+      ``Fd_find_multi_dislocs_mixed`` implements, ensuring bit-identity when
+      ``engine="numpy"``. Per-dislocation Hg are extracted from the same solo
+      Fg_i arrays, reusing the computation.
+
+    Args:
+        rl_um: Lab-frame ray grid, shape (3, X), MICROMETRES.
+        Us: Sample-to-grain rotation, (3, 3).
+        specs: ≥1 dislocation specs (Ud_mix, rotation_deg, position_lab_um).
+        Theta: Lab-to-sample rotation, (3, 3).
+        per_dislocation: also return each dislocation's solo Hg.
+        b, ny, S: as in `Fd_find_mixed`.
+        engine: "numba" (fused kernel, the default, parity ≤1e-12) or "numpy"
+            (bit-identical legacy composition). Pass engine="numpy" only to
+            run the legacy bit-identical path for parity verification.
+
+    Returns:
+        (Hg_combined, solos) — solos is a list of (X, 3, 3) arrays when
+        ``per_dislocation`` else None.
+    """
+    if not specs:
+        raise ValueError("find_hg_scene requires at least one dislocation spec")
+    if engine == "numpy":
+        return _find_hg_scene_numpy(
+            rl_um, Us, specs, Theta, per_dislocation=per_dislocation, b=b, ny=ny, S=S
+        )
+    if engine != "numba":
+        raise ValueError(f"unknown engine {engine!r}; expected 'numpy' or 'numba'")
+    M, offset, Ud, cos_rot, sin_rot = _specs_to_population_arrays(specs, Us, Theta, S)
+    if not per_dislocation:
+        return find_hg_population(rl_um, M, offset, Ud, cos_rot, sin_rot, b=b, ny=ny), None
+    return _find_hg_scene_perdis_numba(rl_um, M, offset, Ud, cos_rot, sin_rot, b=b, ny=ny)
+
+
+def _specs_to_population_arrays(
+    specs: list[MixedDislocSpec],
+    Us: np.ndarray,
+    Theta: np.ndarray,
+    S: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Pack MixedDislocSpec list into the array layout the fused kernels take.
+
+    M_d = Ud_d.T @ Us.T @ S.T @ Theta — the rl->rd transform of
+    ``Fd_find_mixed`` (its offset subtraction happens in lab frame BEFORE
+    Theta, matching the kernels' ``rl - offset`` then ``M @ .``).
+
+    Matches the array construction in ``Find_Hg_from_population`` (forward path),
+    confirmed against ``forward_model.py`` lines 1322-1337.
+    """
+    n = len(specs)
+    M = np.empty((n, 3, 3))
+    offset = np.empty((n, 3))
+    Ud = np.empty((n, 3, 3))
+    cos_rot = np.empty(n)
+    sin_rot = np.empty(n)
+    base = Us.T @ S.T @ Theta
+    for d, spec in enumerate(specs):
+        Ud[d] = spec.Ud_mix
+        M[d] = spec.Ud_mix.T @ base
+        offset[d] = spec.position_lab_um
+        cos_rot[d] = np.cos(np.deg2rad(spec.rotation_deg))
+        sin_rot[d] = np.sin(np.deg2rad(spec.rotation_deg))
+    return M, offset, Ud, cos_rot, sin_rot
+
+
+@njit(cache=True, nogil=True, fastmath=False, inline="always")
+def _write_hg_from_f(
+    f00: float,
+    f01: float,
+    f02: float,
+    f10: float,
+    f11: float,
+    f12: float,
+    f20: float,
+    f21: float,
+    f22: float,
+    out: np.ndarray,
+    x: int,
+) -> None:
+    """Write out[x] = inv(F).T − I for one ray's 3×3 F (mirrors fast_inverse2).
+
+    Cofactor layout matches the vectorised ``fast_inverse2`` in
+    ``crystal/rotations.py``; ``out`` receives the TRANSPOSED inverse minus
+    the identity so the caller does not need an extra transpose step.
+    fastmath=False keeps the numerics tame for parity against the NumPy oracle.
+    """
+    c00 = f11 * f22 - f12 * f21
+    c10 = -(f10 * f22 - f12 * f20)
+    c20 = f10 * f21 - f11 * f20
+    idet = 1.0 / (f00 * c00 + f01 * c10 + f02 * c20)
+    # inv[row,col] stored in the adjugate-divided-by-det layout of fast_inverse2.
+    # Hg = inv.T - I  ⟹  Hg[i,j] = inv[j,i] - (i==j)
+    out[x, 0, 0] = c00 * idet - 1.0
+    out[x, 0, 1] = c10 * idet
+    out[x, 0, 2] = c20 * idet
+    out[x, 1, 0] = -idet * (f01 * f22 - f02 * f21)
+    out[x, 1, 1] = idet * (f00 * f22 - f02 * f20) - 1.0
+    out[x, 1, 2] = -idet * (f00 * f21 - f01 * f20)
+    out[x, 2, 0] = idet * (f01 * f12 - f02 * f11)
+    out[x, 2, 1] = -idet * (f00 * f12 - f02 * f10)
+    out[x, 2, 2] = idet * (f00 * f11 - f01 * f10) - 1.0
+
+
+@njit(cache=True, nogil=True, fastmath=False)
+def _scene_perdis_hg_kernel(
+    rl_um: np.ndarray,  # (3, X) float64, MICROMETRES
+    M: np.ndarray,  # (N, 3, 3) = Ud.T @ Us.T @ S.T @ Theta
+    offset: np.ndarray,  # (N, 3) micrometres
+    Ud: np.ndarray,  # (N, 3, 3)
+    cos_rot: np.ndarray,  # (N,)
+    sin_rot: np.ndarray,  # (N,)
+    b: float,
+    ny: float,
+    Hg_combined_out: np.ndarray,  # (X, 3, 3), written in place
+    Hg_per_out: np.ndarray,  # (N, X, 3, 3), written in place
+) -> None:
+    """`_population_hg_kernel` + per-dislocation solo Hg in the same ray pass.
+
+    Each dislocation's field is evaluated ONCE; its grain-frame contribution
+    feeds both the combined Fg = I + Σ (Ud_d @ G_d @ Ud_d.T) and the
+    solo Fg_d = I + Ud_d @ G_d @ Ud_d.T (the W2 dedup, fused). Math is
+    identical to `_population_hg_kernel`; see that kernel's docstring for
+    the reference.
+
+    The combined Hg is bit-identical to this module's combined-only numba path
+    (verified by ``test_numba_perdis_combined_equals_combined_only``) and at
+    parity ≤ rtol=1e-12 / atol=1e-14 with the NumPy oracle.
+    fastmath=False on both kernels keeps parity at those tolerances.
+    """
+    X = rl_um.shape[1]
+    N = M.shape[0]
+    alpha = 1e-20
+    bf = b / (4.0 * math.pi * (1.0 - ny))
+    bf1 = b / (2.0 * math.pi)
+
+    # Per-ray scratch reused across iterations (no per-ray heap allocation).
+    G = np.zeros((3, 3))
+    Tmp = np.zeros((3, 3))
+
+    for x in range(X):
+        rx = rl_um[0, x]
+        ry = rl_um[1, x]
+        rz = rl_um[2, x]
+
+        # Fg accumulator = I + sum_d Ud_d @ G_d @ Ud_d.T
+        f00 = 1.0
+        f01 = 0.0
+        f02 = 0.0
+        f10 = 0.0
+        f11 = 1.0
+        f12 = 0.0
+        f20 = 0.0
+        f21 = 0.0
+        f22 = 1.0
+
+        for d in range(N):
+            dx = rx - offset[d, 0]
+            dy = ry - offset[d, 1]
+            dz = rz - offset[d, 2]
+            rd0 = M[d, 0, 0] * dx + M[d, 0, 1] * dy + M[d, 0, 2] * dz
+            rd1 = M[d, 1, 0] * dx + M[d, 1, 1] * dy + M[d, 1, 2] * dz
+            rd2 = M[d, 2, 0] * dx + M[d, 2, 1] * dy + M[d, 2, 2] * dz
+
+            sqx = rd0 * rd0
+            sqy = rd1 * rd1
+            sqz = rd2 * rd2
+            denom = (sqx + sqy) * (sqx + sqy) + alpha
+            nyf = 2.0 * ny * (sqx + sqy)
+            c = cos_rot[d]
+            s = sin_rot[d]
+            denom1 = sqz + sqy + alpha
+
+            # Pure-field gradient G (= Fdd - I); only 5 entries are nonzero.
+            G[0, 0] = -rd1 * (3.0 * sqx + sqy - nyf) / denom * bf * c
+            G[0, 1] = rd0 * (3.0 * sqx + sqy - nyf) / denom * bf * c + (-rd2 / denom1) * bf1 * s
+            G[0, 2] = (rd1 / denom1) * bf1 * s
+            G[1, 0] = -rd0 * (3.0 * sqy + sqx - nyf) / denom * bf * c
+            G[1, 1] = rd1 * (sqx - sqy + nyf) / denom * bf * c
+            G[1, 2] = 0.0
+            G[2, 0] = 0.0
+            G[2, 1] = 0.0
+            G[2, 2] = 0.0
+
+            # Tmp = G @ Ud_d.T  ; Tmp[a,col] = sum_j G[a,j] * Ud[d,col,j]
+            for a in range(3):
+                for col in range(3):
+                    acc = 0.0
+                    for j in range(3):
+                        acc += G[a, j] * Ud[d, col, j]
+                    Tmp[a, col] = acc
+
+            # contribution = Ud_d @ Tmp; accumulate into combined Fg.
+            # Identical expanded form to _population_hg_kernel for FP-order parity.
+            g00 = Ud[d, 0, 0] * Tmp[0, 0] + Ud[d, 0, 1] * Tmp[1, 0] + Ud[d, 0, 2] * Tmp[2, 0]
+            g01 = Ud[d, 0, 0] * Tmp[0, 1] + Ud[d, 0, 1] * Tmp[1, 1] + Ud[d, 0, 2] * Tmp[2, 1]
+            g02 = Ud[d, 0, 0] * Tmp[0, 2] + Ud[d, 0, 1] * Tmp[1, 2] + Ud[d, 0, 2] * Tmp[2, 2]
+            g10 = Ud[d, 1, 0] * Tmp[0, 0] + Ud[d, 1, 1] * Tmp[1, 0] + Ud[d, 1, 2] * Tmp[2, 0]
+            g11 = Ud[d, 1, 0] * Tmp[0, 1] + Ud[d, 1, 1] * Tmp[1, 1] + Ud[d, 1, 2] * Tmp[2, 1]
+            g12 = Ud[d, 1, 0] * Tmp[0, 2] + Ud[d, 1, 1] * Tmp[1, 2] + Ud[d, 1, 2] * Tmp[2, 2]
+            g20 = Ud[d, 2, 0] * Tmp[0, 0] + Ud[d, 2, 1] * Tmp[1, 0] + Ud[d, 2, 2] * Tmp[2, 0]
+            g21 = Ud[d, 2, 0] * Tmp[0, 1] + Ud[d, 2, 1] * Tmp[1, 1] + Ud[d, 2, 2] * Tmp[2, 1]
+            g22 = Ud[d, 2, 0] * Tmp[0, 2] + Ud[d, 2, 1] * Tmp[1, 2] + Ud[d, 2, 2] * Tmp[2, 2]
+
+            f00 += g00
+            f01 += g01
+            f02 += g02
+            f10 += g10
+            f11 += g11
+            f12 += g12
+            f20 += g20
+            f21 += g21
+            f22 += g22
+
+            # Solo Fg_d = I + g_d  →  Hg_d = inv(Fg_d).T - I
+            _write_hg_from_f(
+                1.0 + g00,
+                g01,
+                g02,
+                g10,
+                1.0 + g11,
+                g12,
+                g20,
+                g21,
+                1.0 + g22,
+                Hg_per_out[d],
+                x,
+            )
+
+        _write_hg_from_f(f00, f01, f02, f10, f11, f12, f20, f21, f22, Hg_combined_out, x)
+
+
+def _find_hg_scene_perdis_numba(
+    rl_um: np.ndarray,
+    M: np.ndarray,
+    offset: np.ndarray,
+    Ud: np.ndarray,
+    cos_rot: np.ndarray,
+    sin_rot: np.ndarray,
+    *,
+    b: float,
+    ny: float,
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Numba fused per-dislocation Hg computation via _scene_perdis_hg_kernel.
+
+    Allocates combined (X, 3, 3) and per-dislocation (n, X, 3, 3) outputs,
+    coerces inputs to C-contiguous float64, runs the kernel, and returns
+    (combined, [per-dislocation list]). The solo arrays are VIEWS into the
+    shared (n, X, 3, 3) backing array and are released together when solos go
+    out of scope; by contrast the NumPy oracle returns independent copies.
+    """
+    X = rl_um.shape[1]
+    n = M.shape[0]
+    Hg_combined = np.empty((X, 3, 3), dtype=np.float64)
+    Hg_per = np.empty((n, X, 3, 3), dtype=np.float64)
+    _scene_perdis_hg_kernel(
+        np.ascontiguousarray(rl_um, dtype=np.float64),
+        np.ascontiguousarray(M, dtype=np.float64),
+        np.ascontiguousarray(offset, dtype=np.float64),
+        np.ascontiguousarray(Ud, dtype=np.float64),
+        np.ascontiguousarray(cos_rot, dtype=np.float64),
+        np.ascontiguousarray(sin_rot, dtype=np.float64),
+        float(b),
+        float(ny),
+        Hg_combined,
+        Hg_per,
+    )
+    return Hg_combined, [Hg_per[d] for d in range(n)]
+
+
+def _find_hg_scene_numpy(
+    rl_um: np.ndarray,
+    Us: np.ndarray,
+    specs: list[MixedDislocSpec],
+    Theta: np.ndarray,
+    *,
+    per_dislocation: bool,
+    b: float,
+    ny: float,
+    S: np.ndarray,
+) -> tuple[np.ndarray, list[np.ndarray] | None]:
+    """Bit-identical NumPy oracle: exactly the legacy call-site composition.
+
+    This function is the specification for future numba engines; verify parity
+    against this oracle before shipping a new implementation.
+
+    **Single-spec fast path** (len(specs)==1, per_dislocation=False):
+        One call to ``Fd_find_mixed``, immediate ``Hg`` transform, return with
+        solos=None. No accumulation, minimal memory.
+
+    **Multi-spec accumulation** (len(specs)>1 or per_dislocation=True):
+        Build ``Fg`` for each spec in order (stored in ``parts``), compute
+        combined ``Fg_combined = Σ(Fg_i − I) + I``, then extract ``Hg_combined``.
+        If per_dislocation requested, convert each solo Fg_i to Hg_i while
+        releasing the (X, 3, 3) Fg reference to bound transient peak memory
+        (~106 MB per array at px510). This is the exact accumulation formula
+        that ``Fd_find_multi_dislocs_mixed`` computes, so bit-identity is
+        guaranteed.
+    """
+    identity = np.identity(3)
+
+    def _hg(Fg: np.ndarray) -> np.ndarray:
+        return np.transpose(fast_inverse2(Fg), [0, 2, 1]) - identity
+
+    if len(specs) == 1 and not per_dislocation:
+        spec = specs[0]
+        Fg = Fd_find_mixed(
+            rl_um,
+            Us,
+            Ud_mix=spec.Ud_mix,
+            rotation_deg=spec.rotation_deg,
+            Theta=Theta,
+            b=b,
+            ny=ny,
+            position_lab_um=spec.position_lab_um,
+            S=S,
+        )
+        return _hg(Fg), None
+
+    parts: list[np.ndarray | None] = [
+        Fd_find_mixed(
+            rl_um,
+            Us,
+            Ud_mix=spec.Ud_mix,
+            rotation_deg=spec.rotation_deg,
+            Theta=Theta,
+            b=b,
+            ny=ny,
+            position_lab_um=spec.position_lab_um,
+            S=S,
+        )
+        for spec in specs
+    ]
+    # Same accumulation order as Fd_find_multi_dislocs_mixed: zeros, then
+    # += (Fg_i − I) in spec order, then + I — keeps the combined result
+    # bit-identical to the legacy path.
+    Fg_sum = np.zeros((rl_um.shape[1], 3, 3))
+    for Fg_one in parts:
+        assert Fg_one is not None
+        Fg_sum += Fg_one - identity
+    hg_combined = _hg(Fg_sum + identity)
+    if not per_dislocation:
+        return hg_combined, None
+    # Convert each part to its solo Hg, releasing the (X,3,3) Fg as we go —
+    # bounds the transient peak at px510 (~106 MB per array).
+    solos: list[np.ndarray] = []
+    for i in range(len(parts)):
+        Fg_one = parts[i]
+        assert Fg_one is not None
+        solos.append(_hg(Fg_one))
+        parts[i] = None
+    return hg_combined, solos

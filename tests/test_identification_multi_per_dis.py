@@ -76,18 +76,26 @@ def test_per_dis_renders_are_positioned(tmp_path: Path, monkeypatch) -> None:
     origin and could not overlay the combined image as instance labels. The
     render call must receive the same position stored under
     ``/N.1/sample/dislocations/<k>/position_um``.
+
+    W2 (v2.6.0): the orchestrator now routes through ``find_hg_scene`` which
+    carries all positions inside the ``specs`` list — spying on the seam and
+    checking each spec's ``position_lab_um`` verifies the contract. End-to-end
+    position fidelity (that the rendered Hg was actually computed at each spec's
+    position) is covered by the bit-identity tests in ``tests/test_hg_scene.py``;
+    this test verifies positions flow into the seam's specs and match the
+    HDF5-stored values.
     """
     _require_kernel()
     import dfxm_geo.pipeline as pipeline
+    from dfxm_geo.crystal.dislocations import find_hg_scene as _real_scene
 
-    captured: list = []
-    real_fd_find_mixed = pipeline.Fd_find_mixed
+    captured_specs: list = []
 
-    def spy(*args, **kwargs):
-        captured.append(kwargs.get("position_lab_um"))
-        return real_fd_find_mixed(*args, **kwargs)
+    def spy(rl_um, Us, specs, Theta, **kwargs):
+        captured_specs.extend(specs)
+        return _real_scene(rl_um, Us, specs, Theta, **kwargs)
 
-    monkeypatch.setattr(pipeline, "Fd_find_mixed", spy)
+    monkeypatch.setattr(pipeline, "find_hg_scene", spy)
 
     cfg = IdentificationConfig(
         mode="multi",
@@ -102,15 +110,13 @@ def test_per_dis_renders_are_positioned(tmp_path: Path, monkeypatch) -> None:
     )
     run_identification(cfg, tmp_path)
 
-    # One sample with render_per_dislocation -> exactly two per-instance renders.
-    assert len(captured) == 2
+    # One sample with render_per_dislocation -> find_hg_scene receives 2 specs.
+    assert len(captured_specs) == 2
     with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
         pos0 = f["/1.1/sample/dislocations/0/position_um"][()]
         pos1 = f["/1.1/sample/dislocations/1/position_um"][()]
-    assert captured[0] is not None, "dis0 render was not given a position_lab_um"
-    assert captured[1] is not None, "dis1 render was not given a position_lab_um"
-    np.testing.assert_allclose(captured[0], pos0, atol=1e-9)
-    np.testing.assert_allclose(captured[1], pos1, atol=1e-9)
+    np.testing.assert_allclose(captured_specs[0].position_lab_um, pos0, atol=1e-9)
+    np.testing.assert_allclose(captured_specs[1].position_lab_um, pos1, atol=1e-9)
 
 
 def test_per_dis_files_are_noiseless(tmp_path: Path) -> None:
