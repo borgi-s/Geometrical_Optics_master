@@ -128,11 +128,16 @@ Resolution rules, per entry:
 1. `compute_omega_eta(mount, hkl, keV)` → (ω₁, η₁, θ) / (ω₂, η₂, θ).
    No real solution → ValueError with the `dfxm-find-reflections` hint.
 2. `eta` absent → use η of the chosen `omega_solution` (default solution 1).
-   `eta` present → must match one solution within 1e-6 rad ("both,
-   validated", unchanged from Phase A); the matching solution fixes ω.
+   `eta` present → must match one solution within `ETA_MATCH_TOL = 1e-3` rad
+   (the Phase-A bootstrap tolerance — loose enough for paper-quoting
+   precision, strict enough to catch typos; "both, validated"); the
+   matching solution fixes ω. Per-entry `eta` and `omega_solution`
+   together → ValueError.
 3. A top-level `[geometry] eta` with `[[reflections]]` acts as a *default*
    for entries that omit `eta` and is validated per-entry — entries whose
-   solutions don't include it fail loudly (no silent reassignment).
+   solutions don't include it fail loudly (no silent reassignment). An
+   explicit per-entry `omega_solution` takes precedence over the global
+   default (specific beats general).
 4. Entries dedup-grouped by (θ, η) within 1e-6 rad for kernel sharing.
    Mixed groups are **allowed** (roadmap supersedes the old reject rule);
    the resolved grouping is logged and recorded in the kernel manifest.
