@@ -55,9 +55,11 @@ def run_one(mode: str, config: str, output_dir: str, log_path: str) -> dict[str,
     - stdout AND stderr (tqdm writes to stderr) go to `log_path`;
     - a `DFXM_TIMING {json}` line with import_s/run_s is printed into the log
       so `fanout.parse_timing_log` works unchanged in pool mode;
-    - every exception is contained: returns ``{"returncode": -1}`` with the
-      traceback in the log (batch resilience — one bad config never kills
-      the sweep). SystemExit codes (argparse errors) are propagated as rc.
+    - every exception after the log file opens is contained: returns
+      ``{"returncode": -1}`` with the traceback in the log (batch resilience
+      — one bad config never kills the sweep). SystemExit codes (argparse
+      errors) are propagated as rc. A failure to open the log itself (e.g.
+      PermissionError) propagates to the caller — the pool runner contains it.
 
     Args are strings (not Path) so the cross-process pickle stays trivial.
     Returns ``{"returncode": int, "wall_s": float}``.
@@ -70,6 +72,8 @@ def run_one(mode: str, config: str, output_dir: str, log_path: str) -> dict[str,
         try:
             import_s = _timed_pipeline_import()
             cli, extra = _resolve_cli(mode)
+            # argv is always a concrete list here; the CLIs' None default
+            # (sys.argv mode) is never exercised from the pool path.
             argv = ["--config", config, "--output", output_dir] + extra
             t0 = time.perf_counter()
             rc = int(cli(argv) or 0)

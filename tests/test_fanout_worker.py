@@ -17,6 +17,9 @@ def _reset_import_timer(monkeypatch):
 
 
 def test_run_one_rejects_unknown_mode(tmp_path: Path):
+    # NOTE: _resolve_cli is NOT patched here, so this test pays the one real
+    # `import dfxm_geo.pipeline` of the session (~5 s cold) before the
+    # ValueError — that's why this, of all tests, is the slow one.
     res = fanout_worker.run_one(
         "nonsense", "c.toml", str(tmp_path / "out"), str(tmp_path / "c.log")
     )
@@ -42,8 +45,8 @@ def test_run_one_calls_identify_cli_and_writes_timing(tmp_path: Path, monkeypatc
     assert "Wrote 4 samples" in text  # stdout redirected into the log
     timing_line = [ln for ln in text.splitlines() if ln.startswith("DFXM_TIMING ")][-1]
     payload = json.loads(timing_line[len("DFXM_TIMING ") :])
-    assert payload["run_s"] >= 0
-    assert payload["import_s"] >= 0
+    assert isinstance(payload["run_s"], float) and payload["run_s"] >= 0
+    assert isinstance(payload["import_s"], float) and payload["import_s"] >= 0
 
 
 def test_run_one_first_call_reports_import_then_zero(tmp_path: Path, monkeypatch):
