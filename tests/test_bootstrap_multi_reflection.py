@@ -102,3 +102,65 @@ def test_manifest_written_next_to_kernels(fake_generate, tmp_path):
     assert (1, 1, 3) in hkls and (1, 1, 1) in hkls
     for entry in data["kernels"]:
         assert {"group", "theta", "eta", "keV", "filename", "reflections", "omegas"} <= set(entry)
+
+
+def test_if_missing_skips_existing_kernel(fake_generate, tmp_path):
+    out = tmp_path / "k"
+    out.mkdir()
+    # Pre-create a kernel whose name matches the (theta, eta, keV) glob pattern for
+    # GROUP1_TOML.  Verified: resolve_reflections for (1,1,3)+(-1,-1,3) at 19.1 keV
+    # with Al cubic identity mount + eta=0.3531 gives theta≈0.2691, eta≈0.3531 (4dp).
+    pre = out / "Resq_i_theta0.2691rad_eta0.3531rad_19.1keV_20260101_0000.npz"
+    pre.write_bytes(b"existing")
+    rc = kernel_mod.cli_main(
+        ["--config", str(_write(tmp_path, GROUP1_TOML)), "--output", str(out), "--if-missing"]
+    )
+    assert rc in (None, 0)
+    assert len(fake_generate) == 0  # skipped — kernel already on disk
+    manifest = tomllib.loads((out / "kernel_manifest.toml").read_text(encoding="utf-8"))
+    assert manifest["kernels"][0]["filename"] == pre.name
+
+
+def test_output_naming_existing_file_errors(fake_generate, tmp_path):
+    f = tmp_path / "afile.npz"
+    f.write_bytes(b"x")
+    rc = kernel_mod.cli_main(["--config", str(_write(tmp_path, GROUP1_TOML)), "--output", str(f)])
+    assert rc == 1
+    assert len(fake_generate) == 0
+
+
+def test_missing_keV_warns(fake_generate, tmp_path, capsys):
+    no_kev_toml = """
+[reciprocal]
+
+[geometry]
+mode = "oblique"
+eta  = 0.3531
+
+[crystal]
+lattice = "cubic"
+a       = 4.0493e-10
+mount_x = [1, 0, 0]
+mount_y = [0, 1, 0]
+mount_z = [0, 0, 1]
+
+[[reflections]]
+hkl = [1, 1, 3]
+"""
+    kernel_mod.cli_main(
+        ["--config", str(_write(tmp_path, no_kev_toml)), "--output", str(tmp_path / "k")]
+    )
+    captured = capsys.readouterr()
+    assert "warning" in captured.err.lower()
+    assert "17.0 keV" in captured.err
+
+
+def test_hkl_in_reciprocal_with_reflections_errors(fake_generate, tmp_path):
+    conflict_toml = GROUP1_TOML.replace(
+        "[reciprocal]\nkeV = 19.1", "[reciprocal]\nkeV = 19.1\nhkl = [1, 1, 1]"
+    )
+    rc = kernel_mod.cli_main(
+        ["--config", str(_write(tmp_path, conflict_toml)), "--output", str(tmp_path / "k")]
+    )
+    assert rc == 1
+    assert len(fake_generate) == 0
