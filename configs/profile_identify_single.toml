@@ -1,0 +1,34 @@
+# M1 Phase 2a profiling config — identify "single" mode (laptop scale).
+# A deterministic slice of the library sweep: 1 slip plane x 2 Burgers
+# vectors x 3 rotation angles = 6 scans, each a 5-step phi rocking curve
+# (30 images). exclude_invisibility=false so the scan count never depends
+# on the g.b criterion.
+
+mode = "single"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]
+sweep_all_slip_planes = false
+b_vector_indices = [0, 1]
+angle_start_deg = 0.0
+angle_stop_deg = 90.0
+angle_step_deg = 45.0
+exclude_invisibility = false
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
+
+[scan.phi]
+value = 1.25e-4
+range = 1.25e-4
+steps = 5
+
+[noise]
+poisson_noise = true
+rng_seed = 1
+intensity_scale = 7.0
+
+[io]
+include_perfect_crystal = false
+write_strain_provenance = false

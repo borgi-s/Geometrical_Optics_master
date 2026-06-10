@@ -83,6 +83,7 @@ python scripts/fanout.py \
     --output "output/idsweep_${LSB_JOBID}/task_${LSB_JOBINDEX}" \
     --mode identify \
     --n-workers 6 \
-    --threads-per-worker 4
+    --threads-per-worker 4 \
+    --timing-json "output/idsweep_${LSB_JOBID}/task_${LSB_JOBINDEX}/timing.json"
 
 echo "Task ${LSB_JOBINDEX} done."

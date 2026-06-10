@@ -1,0 +1,42 @@
+# M1 Phase 2a profiling config — identify "z-scan" mode (laptop scale).
+# 3 z-layers x 1 Burgers vector x 1 angle, each layer a 3x3 (phi x chi)
+# rocking grid with a random secondary dislocation = 27 images. Exercises
+# the Z_shift ray-grid path that single/multi only hit at z != 0.
+
+mode = "z-scan"
+
+[crystal]
+slip_plane_normal = [1, 1, 1]
+sweep_all_slip_planes = false
+b_vector_indices = [0]
+angle_start_deg = 0.0
+angle_stop_deg = 0.0
+angle_step_deg = 10.0
+exclude_invisibility = false
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
+
+[scan.phi]
+value = 1.25e-4
+range = 1.25e-4
+steps = 3
+
+[scan.chi]
+value = 0.0
+range = 1.0e-4
+steps = 3
+
+[zscan]
+z_offsets_um = [-5.0, 0.0, 5.0]
+include_secondary = true
+
+[noise]
+poisson_noise = true
+rng_seed = 1
+intensity_scale = 7.0
+
+[io]
+include_perfect_crystal = false
+write_strain_provenance = false
