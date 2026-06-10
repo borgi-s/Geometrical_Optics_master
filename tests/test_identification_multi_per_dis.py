@@ -79,18 +79,21 @@ def test_per_dis_renders_are_positioned(tmp_path: Path, monkeypatch) -> None:
 
     W2 (v2.6.0): the orchestrator now routes through ``find_hg_scene`` which
     carries all positions inside the ``specs`` list — spying on the seam and
-    checking each spec's ``position_lab_um`` verifies the contract.
+    checking each spec's ``position_lab_um`` verifies the contract. End-to-end
+    position fidelity (that the rendered Hg was actually computed at each spec's
+    position) is covered by the bit-identity tests in ``tests/test_hg_scene.py``;
+    this test verifies positions flow into the seam's specs and match the
+    HDF5-stored values.
     """
     _require_kernel()
     import dfxm_geo.pipeline as pipeline
     from dfxm_geo.crystal.dislocations import find_hg_scene as _real_scene
 
     captured_specs: list = []
-    real_scene = _real_scene
 
     def spy(rl_um, Us, specs, Theta, **kwargs):
         captured_specs.extend(specs)
-        return real_scene(rl_um, Us, specs, Theta, **kwargs)
+        return _real_scene(rl_um, Us, specs, Theta, **kwargs)
 
     monkeypatch.setattr(pipeline, "find_hg_scene", spy)
 

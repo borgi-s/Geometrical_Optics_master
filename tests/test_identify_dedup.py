@@ -53,6 +53,11 @@ include_perfect_crystal = false
 write_strain_provenance = false
 """
 
+_MULTI_TOML_NO_SOLOS = _MULTI_TOML.replace(
+    "render_per_dislocation = true",
+    "render_per_dislocation = false",
+)
+
 
 def _spy_scene_calls(monkeypatch, toml_text: str, tmp_path: Path) -> list[dict]:
     """Run one identify config with find_hg_scene wrapped in a recording spy."""
@@ -86,3 +91,9 @@ def test_multi_render_per_dislocation_is_one_scene_call(monkeypatch, tmp_path):
     # never touched find_hg_scene (this test fails with AttributeError there).
     calls = _spy_scene_calls(monkeypatch, _MULTI_TOML, tmp_path)
     assert calls == [{"n_specs": 2, "per_dislocation": True}]
+
+
+def test_multi_without_solo_renders_is_one_combined_call(monkeypatch, tmp_path):
+    # Same scene, solos off -> still exactly ONE seam call, per_dislocation=False.
+    calls = _spy_scene_calls(monkeypatch, _MULTI_TOML_NO_SOLOS, tmp_path)
+    assert calls == [{"n_specs": 2, "per_dislocation": False}]
