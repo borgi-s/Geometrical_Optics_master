@@ -22,24 +22,27 @@ import dfxm_geo.direct_space.forward_model as fm
 
 
 def main() -> None:
-    if fm.Resq_i is None:
-        raise RuntimeError(
-            "Resq_i not loaded; this generator requires a kernel to be loaded first. "
-            "Call pipeline._lookup_and_load_kernel(hkl, keV) before running this script."
-        )
-    if fm.Hg is None:
-        raise RuntimeError(
-            "Hg not populated; the auto-load block at forward_model.py:412-418 "
-            "must have run with compute_Hg=True. Re-import the module fresh "
-            "and re-run."
-        )
+    # #16 Slice 5: state is threaded as an explicit ForwardContext (the
+    # module globals Resq_i/Hg/q_hkl are gone). The pickle loader itself was
+    # removed in v1.0.3, so this can no longer reproduce the original
+    # pickle-era output bit-for-bit — it captures the CURRENT forward output
+    # for the default (-1,1,-1) 17 keV reflection.
+    from dfxm_geo.pipeline import (
+        ReciprocalConfig,
+        SimulationConfig,
+        _lookup_and_load_kernel,
+        run_theta,
+    )
+
+    res = _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    cfg = SimulationConfig(reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0))
+    ctx = fm.build_forward_context(run_theta(cfg), res, (-1, 1, -1))
+    Hg, _ = fm.Find_Hg(fm.dis, fm.ndis, fm.psize, fm.zl_rms, ctx=ctx)
 
     # Fixed (phi, chi) chosen to exercise the typical Bragg condition path.
-    # Values match the snap_old.npy snapshot taken during Phase 8 Round 25
-    # to keep this reference comparable to pre-existing dev snapshots.
     phi = 0.0
     chi = 0.0
-    out = fm.forward(fm.Hg, phi=phi, chi=chi)
+    out = fm.forward(Hg, ctx, phi=phi, chi=chi)
 
     if isinstance(out, tuple):
         out = out[0]

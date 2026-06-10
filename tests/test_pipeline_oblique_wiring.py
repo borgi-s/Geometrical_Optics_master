@@ -83,7 +83,6 @@ def test_lookup_and_load_kernel_dispatches_oblique(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(fm, "_lookup_kernel_path", fake_lookup)
     monkeypatch.setattr(fm, "_load_default_kernel", fake_load)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", None)
 
     geom = GeometryConfig(mode="oblique", eta=0.3531, theta_validated=0.2691)
     _lookup_and_load_kernel((-1, -1, 3), 19.1, geometry=geom)
@@ -111,7 +110,6 @@ def test_lookup_and_load_kernel_simplified_default(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(fm, "_lookup_kernel_path", fake_lookup)
     monkeypatch.setattr(fm, "_load_default_kernel", fake_load)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", None)
 
     _lookup_and_load_kernel((-1, 1, -1), 17.0)  # no geometry kwarg
 

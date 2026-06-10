@@ -70,50 +70,38 @@ def test_compute_and_write_detector_file_parallel_roundtrip(tmp_path: Path) -> N
     """Workers run forward() and stream into one detector file; pixels match a
     serial reference (probed-frame-0 plus the workers' results)."""
     _require_kernel()
-    # Ensure a kernel is loaded (test fixtures use the bundled kernel).
-    # `_lookup_and_load_kernel` also calls `Find_Hg`, which populates
-    # `fm.Hg` to the correct (NN1*NN2*NN3, 3, 3) shape that forward()
-    # requires. A synthetic (1, 3, 3) Hg would IndexError inside forward().
-    _lookup_and_load_kernel((-1, 1, -1), 17.0)
-    if fm.Hg is None:
-        pytest.skip("forward_model.Hg not populated; run dfxm-bootstrap.")
-    try:
-        Hg = fm.Hg
-        base_qc = fm.precompute_forward_static(Hg)
-        args = [
-            (0, base_qc, 0.0, 0.0, 0.0),
-            (1, base_qc, 1e-5, 0.0, 0.0),
-            (2, base_qc, 0.0, 1e-5, 0.0),
-            (3, base_qc, 1e-5, 1e-5, 0.0),
-        ]
-        out = tmp_path / "scan0001" / "dfxm_sim_detector_0000.h5"
-        _compute_and_write_detector_file_parallel(out, args, max_workers=2)
+    # #16 Slice 5: the loader no longer sets fm.Hg; build the ForwardContext
+    # from the returned ResolutionContext and compute Hg explicitly via Find_Hg,
+    # which produces the (NN1*NN2*NN3, 3, 3) shape forward() requires.
+    from dfxm_geo.pipeline import ReciprocalConfig, SimulationConfig, run_theta
 
-        # Reference: run forward() serially using _compute_frame
-        ref = np.empty((4,) + _compute_frame(args[0])[1].shape, dtype=np.float64)
-        for a in args:
-            idx, im = _compute_frame(a)
-            ref[idx] = im
-        with h5py.File(out, "r") as f:
-            # float32 detector storage (Phase 2a): the stored stack is float32
-            # while `ref` is the float64 forward() output, so compare at
-            # float32 tolerance (~1e-7 relative).
-            np.testing.assert_allclose(
-                f[DETECTOR_INTERNAL_PATH][...].astype(np.float64),
-                ref,
-                rtol=1e-6,
-                atol=1e-6,
-            )
-    finally:
-        # Restore the pre-test "nothing loaded" sentinels so downstream tests
-        # whose skip guards check `fm.Hg is None` keep skipping as they did
-        # in the baseline. We also clear `fm._loaded_kernel_path` so the next
-        # `_lookup_and_load_kernel` call actually re-loads the kernel rather
-        # than short-circuiting on a stale path that survived a monkeypatch.
-        # revert in an intermediate test (see test_hdf5_provenance's
-        # `TestHdf5NewAttrs` which monkeypatches `_loaded_kernel_path = None`
-        # then reverts on test exit; without our clear, the revert restores
-        # the real-kernel path here while `Resq_i` is left as toy zeros,
-        # breaking the next pipeline test that relies on a fresh reload).
-        fm.Hg = None
-        fm._loaded_kernel_path = None
+    res = _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    cfg = SimulationConfig(reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0))
+    ctx = fm.build_forward_context(run_theta(cfg), res, (-1, 1, -1))
+    Hg, _ = fm.Find_Hg(4.0, 151, fm.psize, fm.zl_rms, ctx=ctx)
+
+    base_qc = fm.precompute_forward_static(Hg, ctx)
+    args = [
+        (0, base_qc, 0.0, 0.0, 0.0, ctx),
+        (1, base_qc, 1e-5, 0.0, 0.0, ctx),
+        (2, base_qc, 0.0, 1e-5, 0.0, ctx),
+        (3, base_qc, 1e-5, 1e-5, 0.0, ctx),
+    ]
+    out = tmp_path / "scan0001" / "dfxm_sim_detector_0000.h5"
+    _compute_and_write_detector_file_parallel(out, args, max_workers=2)
+
+    # Reference: run forward() serially using _compute_frame
+    ref = np.empty((4,) + _compute_frame(args[0])[1].shape, dtype=np.float64)
+    for a in args:
+        idx, im = _compute_frame(a)
+        ref[idx] = im
+    with h5py.File(out, "r") as f:
+        # float32 detector storage (Phase 2a): the stored stack is float32
+        # while `ref` is the float64 forward() output, so compare at
+        # float32 tolerance (~1e-7 relative).
+        np.testing.assert_allclose(
+            f[DETECTOR_INTERNAL_PATH][...].astype(np.float64),
+            ref,
+            rtol=1e-6,
+            atol=1e-6,
+        )

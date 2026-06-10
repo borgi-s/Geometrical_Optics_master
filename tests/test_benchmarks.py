@@ -205,27 +205,6 @@ def test_load_default_kernel_bench(benchmark, tmp_path: Path) -> None:
         npoints3=np.int64(200),
     )
 
-    # Save all 15 globals that _load_default_kernel mutates for clean state restoration
-    saved = {
-        "Resq_i": fm.Resq_i,
-        "qi1_range": fm.qi1_range,
-        "qi2_range": fm.qi2_range,
-        "qi3_range": fm.qi3_range,
-        "npoints1": fm.npoints1,
-        "npoints2": fm.npoints2,
-        "npoints3": fm.npoints3,
-        "qi1_start": fm.qi1_start,
-        "qi2_start": fm.qi2_start,
-        "qi3_start": fm.qi3_start,
-        "qi1_step": fm.qi1_step,
-        "qi2_step": fm.qi2_step,
-        "qi3_step": fm.qi3_step,
-        "qi_starts": fm.qi_starts,
-        "qi_steps": fm.qi_steps,
-    }
-    try:
-        benchmark(fm._load_default_kernel, pkl_path=str(dst), compute_Hg=False)
-    finally:
-        # Restore all 15 globals to prevent state leakage to subsequent tests
-        for key, val in saved.items():
-            setattr(fm, key, val)
+    # #16 Slice 5: _load_default_kernel no longer mutates module globals (it
+    # RETURNS a ResolutionContext), so there is no state to snapshot/restore.
+    benchmark(fm._load_default_kernel, pkl_path=str(dst), compute_Hg=False)

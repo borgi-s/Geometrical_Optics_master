@@ -1,17 +1,17 @@
-"""Image writer for identification z-scan.
+"""Worker-count helper for identification HDF5 writer (io/hdf5.py).
 
-The `.npy` write path (`save_images_parallel` / `save_image`) is kept here
-until v1.2.0, when identification will migrate to HDF5 output.  All read
-helpers (`load_image`, `load_images`, `load_images_parallel`) and the legacy
-EDF writer (`save_edfs`) were removed in v1.1.0; see `io/migrate.py` for the
-migration helper and `io/hdf5.py` for the HDF5 equivalents.
+The legacy `.npy` write path (``save_images_parallel`` / ``save_image``) was
+removed in S4 of the ForwardContext refactor (#16) — identification migrated
+to HDF5 output in v1.2.0 and the dead code had no remaining caller in src/.
+All read helpers (``load_image``, ``load_images``, ``load_images_parallel``)
+and the legacy EDF writer (``save_edfs``) were removed in v1.1.0; see
+``io/migrate.py`` for the migration helper and ``io/hdf5.py`` for the HDF5
+equivalents.
+
+The only public surface is ``_auto_max_workers``, re-exported by ``io/hdf5.py``.
 """
 
 import os
-from concurrent.futures import ThreadPoolExecutor
-
-import numpy as np
-from tqdm import tqdm
 
 from dfxm_geo.direct_space import forward_model as _fm
 
@@ -69,71 +69,3 @@ def _auto_max_workers() -> int:
     usable_gb = max(0.5, avail_gb - 2.0 - base_qc_gb)
     mem_cap = max(1, int(usable_gb / per_worker_gb))
     return min(cpu, mem_cap)
-
-
-def save_image(args: tuple) -> None:
-    """Render one frame via forward_from_static and save it as .npy.
-
-    args = (base_qc, phi, chi, j, i, fpath, fn_prefix, ftype), where
-    base_qc = forward_model.precompute_forward_static(Hg) is shared across
-    all frames of the scan.
-    """
-    base_qc, phi, chi, j, i, fpath, fn_prefix, ftype = args
-    im = _fm.forward_from_static(base_qc, phi=phi, chi=chi)
-    fn_suffix = f"{i}".zfill(4) + "_" + f"{j}".zfill(4) + ftype
-    np.save(os.path.join(fpath + fn_prefix + fn_suffix), im)
-
-
-def save_images_parallel(
-    Hg: np.ndarray,
-    phi_range: float,
-    phi_steps: int,
-    chi_range: float,
-    chi_steps: int,
-    fpath: str,
-    fn_prefix: str,
-    ftype: str,
-    max_workers: int | None = None,
-) -> bool:
-    """
-    Generate a grid of parameter combinations and save images in parallel.
-    ----------------------------------------------------------------------------------------------
-    Parameters:
-        Hg (float): A parameter.
-        phi_range (float): Half-range of phi values in radians.
-        phi_steps (int): Number of steps in the phi range.
-        chi_range (float): Half-range of chi values in radians.
-        chi_steps (int): Number of steps in the chi range.
-        fpath (str): Path to a folder where the images will be saved.
-        fn_prefix (str): Prefix for the image filenames.
-        ftype (str): Filetype extension for the images (e.g., '.png').
-        max_workers (int | None): Maximum parallel workers for the thread
-            pool. None (default) uses the DFXM_MAX_WORKERS env var if set,
-            otherwise auto-detects based on CPU count and available memory
-            (see _auto_max_workers).
-    ----------------------------------------------------------------------------------------------
-    Returns:
-        True (bool): True if the function completes successfully.
-    """
-    # Scan ranges are radians (project-wide convention); used directly.
-    Phi = np.linspace(-phi_range, phi_range, phi_steps)
-    Chi = np.linspace(-chi_range, chi_range, chi_steps)
-
-    # Create a folder in the specified path if it doesn't exist
-    if not os.path.exists(fpath):
-        os.makedirs(fpath)
-
-    base_qc = _fm.precompute_forward_static(Hg)
-    args_list = [
-        (base_qc, Phi[j], Chi[i], j, i, fpath, fn_prefix, ftype)
-        for i in range(chi_steps)
-        for j in range(phi_steps)
-    ]
-
-    workers = max_workers if max_workers is not None else _auto_max_workers()
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        # Consume the lazy executor.map iterator via list(...) so tqdm
-        # actually advances; the per-task return values are unused.
-        list(tqdm(executor.map(save_image, args_list), total=len(args_list)))
-
-    return True

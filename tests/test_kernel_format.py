@@ -85,7 +85,11 @@ class TestLoadDefaultKernel:
     """Layer 1 + 2: the loader resolves npz paths and populates module state."""
 
     def test_load_default_kernel_loads_npz(self, tmp_path: Path) -> None:
-        """_load_default_kernel reads an .npz and sets module globals correctly."""
+        """_load_default_kernel reads an .npz and returns a populated ResolutionContext.
+
+        #16 Slice 5: the loader no longer mutates module globals — it RETURNS a
+        ResolutionContext, so the assertions read the returned object.
+        """
         import dfxm_geo.direct_space.forward_model as fm
 
         # Build a tiny synthetic npz
@@ -101,38 +105,13 @@ class TestLoadDefaultKernel:
             npoints3=np.int64(4),
         )
 
-        # Snapshot all globals that _load_default_kernel mutates, so the test
-        # doesn't leak state into subsequent tests in the same process.
-        saved_state = {
-            name: getattr(fm, name)
-            for name in (
-                "Resq_i",
-                "qi1_range",
-                "qi2_range",
-                "qi3_range",
-                "npoints1",
-                "npoints2",
-                "npoints3",
-                "qi1_start",
-                "qi2_start",
-                "qi3_start",
-                "qi1_step",
-                "qi2_step",
-                "qi3_step",
-                "qi_starts",
-                "qi_steps",
-            )
-        }
-        try:
-            fm._load_default_kernel(pkl_path=str(dst), compute_Hg=False)
-            assert fm.Resq_i is not None
-            assert fm.Resq_i.shape == (4, 4, 4)
-            assert np.array_equal(fm.Resq_i, np.ones((4, 4, 4)))
-            assert fm.qi1_range == pytest.approx(1e-3)
-            assert fm.npoints1 == 4
-        finally:
-            for name, value in saved_state.items():
-                setattr(fm, name, value)
+        res = fm._load_default_kernel(pkl_path=str(dst))
+        assert res.Resq_i is not None
+        assert res.Resq_i.shape == (4, 4, 4)
+        assert np.array_equal(res.Resq_i, np.ones((4, 4, 4)))
+        assert res.npoints1 == 4
+        # qi1_step = qi1_range / npoints1 (range/npoints FILL/READ convention).
+        assert res.qi1_step == pytest.approx(1e-3 / 4)
 
 
 class TestLegacyPickleRejection:
@@ -208,46 +187,22 @@ class TestForwardOutputBitEquivalence:
             npoints3=np.int64(var_d["npoints3"]),
         )
 
-        # Snapshot all globals mutated by _load_default_kernel so this test
-        # doesn't leak state into subsequent tests in the same process.
-        # compute_Hg=True is used (Option A) so Hg is computed from the tmp npz
-        # — this avoids needing fm.Hg to be pre-set, which it won't be on a
-        # clean checkout where the default .npz doesn't exist yet.
-        saved_state = {
-            name: getattr(fm, name)
-            for name in (
-                "Resq_i",
-                "qi1_range",
-                "qi2_range",
-                "qi3_range",
-                "npoints1",
-                "npoints2",
-                "npoints3",
-                "qi1_start",
-                "qi2_start",
-                "qi3_start",
-                "qi1_step",
-                "qi2_step",
-                "qi3_step",
-                "qi_starts",
-                "qi_steps",
-                "Hg",
-                "q_hkl",
-            )
-        }
-        try:
-            # compute_Hg=True: _load_default_kernel calls Find_Hg which loads
-            # the cached Fg from disk (direct_space/deformation_gradient_tensors/).
-            # This sets fm.Hg and fm.q_hkl, which forward() requires.
-            fm._load_default_kernel(pkl_path=str(dst), compute_Hg=True)
-            out = fm.forward(fm.Hg, phi=0.0, chi=0.0)
-            if isinstance(out, tuple):
-                out = out[0]
-            golden = np.load(snapshot_path)
-            assert np.array_equal(out, golden), "forward() output differs from pickle-era snapshot"
-        finally:
-            for name, value in saved_state.items():
-                setattr(fm, name, value)
+        # #16 Slice 5: the loader no longer mutates module globals (so there is
+        # no global state to snapshot/restore). Build the ForwardContext from the
+        # returned ResolutionContext and compute Hg explicitly via Find_Hg, which
+        # loads the cached Fg from disk
+        # (direct_space/deformation_gradient_tensors/).
+        from dfxm_geo.pipeline import ReciprocalConfig, SimulationConfig, run_theta
+
+        res = fm._load_default_kernel(pkl_path=str(dst))
+        cfg = SimulationConfig(reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0))
+        ctx = fm.build_forward_context(run_theta(cfg), res, (-1, 1, -1))
+        Hg, _ = fm.Find_Hg(4.0, 151, fm.psize, fm.zl_rms, ctx=ctx)
+        out = fm.forward(Hg, ctx, phi=0.0, chi=0.0)
+        if isinstance(out, tuple):
+            out = out[0]
+        golden = np.load(snapshot_path)
+        assert np.array_equal(out, golden), "forward() output differs from pickle-era snapshot"
 
 
 class TestCrossPlatformSyntheticKernel:

@@ -52,7 +52,7 @@ def test_load_images_legacy_is_internal_only() -> None:
 
 
 def test_pipeline_does_not_import_legacy_images_module_for_reading() -> None:
-    """pipeline.py only imports save_images_parallel from io.images (z-scan)."""
+    """pipeline.py does not import legacy read helpers from io.images."""
     src = (REPO / "src" / "dfxm_geo" / "pipeline.py").read_text(encoding="utf-8")
     # No import of load_images / load_image / load_images_parallel.
     for forbidden in ("load_images", "load_image", "load_images_parallel"):

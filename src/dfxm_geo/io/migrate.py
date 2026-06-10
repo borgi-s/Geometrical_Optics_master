@@ -95,7 +95,43 @@ def migrate_npy_dir_to_h5(
     )
 
     S = SAMPLE_REMOUNT_OPTIONS[sample_remount]
-    Hg, q_hkl = _fm.Find_Hg(dis, ndis, _fm.psize, _fm.zl_rms, S=S, remount_name=sample_remount)
+
+    # #16 Slice 5: build a one-off ForwardContext for the legacy IUCrJ-2024 Al
+    # (-1,1,-1) @ 17 keV reflection — the only reflection the .npy era ever used.
+    # The kernel npz is looked up for its provenance path only (Find_Hg needs the
+    # geometry, not the kernel data); the lookup raises with a dfxm-bootstrap
+    # hint if no kernel is on disk, before any heavy work. NOTE: theta is now the
+    # true Bragg angle (_validate_reflection ≈ 0.156611 rad) rather than the old
+    # import-time constant (0.156669 rad) — a deliberate ~58 µrad shift consistent
+    # with run_theta, so a migration's recorded Hg/theta differs slightly from the
+    # pre-#16 (v2.3-era) one.
+    from dfxm_geo.reciprocal_space.kernel import _validate_reflection
+
+    _HKL = (-1, 1, -1)
+    _KEV = 17.0
+    kernel_npz = _fm._lookup_kernel_path(
+        directory=_fm.pkl_fpath, mode="simplified", hkl=_HKL, keV=_KEV
+    )
+    theta_run = _validate_reflection(_HKL, _KEV, 4.0495e-10)  # Al cubic lattice (m)
+    res = _fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=None,
+        loaded_kernel_path=kernel_npz,
+    )
+    ctx = _fm.build_forward_context(theta_run, res, _HKL)
+
+    Hg, q_hkl = _fm.Find_Hg(
+        dis, ndis, _fm.psize, _fm.zl_rms, S=S, remount_name=sample_remount, ctx=ctx
+    )
 
     dislocs = _load_images_legacy(
         str(npy_dir / dislocs_dirname),
@@ -126,10 +162,6 @@ def migrate_npy_dir_to_h5(
     chi_pf = _chi_per_frame(phi_steps, chi_steps, chi_range_rad)
     out_dir = h5_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    kernel_npz = _fm._loaded_kernel_path
-    if kernel_npz is None:
-        raise RuntimeError("no kernel loaded — migration requires a loaded kernel for provenance.")
 
     with MasterWriter(
         h5_path,
@@ -162,7 +194,7 @@ def migrate_npy_dir_to_h5(
             dfxm_geo={
                 "Hg": Hg,
                 "q_hkl": q_hkl,
-                "theta": float(_fm.theta),
+                "theta": float(ctx.geometry.theta_0),  # S4 (#16): theta_0 from ctx
                 "psize": float(_fm.psize),
                 "zl_rms": float(_fm.zl_rms),
             },
@@ -193,7 +225,7 @@ def migrate_npy_dir_to_h5(
                 dfxm_geo={
                     "Hg": np.zeros_like(Hg),
                     "q_hkl": q_hkl,
-                    "theta": float(_fm.theta),
+                    "theta": float(ctx.geometry.theta_0),  # S4 (#16): theta_0 from ctx
                     "psize": float(_fm.psize),
                     "zl_rms": float(_fm.zl_rms),
                 },

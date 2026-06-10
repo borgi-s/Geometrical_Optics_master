@@ -23,6 +23,35 @@ from dfxm_geo.pipeline import (
 )
 
 
+def _stub_resolution() -> fm.ResolutionContext:
+    """A no-IO ResolutionContext with an analytic_eval sentinel so the writer's
+    "backend loaded" guard passes and kernel_npz stays None. #16 Slice 5: the
+    render itself is stubbed (forward_from_static), so the sentinel is never
+    actually evaluated."""
+    return fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=object(),
+        loaded_kernel_path=None,
+    )
+
+
+def _ident_ctx(cfg: IdentificationConfig) -> fm.ForwardContext:
+    """Build the run's ForwardContext directly (replaces the deleted
+    fm._context_from_globals() shim); resolution is a no-IO sentinel."""
+    from dfxm_geo.pipeline import run_theta
+
+    return fm.build_forward_context(run_theta(cfg), _stub_resolution(), cfg.reciprocal.hkl)
+
+
 def test_identification_crystal_config_defaults():
     cfg = IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1))
     assert cfg.slip_plane_normal == (1, 1, 1)
@@ -258,19 +287,12 @@ def test_run_identification_single_writes_expected_count(tmp_path, monkeypatch):
     import h5py
 
     expected_image = np.ones((170, 510))
-    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
-    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: expected_image)
-    # Writer falls back to fm._loaded_kernel_path for provenance when
-    # kernel_npz is None. Point it at a dummy file; no real kernel IO.
-    fake_kernel = tmp_path / "fake_kernel.npz"
-    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: expected_image)
 
     output_dir = tmp_path / "out"
     cfg = _tiny_single_config(tmp_path)
 
-    result = _run_identification_single(cfg, output_dir)
+    result = _run_identification_single(cfg, output_dir, _ident_ctx(cfg))
 
     master = output_dir / "dfxm_identify.h5"
     assert master.is_file()
@@ -329,19 +351,12 @@ def test_run_identification_multi_writes_master_plus_scan_dirs(tmp_path, monkeyp
     import dfxm_geo.direct_space.forward_model as fm
 
     expected_image = np.ones((170, 510))
-    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
-    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: expected_image)
-    # Writer falls back to fm._loaded_kernel_path for provenance when
-    # kernel_npz is None. Point it at a dummy file; no real kernel IO.
-    fake_kernel = tmp_path / "fake_kernel.npz"
-    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: expected_image)
 
     output_dir = tmp_path / "out"
     cfg = _tiny_multi_config()
 
-    result = _run_identification_multi(cfg, output_dir)
+    result = _run_identification_multi(cfg, output_dir, _ident_ctx(cfg))
 
     master = output_dir / "dfxm_identify.h5"
     assert master.is_file()
@@ -364,19 +379,14 @@ def test_run_identification_multi_is_deterministic_for_seed(tmp_path, monkeypatc
 
     import dfxm_geo.direct_space.forward_model as fm
 
-    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
-    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
-    fake_kernel = tmp_path / "fake_kernel.npz"
-    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
 
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
     cfg = _tiny_multi_config()
 
-    _run_identification_multi(cfg, out1)
-    _run_identification_multi(cfg, out2)
+    _run_identification_multi(cfg, out1, _ident_ctx(cfg))
+    _run_identification_multi(cfg, out2, _ident_ctx(cfg))
 
     for scan_id in ("1.1", "2.1", "3.1"):
         d1 = _collect_dislocations(out1 / "dfxm_identify.h5", scan_id)
@@ -390,14 +400,8 @@ def test_run_identification_dispatches_to_single(tmp_path, monkeypatch):
     import dfxm_geo.direct_space.forward_model as fm
     from dfxm_geo import pipeline
 
-    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
-    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
-    monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
-    # Stand in for the kernel provenance the writer reads.
-    fake_kernel = tmp_path / "fake_kernel.npz"
-    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
+    monkeypatch.setattr(pipeline, "_load_resolution", lambda *args, **kwargs: _stub_resolution())
 
     cfg = _tiny_single_config(tmp_path)
     result = run_identification(cfg, tmp_path / "out")
@@ -410,13 +414,8 @@ def test_run_identification_dispatches_to_multi(tmp_path, monkeypatch):
     import dfxm_geo.direct_space.forward_model as fm
     from dfxm_geo import pipeline
 
-    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
-    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
-    monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
-    fake_kernel = tmp_path / "fake_kernel.npz"
-    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
+    monkeypatch.setattr(pipeline, "_load_resolution", lambda *args, **kwargs: _stub_resolution())
 
     cfg = _tiny_multi_config()
     result = run_identification(cfg, tmp_path / "out")
@@ -430,13 +429,8 @@ def test_cli_main_identify_parses_args(tmp_path, monkeypatch):
     import dfxm_geo.direct_space.forward_model as fm
     from dfxm_geo import pipeline
 
-    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
-    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
-    monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
-    fake_kernel = tmp_path / "fake_kernel.npz"
-    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
+    monkeypatch.setattr(pipeline, "_load_resolution", lambda *args, **kwargs: _stub_resolution())
 
     toml_text = """
 mode = "single"
@@ -724,18 +718,11 @@ def test_run_identification_zscan_writes_per_config_rocking_grid(tmp_path, monke
     import dfxm_geo.direct_space.forward_model as fm
     from dfxm_geo.pipeline import _run_identification_zscan
 
-    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
-    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
-    # Writer falls back to fm._loaded_kernel_path for provenance when
-    # kernel_npz is None. Point it at a dummy file; no real kernel IO.
-    fake_kernel = tmp_path / "fake_kernel.npz"
-    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
 
     output_dir = tmp_path / "out"
     cfg = _tiny_zscan_config()
-    result = _run_identification_zscan(cfg, output_dir)
+    result = _run_identification_zscan(cfg, output_dir, _ident_ctx(cfg))
 
     master = output_dir / "dfxm_identify.h5"
     assert master.is_file()
@@ -788,12 +775,7 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
     import dfxm_geo.direct_space.forward_model as fm
     from dfxm_geo.pipeline import IdentificationZScanConfig, _run_identification_zscan
 
-    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
-    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
-    fake_kernel = tmp_path / "fake_kernel.npz"
-    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
 
     scan = ScanConfig(
         phi=AxisScanConfig(range=0.034377, steps=2),
@@ -823,8 +805,8 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
 
     out1 = tmp_path / "a"
     out2 = tmp_path / "b"
-    _run_identification_zscan(cfg, out1)
-    _run_identification_zscan(cfg, out2)
+    _run_identification_zscan(cfg, out1, _ident_ctx(cfg))
+    _run_identification_zscan(cfg, out2, _ident_ctx(cfg))
 
     s1 = _collect_zscan_secondaries(out1 / "dfxm_identify.h5")
     s2 = _collect_zscan_secondaries(out2 / "dfxm_identify.h5")
@@ -839,13 +821,8 @@ def test_run_identification_dispatches_to_zscan(tmp_path, monkeypatch):
     import dfxm_geo.direct_space.forward_model as fm
     from dfxm_geo import pipeline
 
-    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
-    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
-    monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
-    fake_kernel = tmp_path / "fake_kernel.npz"
-    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
+    monkeypatch.setattr(pipeline, "_load_resolution", lambda *args, **kwargs: _stub_resolution())
 
     cfg = _tiny_zscan_config()
     result = run_identification(cfg, tmp_path / "out")
@@ -859,13 +836,8 @@ def test_cli_main_identify_zscan_mode(tmp_path, monkeypatch):
     import dfxm_geo.direct_space.forward_model as fm
     from dfxm_geo import pipeline
 
-    monkeypatch.setattr(fm, "Hg", np.zeros((100, 3, 3)))
-    monkeypatch.setattr(fm, "q_hkl", np.array([-1, 1, -1]) / np.sqrt(3))
-    monkeypatch.setattr(fm, "forward", lambda *args, **kwargs: np.ones((170, 510)))
-    monkeypatch.setattr(pipeline, "_lookup_and_load_kernel", lambda *args, **kwargs: None)
-    fake_kernel = tmp_path / "fake_kernel.npz"
-    np.savez(fake_kernel, Resq_i=np.zeros(1), hkl=np.array([-1, 1, -1]), keV=17.0)
-    monkeypatch.setattr(fm, "_loaded_kernel_path", fake_kernel)
+    monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
+    monkeypatch.setattr(pipeline, "_load_resolution", lambda *args, **kwargs: _stub_resolution())
 
     toml_text = """
 mode = "z-scan"

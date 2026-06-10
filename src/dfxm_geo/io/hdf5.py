@@ -52,10 +52,12 @@ SCAN_DIR_FMT = "scan{:04d}"
 DETECTOR_FILE_FMT = "{name}_0000.h5"
 DETECTOR_INTERNAL_PATH = "/entry_0000/dfxm_sim_detector/image"
 
-# (frame_idx, base_qc, phi, chi, two_dtheta). base_qc = precompute_forward_static(Hg),
-# shared read-only across frames; replaces the per-frame Hg as of the static-hoist.
-_FrameArgs = tuple[int, np.ndarray, float, float, float]
-"""(frame_idx, base_qc, phi_rad, chi_rad, two_dtheta_rad)"""
+# (frame_idx, base_qc, phi, chi, two_dtheta, ctx). base_qc =
+# precompute_forward_static(Hg), shared read-only across frames; replaces the
+# per-frame Hg as of the static-hoist. ctx is a ForwardContext (shared
+# read-only across all frames of a scan, built once per writer call).
+_FrameArgs = tuple[int, np.ndarray, float, float, float, "_fm.ForwardContext"]
+"""(frame_idx, base_qc, phi_rad, chi_rad, two_dtheta_rad, ctx)"""
 
 
 @dataclass(frozen=True)
@@ -120,12 +122,12 @@ def _sha256_of(path: Path) -> str:
 def _compute_frame(args: _FrameArgs) -> tuple[int, np.ndarray]:
     """Worker function: run the per-frame forward model and return (frame_idx, image).
 
-    args = (frame_idx, base_qc, phi, chi, two_dtheta)
+    args = (frame_idx, base_qc, phi, chi, two_dtheta, ctx)
     """
-    frame_idx, base_qc, phi, chi, two_dtheta = args
+    frame_idx, base_qc, phi, chi, two_dtheta, ctx = args
     im = cast(
         np.ndarray,
-        _fm.forward_from_static(base_qc, phi=phi, chi=chi, TwoDeltaTheta=two_dtheta),
+        _fm.forward_from_static(base_qc, ctx, phi=phi, chi=chi, TwoDeltaTheta=two_dtheta),
     )
     return frame_idx, im
 
@@ -581,6 +583,7 @@ def write_identification_h5(
     kernel_npz: Path | None = None,
     max_workers: int | None = None,
     write_strain_provenance: bool = True,
+    ctx: _fm.ForwardContext,
 ) -> int:
     """Drive an identification run: consume ScanSpecs, write master + per-scan dirs.
 
@@ -596,12 +599,20 @@ def write_identification_h5(
     ``zl_rms`` scalars are retained. The ``Hg`` dump dominates per-scan size,
     so disable it for batch/ML identification runs.
 
+    `ctx` is the run's ``ForwardContext`` (#16 Slice 5: required). Per-frame
+    rendering uses the ctx carried inside each ``_FrameArgs`` tuple in
+    ``spec.detectors`` (built upstream by ``pipeline._scan_frames_args``); this
+    top-level ``ctx`` supplies the kernel/analytic provenance written to the
+    master file.
+
     Returns the count of scans written.
     """
 
     if kernel_npz is None:
-        kernel_npz = _fm._loaded_kernel_path
-        if kernel_npz is None and _fm._analytic_eval is None:
+        # #16 Slice 5: provenance comes from the run's ResolutionContext.
+        kernel_npz = ctx.resolution.loaded_kernel_path
+        _analytic = ctx.resolution.analytic_eval
+        if kernel_npz is None and _analytic is None:
             raise RuntimeError(
                 "no resolution backend loaded — call _lookup_and_load_kernel(hkl, "
                 "keV) or _load_analytic_resolution(config) before writing "
@@ -682,6 +693,7 @@ def write_simulation_h5(
     geometry_mode: str = "simplified",
     eta: float = 0.0,
     mount: CrystalMount | None = None,
+    ctx: _fm.ForwardContext,
 ) -> None:
     """One-call entry point for forward mode, v1.2.0 layout.
 
@@ -703,9 +715,13 @@ def write_simulation_h5(
         when None.
     """
 
+    # The run's ForwardContext, shared read-only across all frames and scans
+    # (#16 Slice 5: required — no globals snapshot fallback).
+    _ctx = ctx
+
     if kernel_npz is None:
-        kernel_npz = _fm._loaded_kernel_path
-        if kernel_npz is None and _fm._analytic_eval is None:
+        kernel_npz = _ctx.resolution.loaded_kernel_path
+        if kernel_npz is None and _ctx.resolution.analytic_eval is None:
             raise RuntimeError(
                 "no resolution backend loaded — call _lookup_and_load_kernel(hkl, "
                 "keV) or _load_analytic_resolution(config) before writing HDF5 "
@@ -733,8 +749,8 @@ def write_simulation_h5(
 
     def _build_args(Hg_in: np.ndarray) -> list[_FrameArgs]:
         # Precompute base_qc once per scan (shared read-only across frames);
-        # the per-frame worker runs forward_from_static(base_qc, ...).
-        base_qc = _fm.precompute_forward_static(Hg_in)
+        # the per-frame worker runs forward_from_static(base_qc, ctx, ...).
+        base_qc = _fm.precompute_forward_static(Hg_in, _ctx)
         return [
             (
                 i,
@@ -742,6 +758,7 @@ def write_simulation_h5(
                 float(phi_per_frame[i]),
                 float(chi_per_frame[i]),
                 float(two_dtheta_per_frame[i]),
+                _ctx,
             )
             for i in range(n)
         ]
@@ -764,7 +781,7 @@ def write_simulation_h5(
         _resolved_mount = _DEFAULT_AL_CRYSTAL
     attrs_1_1["geometry_mode"] = geometry_mode
     attrs_1_1["eta"] = float(eta)
-    attrs_1_1["theta"] = float(_fm.theta)
+    attrs_1_1["theta"] = float(_ctx.geometry.theta_0)
     attrs_1_1["lattice"] = _resolved_mount.lattice
     attrs_1_1["a"] = float(_resolved_mount.a)
     attrs_1_1["mount_x"] = np.array(_resolved_mount.mount_x, dtype=np.int64)
@@ -813,7 +830,7 @@ def write_simulation_h5(
                     z = float(z_per_frame[k])
                     if z not in z_to_base_qc:
                         Hg_z = Hg_provider(z)[0]  # discard q_hkl on per-z calls
-                        z_to_base_qc[z] = _fm.precompute_forward_static(Hg_z)
+                        z_to_base_qc[z] = _fm.precompute_forward_static(Hg_z, _ctx)
                     provider_args_list.append(
                         (
                             k,
@@ -821,6 +838,7 @@ def write_simulation_h5(
                             float(phi_per_frame[k]),
                             float(chi_per_frame[k]),
                             float(two_dtheta_per_frame[k]),
+                            _ctx,
                         )
                     )
                     if k == n - 1 or float(z_per_frame[k + 1]) != z:
@@ -844,7 +862,7 @@ def write_simulation_h5(
                 sample["dis"] = float(sample_dis)
             dfxm_geo_meta: dict = {
                 "q_hkl": q_hkl,
-                "theta": float(_fm.theta),
+                "theta": float(_ctx.geometry.theta_0),
                 "psize": float(_fm.psize),
                 "zl_rms": float(_fm.zl_rms),
             }

@@ -23,7 +23,8 @@ from dfxm_geo.pipeline import (
 
 def _kernel_or_skip() -> None:
     kernel_dir = Path(fm.pkl_fpath)
-    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")) or fm.Hg is None:
+    # #16 Slice 5: fm.Hg is no longer set by the loader; gate only on file presence.
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
         pytest.skip("No bootstrapped kernel npz found; skipping.")
 
 

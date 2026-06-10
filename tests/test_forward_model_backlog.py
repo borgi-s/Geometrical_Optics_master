@@ -18,6 +18,37 @@ import pytest
 import dfxm_geo.direct_space.forward_model as fm
 
 
+def _default_ctx() -> fm.ForwardContext:
+    """A ForwardContext for the default reflection with a no-op resolution.
+
+    #16 Slice 5: the population strain path reads only ctx.geometry +
+    ctx.instrument, so geometry/instrument are built explicitly and the
+    resolution backend is a stub (no kernel npz required on disk).
+    """
+    instr = fm.build_instrument_context()
+    geom = fm.build_geometry_context(0.30, instr)
+    res = fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=None,
+        loaded_kernel_path=None,
+    )
+    return fm.ForwardContext(
+        instrument=instr,
+        geometry=geom,
+        resolution=res,
+        q_hkl=np.array([-1.0, 1.0, -1.0]) / np.sqrt(3),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # #8 — find_hg_population honours rotation_deg (mixed edge+screw)
 # --------------------------------------------------------------------------- #
@@ -43,8 +74,9 @@ def test_population_rotation_deg_changes_hg_field() -> None:
     pop_edge = _single_disloc_population(0.0)
     pop_screw = _single_disloc_population(90.0)
 
-    Hg_edge, _ = fm.Find_Hg_from_population(pop_edge, h=-1, k=1, l=-1)
-    Hg_screw, _ = fm.Find_Hg_from_population(pop_screw, h=-1, k=1, l=-1)
+    ctx = _default_ctx()
+    Hg_edge, _ = fm.Find_Hg_from_population(pop_edge, h=-1, k=1, l=-1, ctx=ctx)
+    Hg_screw, _ = fm.Find_Hg_from_population(pop_screw, h=-1, k=1, l=-1, ctx=ctx)
 
     assert not np.allclose(Hg_edge, Hg_screw), (
         "pure-screw and pure-edge populations gave identical Hg fields; "
@@ -62,8 +94,9 @@ def test_population_default_rotation_is_pure_edge() -> None:
     )
     pop_zero = _single_disloc_population(0.0)
 
-    Hg_none, _ = fm.Find_Hg_from_population(pop_none, h=-1, k=1, l=-1)
-    Hg_zero, _ = fm.Find_Hg_from_population(pop_zero, h=-1, k=1, l=-1)
+    ctx = _default_ctx()
+    Hg_none, _ = fm.Find_Hg_from_population(pop_none, h=-1, k=1, l=-1, ctx=ctx)
+    Hg_zero, _ = fm.Find_Hg_from_population(pop_zero, h=-1, k=1, l=-1, ctx=ctx)
 
     np.testing.assert_allclose(Hg_none, Hg_zero, rtol=1e-12, atol=1e-14)
 
@@ -72,8 +105,12 @@ def test_population_numpy_oracle_honours_rotation_deg() -> None:
     """The NumPy parity oracle must apply the SAME rotation_deg as the fused
     kernel, so the rtol=1e-12 parity test keeps holding for mixed populations."""
     pop_screw = _single_disloc_population(90.0)
-    Hg_fast, _ = fm.Find_Hg_from_population(pop_screw, h=-1, k=1, l=-1)
-    Hg_ref, _ = fm._find_hg_from_population_numpy(pop_screw, -1, 1, -1, S=fm._S_IDENTITY, rl=None)
+    # S4 (#16): pass explicit ctx to both sides — same geometry, guaranteed parity.
+    ctx = _default_ctx()
+    Hg_fast, _ = fm.Find_Hg_from_population(pop_screw, h=-1, k=1, l=-1, ctx=ctx)
+    Hg_ref, _ = fm._find_hg_from_population_numpy(
+        pop_screw, -1, 1, -1, S=fm._S_IDENTITY, rl=None, ctx=ctx
+    )
     np.testing.assert_allclose(Hg_fast, Hg_ref, rtol=1e-12, atol=1e-14)
 
 
@@ -138,14 +175,10 @@ def test_analytic_resolution_theta_depends_on_lattice_param(monkeypatch) -> None
         "dfxm_geo.reciprocal_space.analytic_resolution.AnalyticResolution",
         _SpyAnalyticResolution,
     )
-    # Keep the Hg/q_hkl side-effect inert (don't trigger a kernel build).
-    monkeypatch.setattr(fm, "Hg", np.zeros((1, 3, 3)))
-    # _load_analytic_resolution sets the fm._analytic_eval module global as a
-    # side effect; register it with monkeypatch so the spy is restored on
-    # teardown. Otherwise it leaks and breaks forward() in later tests (the
-    # exact fm-globals hazard the #16 ForwardContext refactor targets).
-    monkeypatch.setattr(fm, "_analytic_eval", None)
-
+    # #16 Slice 5: _load_analytic_resolution no longer writes any module global
+    # (Hg / _analytic_eval are gone); it returns a ResolutionContext. The spy
+    # captures `theta` via the AnalyticResolution constructor — no globals to
+    # save/restore.
     fm._load_analytic_resolution(_StubReciprocalConfig(lattice_a=4.0495e-10))
     theta_al = captured["theta"]
 
@@ -173,13 +206,8 @@ def test_analytic_resolution_defaults_to_al_lattice(monkeypatch) -> None:
         "dfxm_geo.reciprocal_space.analytic_resolution.AnalyticResolution",
         _SpyAnalyticResolution,
     )
-    monkeypatch.setattr(fm, "Hg", np.zeros((1, 3, 3)))
-    # _load_analytic_resolution sets the fm._analytic_eval module global as a
-    # side effect; register it with monkeypatch so the spy is restored on
-    # teardown. Otherwise it leaks and breaks forward() in later tests (the
-    # exact fm-globals hazard the #16 ForwardContext refactor targets).
-    monkeypatch.setattr(fm, "_analytic_eval", None)
-
+    # #16 Slice 5: _load_analytic_resolution has no module-global side effects
+    # (returns a ResolutionContext); nothing to monkeypatch/restore here.
     fm._load_analytic_resolution(_StubReciprocalConfig(lattice_a=None))
     theta_default = captured["theta"]
 

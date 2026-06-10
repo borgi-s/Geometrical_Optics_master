@@ -30,7 +30,6 @@ cleanly separates the two.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
@@ -44,6 +43,7 @@ from dfxm_geo.pipeline import (
     _iter_identification_multi,
     _iter_identification_single,
     _iter_identification_zscan,
+    run_theta,
 )
 
 # Physical band for the bulk displacement-gradient magnitude of a single
@@ -52,23 +52,30 @@ _PHYS_LO = 1e-8
 _PHYS_HI = 1e-2
 
 
-@pytest.fixture
-def q_hkl_set():
-    """Set the module-global reflection `fm.q_hkl` as the kernel loader does.
+def _ctx_for(cfg: IdentificationConfig) -> fm.ForwardContext:
+    """Build the run's ForwardContext from the config, the way run_identification
+    does (build_forward_context(run_theta(cfg), ...)).
 
-    The spec generators read `fm.q_hkl` (via `precompute_forward_static`),
-    which the on-demand kernel load normally sets. `Hg`'s magnitude — the
-    quantity under test — does NOT depend on `q_hkl` (it only feeds the
-    scan-invariant `base_qc`), so this is faithful setup, not a mock of the
-    code under test. Saved/restored to avoid leaking into other tests.
+    #16 Slice 5: the spec generators source geometry/instrument and q_hkl from
+    this ctx (no module globals). The Hg magnitude under test depends only on
+    ctx.geometry/instrument, so the resolution backend is a no-op stub and no
+    kernel npz is required on disk.
     """
-    saved = fm.q_hkl
-    q = np.asarray([-1.0, 1.0, -1.0])
-    fm.q_hkl = q / np.linalg.norm(q)
-    try:
-        yield
-    finally:
-        fm.q_hkl = saved
+    res = fm.ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=0.0,
+        qi2_start=0.0,
+        qi2_step=0.0,
+        qi3_start=0.0,
+        qi3_step=0.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=None,
+        loaded_kernel_path=None,
+    )
+    return fm.build_forward_context(run_theta(cfg), res, cfg.reciprocal.hkl)
 
 
 def _single_b0_alpha0_crystal() -> IdentificationCrystalConfig:
@@ -94,17 +101,17 @@ def _assert_physical_field(Hg: np.ndarray, mode: str) -> None:
 
 
 class TestIdentificationRlUnits:
-    def test_single_field_is_physically_scaled(self, q_hkl_set: None) -> None:
+    def test_single_field_is_physically_scaled(self) -> None:
         cfg = IdentificationConfig(
             mode="single",
             crystal=_single_b0_alpha0_crystal(),
             scan=ScanConfig(),
             reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         )
-        spec = next(iter(_iter_identification_single(cfg)))
+        spec = next(iter(_iter_identification_single(cfg, _ctx_for(cfg))))
         _assert_physical_field(spec.dfxm_geo["Hg"], "single")
 
-    def test_multi_field_is_physically_scaled(self, q_hkl_set: None) -> None:
+    def test_multi_field_is_physically_scaled(self) -> None:
         cfg = IdentificationConfig(
             mode="multi",
             # pos_std_um=0.0 pins both dislocations to the grid centre so the
@@ -118,10 +125,10 @@ class TestIdentificationRlUnits:
             noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
             reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         )
-        spec = next(iter(_iter_identification_multi(cfg)))
+        spec = next(iter(_iter_identification_multi(cfg, _ctx_for(cfg))))
         _assert_physical_field(spec.dfxm_geo["Hg"], "multi")
 
-    def test_zscan_field_is_physically_scaled(self, q_hkl_set: None) -> None:
+    def test_zscan_field_is_physically_scaled(self) -> None:
         cfg = IdentificationConfig(
             mode="z-scan",
             crystal=_single_b0_alpha0_crystal(),
@@ -129,5 +136,5 @@ class TestIdentificationRlUnits:
             scan=ScanConfig(),
             reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         )
-        spec = next(iter(_iter_identification_zscan(cfg)))
+        spec = next(iter(_iter_identification_zscan(cfg, _ctx_for(cfg))))
         _assert_physical_field(spec.dfxm_geo["Hg"], "z-scan")

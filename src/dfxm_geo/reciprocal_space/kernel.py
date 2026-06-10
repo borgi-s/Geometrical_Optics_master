@@ -236,6 +236,7 @@ def generate_kernel(
     eta: float = 0.0,
     mount: CrystalMount | None = None,
     omega: float = 0.0,
+    batch_size: int | None = None,
 ) -> Path:
     """Run the kernel-generation Monte Carlo and write the npz to ``pkl_files/``.
 
@@ -275,6 +276,12 @@ def generate_kernel(
             ``None`` (default) falls back to :data:`_DEFAULT_AL_CRYSTAL`.
         omega: azimuthal motor angle ω (radians) derived from the geometry
             validation; 0.0 in simplified mode.
+        batch_size: when set, process the Monte Carlo rays in batches of this
+            size, accumulating into the histogram, so peak memory is
+            ~O(batch_size) instead of ~O(Nrays). Lets the full Nrays=1e8
+            bootstrap run on a memory-constrained machine at the cost of a few
+            extra seconds. ``None`` (default) keeps the single-shot path. A
+            single batch (batch_size >= Nrays) is bit-identical to None.
 
     Returns:
         The path the npz was written to.
@@ -354,6 +361,7 @@ def generate_kernel(
         output_path=output_path,
         kernel_meta=kernel_meta,
         rng=rng,
+        batch_size=batch_size,
     )
 
     return output_path if output_path is not None else Path("pkl_files") / f"Resq_i_{date}.npz"

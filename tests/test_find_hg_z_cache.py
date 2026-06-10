@@ -16,6 +16,20 @@ def _require_kernel() -> None:
         pytest.skip(f"no kernel npz found in {kernel_dir}")
 
 
+def _load_ctx() -> fm.ForwardContext:
+    """Load the default (-1,1,-1) 17 keV kernel and build a ForwardContext."""
+    from dfxm_geo.pipeline import (
+        ReciprocalConfig,
+        SimulationConfig,
+        _lookup_and_load_kernel,
+        run_theta,
+    )
+
+    res = _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    cfg = SimulationConfig(reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0))
+    return fm.build_forward_context(run_theta(cfg), res, (-1, 1, -1))
+
+
 def test_z_offset_zero_keeps_legacy_filename(tmp_path, monkeypatch):
     """z_offset_um=0.0 must produce the same Fg cache filename as v1.2.0."""
     _require_kernel()
@@ -23,13 +37,9 @@ def test_z_offset_zero_keeps_legacy_filename(tmp_path, monkeypatch):
     # Force fresh cache dir so we observe the file that actually lands.
     Fg_dir = tmp_path / "direct_space" / "deformation_gradient_tensors"
 
-    from dfxm_geo.pipeline import _lookup_and_load_kernel
+    ctx = _load_ctx()
 
-    fm.Hg = None
-    fm._loaded_kernel_path = None
-    _lookup_and_load_kernel((-1, 1, -1), 17.0)
-
-    fm.Find_Hg(dis=4.0, ndis=1, psize=fm.psize, zl_rms=fm.zl_rms, h=-1, k=1, l=-1)
+    fm.Find_Hg(dis=4.0, ndis=1, psize=fm.psize, zl_rms=fm.zl_rms, h=-1, k=1, l=-1, ctx=ctx)
     files = list(Fg_dir.glob("Fg_*.npy"))
     assert files, f"no Fg cache file landed in {Fg_dir}"
     name = files[0].name
@@ -41,11 +51,7 @@ def test_z_offset_nonzero_adds_z_suffix(tmp_path, monkeypatch):
     _require_kernel()
     monkeypatch.setattr(fm, "_REPO_ROOT", tmp_path)
     Fg_dir = tmp_path / "direct_space" / "deformation_gradient_tensors"
-    from dfxm_geo.pipeline import _lookup_and_load_kernel
-
-    fm.Hg = None
-    fm._loaded_kernel_path = None
-    _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    ctx = _load_ctx()
 
     fm.Find_Hg(
         dis=4.0,
@@ -56,6 +62,7 @@ def test_z_offset_nonzero_adds_z_suffix(tmp_path, monkeypatch):
         k=1,
         l=-1,
         z_offset_um=12.5,
+        ctx=ctx,
     )
     files = list(Fg_dir.glob("Fg_*_z*nm.npy"))
     assert files, f"expected file with _z…nm suffix in {Fg_dir}"
@@ -66,19 +73,16 @@ def test_z_offset_nonzero_uses_shifted_rl(tmp_path, monkeypatch):
     """Find_Hg with z_offset_um!=0 must build rl via Z_shift, not use module rl."""
     _require_kernel()
     monkeypatch.setattr(fm, "_REPO_ROOT", tmp_path)
-    from dfxm_geo.pipeline import _lookup_and_load_kernel
-
-    fm.Hg = None
-    fm._loaded_kernel_path = None
-    _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    ctx = _load_ctx()
 
     # Spy on Z_shift to confirm it's invoked.
     calls: list[float] = []
     real_z_shift = fm.Z_shift
 
-    def spy(offset_um: float):
+    def spy(offset_um: float, **kwargs: object):
+        # Accept Find_Hg's xl_range kwarg (#16 S5) and forward it.
         calls.append(float(offset_um))
-        return real_z_shift(offset_um)
+        return real_z_shift(offset_um, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(fm, "Z_shift", spy)
     fm.Find_Hg(
@@ -90,6 +94,7 @@ def test_z_offset_nonzero_uses_shifted_rl(tmp_path, monkeypatch):
         k=1,
         l=-1,
         z_offset_um=5.0,
+        ctx=ctx,
     )
     assert calls == [5.0], f"Z_shift should be called once with 5.0; got {calls}"
 
@@ -98,16 +103,12 @@ def test_z_offset_zero_does_not_call_z_shift(tmp_path, monkeypatch):
     """z_offset_um=0.0 must NOT call Z_shift (keep the module-level rl)."""
     _require_kernel()
     monkeypatch.setattr(fm, "_REPO_ROOT", tmp_path)
-    from dfxm_geo.pipeline import _lookup_and_load_kernel
-
-    fm.Hg = None
-    fm._loaded_kernel_path = None
-    _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    ctx = _load_ctx()
 
     calls: list[float] = []
-    monkeypatch.setattr(fm, "Z_shift", lambda off: calls.append(off) or fm.rl)
+    monkeypatch.setattr(fm, "Z_shift", lambda off, **kw: calls.append(off) or ctx.geometry.rl)
 
-    fm.Find_Hg(dis=4.0, ndis=1, psize=fm.psize, zl_rms=fm.zl_rms, h=-1, k=1, l=-1)
+    fm.Find_Hg(dis=4.0, ndis=1, psize=fm.psize, zl_rms=fm.zl_rms, h=-1, k=1, l=-1, ctx=ctx)
     assert calls == [], f"Z_shift should not be called for z=0; got {calls}"
 
 
@@ -116,11 +117,7 @@ def test_find_hg_from_population_accepts_rl_kwarg():
     import numpy as np
 
     _require_kernel()
-    from dfxm_geo.pipeline import _lookup_and_load_kernel
-
-    fm.Hg = None
-    fm._loaded_kernel_path = None
-    _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    ctx = _load_ctx()
 
     # Single centered dislocation
     from dfxm_geo.pipeline import CenteredCrystalConfig, CrystalConfig
@@ -131,8 +128,8 @@ def test_find_hg_from_population_accepts_rl_kwarg():
     )
     pop = fm.build_dislocation_population(cfg, fov_lateral_um=20.0, rng=None)
 
-    rl_shifted = fm.Z_shift(3.0)
-    Hg_shifted, _ = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1, rl=rl_shifted)
-    Hg_zero, _ = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1)
+    rl_shifted = fm.Z_shift(3.0, xl_range=ctx.geometry.xl_range)
+    Hg_shifted, _ = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1, rl=rl_shifted, ctx=ctx)
+    Hg_zero, _ = fm.Find_Hg_from_population(pop, h=-1, k=1, l=-1, ctx=ctx)
     # Different rl -> different Hg
     assert not np.allclose(Hg_shifted, Hg_zero), "Hg from z-shifted rl should differ from Hg at z=0"

@@ -58,36 +58,38 @@ def test_reciprocal_config_rejects_bad_backend():
 
 
 def test_forward_uses_analytic_when_registered():
-    # Load any kernel for geometry/Hg/q_hkl, then register the analytic eval.
+    # Load a kernel for geometry, compute Hg, then build an analytic ctx.
     _require_kernel()
+    from dfxm_geo.pipeline import SimulationConfig, run_theta
+
     cfg = ReciprocalConfig.from_dict(None)
-    _lookup_and_load_kernel(cfg.hkl, cfg.keV)  # sets Hg, q_hkl, geometry
-    try:
-        fm._load_analytic_resolution(cfg)
-        assert fm._analytic_eval is not None
-        img = fm.forward(fm.Hg, phi=0.0, chi=0.0)
-        assert img.shape == (fm.NN2 // fm.Nsub, fm.NN1 // fm.Nsub)
-        assert np.all(np.isfinite(img))
-        assert img.sum() > 0
-    finally:
-        fm._analytic_eval = None  # restore LUT path
+    res = _lookup_and_load_kernel(cfg.hkl, cfg.keV)
+    ctx_mc = fm.build_forward_context(run_theta(SimulationConfig(reciprocal=cfg)), res, cfg.hkl)
+    Hg, _ = fm.Find_Hg(4.0, 151, fm.psize, fm.zl_rms, ctx=ctx_mc)
+
+    analytic_res = fm._load_analytic_resolution(cfg)
+    assert analytic_res.analytic_eval is not None
+    ctx_an = fm.build_forward_context(
+        run_theta(SimulationConfig(reciprocal=cfg)), analytic_res, cfg.hkl
+    )
+    img = fm.forward(Hg, ctx_an, phi=0.0, chi=0.0)
+    assert img.shape == (fm.NN2 // fm.Nsub, fm.NN1 // fm.Nsub)
+    assert np.all(np.isfinite(img))
+    assert img.sum() > 0
 
 
 def test_dispatch_auto_no_beamstop_selects_analytic():
     cfg = ReciprocalConfig.from_dict({"beamstop": False})  # auto + beamstop off
-    fm._analytic_eval = None
-    _load_resolution(cfg)
-    assert fm._analytic_eval is not None
-    fm._analytic_eval = None
+    res = _load_resolution(cfg)
+    assert res.analytic_eval is not None
 
 
 def test_dispatch_auto_beamstop_selects_mc():
     _require_kernel()
     cfg = ReciprocalConfig.from_dict({"beamstop": True})  # auto + beamstop on
-    fm._analytic_eval = None
-    _load_resolution(cfg)
-    assert fm._analytic_eval is None  # MC path: kernel loaded, no analytic
-    assert fm._loaded_kernel_path is not None
+    res = _load_resolution(cfg)
+    assert res.analytic_eval is None  # MC path: kernel loaded, no analytic
+    assert res.loaded_kernel_path is not None
 
 
 def test_dispatch_explicit_analytic_with_beamstop_errors():
@@ -104,35 +106,30 @@ def test_run_simulation_analytic_writes_hdf5_without_kernel(tmp_path):
     (`_fm._loaded_kernel_path`), so the entire analytic CLI path crashed at
     write time. The earlier unit tests masked it by pre-loading a kernel for
     geometry; here we force the genuine analytic-only state.
+
+    #16 Slice 5: the backend choice no longer lives in module globals — the
+    analytic-only state is simply a config with backend="analytic" and no
+    kernel on the ResolutionContext, threaded entirely through run_simulation.
     """
     import h5py
 
     from dfxm_geo.pipeline import SimulationConfig, run_simulation
-
-    # Force the clean / analytic-only state: no MC kernel anywhere.
-    fm._loaded_kernel_path = None
-    fm._analytic_eval = None
 
     toml = tmp_path / "analytic.toml"
     toml.write_text('[reciprocal]\nbackend = "analytic"\nbeamstop = false\n')
     cfg = SimulationConfig.from_toml(toml)
     cfg.io.include_perfect_crystal = False  # speed: single scan only
 
-    try:
-        out = run_simulation(cfg, tmp_path)
-        assert isinstance(out, dict)
-        master_h5 = tmp_path / "dfxm_geo.h5"
-        assert master_h5.exists()
-        with h5py.File(master_h5, "r") as f:
-            assert "/dfxm_geo" in f
-            # Analytic runs have no MC kernel, so no kernel provenance sub-group.
-            assert "/dfxm_geo/kernel" not in f
-            # The backend choice is captured in the embedded config TOML.
-            assert "analytic" in f["/dfxm_geo/config_toml"][()].decode()
-    finally:
-        # Don't leak the analytic evaluator into later (MC) tests -- forward()
-        # prefers it over the LUT whenever it is set.
-        fm._analytic_eval = None
+    out = run_simulation(cfg, tmp_path)
+    assert isinstance(out, dict)
+    master_h5 = tmp_path / "dfxm_geo.h5"
+    assert master_h5.exists()
+    with h5py.File(master_h5, "r") as f:
+        assert "/dfxm_geo" in f
+        # Analytic runs have no MC kernel, so no kernel provenance sub-group.
+        assert "/dfxm_geo/kernel" not in f
+        # The backend choice is captured in the embedded config TOML.
+        assert "analytic" in f["/dfxm_geo/config_toml"][()].decode()
 
 
 @pytest.mark.slow
@@ -212,18 +209,22 @@ def test_analytic_forward_matches_mc_no_beamstop(tmp_path):
         },
     )
 
-    try:
-        # MC image
-        fm._analytic_eval = None
-        fm._load_default_kernel(str(out), expected_hkl=hkl, expected_keV=keV)
-        img_mc = fm.forward(fm.Hg, phi=0.0, chi=0.0)
+    from dfxm_geo.pipeline import SimulationConfig, run_theta
 
-        # Analytic image (same geometry / Hg already loaded)
-        cfg = ReciprocalConfig.from_dict({"beamstop": False, "zeta_h_fwhm": 5.3e-4})
-        fm._load_analytic_resolution(cfg)
-        img_an = fm.forward(fm.Hg, phi=0.0, chi=0.0)
-    finally:
-        fm._analytic_eval = None
+    # MC image
+    cfg_mc = ReciprocalConfig.from_dict({"hkl": list(hkl), "keV": keV})
+    mc_res = fm._load_default_kernel(str(out), expected_hkl=hkl, expected_keV=keV)
+    ctx_mc = fm.build_forward_context(run_theta(SimulationConfig(reciprocal=cfg_mc)), mc_res, hkl)
+    Hg, _ = fm.Find_Hg(4.0, 151, fm.psize, fm.zl_rms, ctx=ctx_mc)
+    img_mc = fm.forward(Hg, ctx_mc, phi=0.0, chi=0.0)
+
+    # Analytic image (same geometry / same Hg)
+    cfg = ReciprocalConfig.from_dict({"beamstop": False, "zeta_h_fwhm": 5.3e-4})
+    analytic_res = fm._load_analytic_resolution(cfg)
+    ctx_an = fm.build_forward_context(
+        run_theta(SimulationConfig(reciprocal=cfg_mc)), analytic_res, hkl
+    )
+    img_an = fm.forward(Hg, ctx_an, phi=0.0, chi=0.0)
 
     # Structural correlation is scale-invariant; compute on peak-normalized.
     a_pk = img_an / img_an.max()
@@ -280,21 +281,27 @@ def test_analytic_com_has_no_grid_banding(tmp_path):
     """
     cfg = ReciprocalConfig.from_dict({"beamstop": False, "zeta_h_fwhm": 5.3e-4})
     # Geometry + Hg from the on-disk default kernel lookup, then analytic eval.
-    _lookup_and_load_kernel(cfg.hkl, cfg.keV)
-    Hg = fm.Hg
+    from dfxm_geo.pipeline import SimulationConfig, run_theta
+
+    cfg_base = ReciprocalConfig.from_dict({"hkl": list(cfg.hkl), "keV": cfg.keV})
+    sim_cfg = SimulationConfig(reciprocal=cfg_base)
+    mc_res = _lookup_and_load_kernel(cfg.hkl, cfg.keV)
+    ctx_mc = fm.build_forward_context(run_theta(sim_cfg), mc_res, cfg.hkl)
+    Hg, _ = fm.Find_Hg(4.0, 151, fm.psize, fm.zl_rms, ctx=ctx_mc)
+
+    analytic_res = fm._load_analytic_resolution(cfg)
+    ctx_an = fm.build_forward_context(run_theta(sim_cfg), analytic_res, cfg.hkl)
 
     phis = np.linspace(-3e-4, 3e-4, 21)  # small rocking scan (radians)
 
-    def com_map(eval_setup):
-        eval_setup()
-        stack = np.stack([fm.forward(Hg, phi=p, chi=0.0) for p in phis], axis=0)
+    def com_map(ctx_):
+        stack = np.stack([fm.forward(Hg, ctx_, phi=p, chi=0.0) for p in phis], axis=0)
         weight = stack.sum(axis=0) + 1e-30
         return (stack * phis[:, None, None]).sum(axis=0) / weight
 
-    com_an = com_map(lambda: fm._load_analytic_resolution(cfg))
-    fm._analytic_eval = None
+    com_an = com_map(ctx_an)
     # MC reference (uses the on-disk default kernel; quantized).
-    com_mc = com_map(lambda: _lookup_and_load_kernel(cfg.hkl, cfg.keV))
+    com_mc = com_map(ctx_mc)
 
     modes_an, hist_an, centers_an = _com_value_hist_modes(com_an)
     modes_mc, hist_mc, centers_mc = _com_value_hist_modes(com_mc)

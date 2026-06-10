@@ -67,6 +67,52 @@ def test_render_per_dislocation_writes_three_files(tmp_path: Path) -> None:
             assert instr[name].attrs["NX_class"] == "NXdetector"
 
 
+def test_per_dis_renders_are_positioned(tmp_path: Path, monkeypatch) -> None:
+    """Per-instance renders must be drawn at each dislocation's scene position.
+
+    Regression: the combined scene threads ``position_lab_um`` into
+    ``Fd_find_multi_dislocs_mixed``, but the per-dislocation renders called
+    ``Fd_find_mixed`` *without* it, so ``dis0`` / ``dis1`` were rendered at the
+    origin and could not overlay the combined image as instance labels. The
+    render call must receive the same position stored under
+    ``/N.1/sample/dislocations/<k>/position_um``.
+    """
+    _require_kernel()
+    import dfxm_geo.pipeline as pipeline
+
+    captured: list = []
+    real_fd_find_mixed = pipeline.Fd_find_mixed
+
+    def spy(*args, **kwargs):
+        captured.append(kwargs.get("position_lab_um"))
+        return real_fd_find_mixed(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "Fd_find_mixed", spy)
+
+    cfg = IdentificationConfig(
+        mode="multi",
+        crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
+        scan=ScanConfig(phi=AxisScanConfig(value=1e-4)),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        multi=IdentificationMonteCarloConfig(
+            n_samples=1, pos_std_um=5.0, render_per_dislocation=True
+        ),
+        reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
+    )
+    run_identification(cfg, tmp_path)
+
+    # One sample with render_per_dislocation -> exactly two per-instance renders.
+    assert len(captured) == 2
+    with h5py.File(tmp_path / "dfxm_identify.h5", "r") as f:
+        pos0 = f["/1.1/sample/dislocations/0/position_um"][()]
+        pos1 = f["/1.1/sample/dislocations/1/position_um"][()]
+    assert captured[0] is not None, "dis0 render was not given a position_lab_um"
+    assert captured[1] is not None, "dis1 render was not given a position_lab_um"
+    np.testing.assert_allclose(captured[0], pos0, atol=1e-9)
+    np.testing.assert_allclose(captured[1], pos1, atol=1e-9)
+
+
 def test_per_dis_files_are_noiseless(tmp_path: Path) -> None:
     """With poisson_noise=True, dis0/dis1 stay deterministic (noiseless).
 

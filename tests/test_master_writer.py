@@ -15,28 +15,12 @@ from dfxm_geo.io.hdf5 import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _reset_kernel_state():
-    """Restore module-level forward_model state after each test.
-
-    `_kernel_for_tests()` loads a kernel via `_lookup_and_load_kernel`,
-    which sets `fm.Hg` and `fm._loaded_kernel_path` as side effects.
-    Downstream tests (e.g. the `TestHdf5NewAttrs` baseline-skip pattern in
-    `tests/test_detector_file.py`) rely on `_loaded_kernel_path is None`,
-    so we reset both after every test in this file to avoid cross-test
-    bleed.
-    """
-    yield
-    import dfxm_geo.direct_space.forward_model as fm
-
-    fm.Hg = None
-    fm._loaded_kernel_path = None
-
-
 def _kernel_for_tests() -> Path:
     """Pick the bundled kernel for provenance + lookup tests.
 
-    Skipped on CI runners without a bootstrapped kernel npz.
+    Skipped on CI runners without a bootstrapped kernel npz. #16 Slice 5: the
+    loader returns a ResolutionContext (no module-global side effects), so no
+    per-test reset fixture is needed — there is no shared state to bleed.
     """
     import dfxm_geo.direct_space.forward_model as fm
     from dfxm_geo.pipeline import _lookup_and_load_kernel
@@ -45,9 +29,9 @@ def _kernel_for_tests() -> Path:
     if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
         pytest.skip(f"no kernel npz found in {kernel_dir}")
 
-    _lookup_and_load_kernel((-1, 1, -1), 17.0)
-    assert fm._loaded_kernel_path is not None
-    return Path(fm._loaded_kernel_path)
+    res = _lookup_and_load_kernel((-1, 1, -1), 17.0)
+    assert res.loaded_kernel_path is not None
+    return Path(res.loaded_kernel_path)
 
 
 def test_master_writer_open_close_writes_provenance(tmp_path: Path) -> None:
