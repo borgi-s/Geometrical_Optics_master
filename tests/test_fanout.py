@@ -647,3 +647,39 @@ def test_pool_env_pinned_during_run_and_restored_after(tmp_path: Path) -> None:
     assert seen_env["DFXM_MAX_WORKERS"] == "3"
     assert seen_env["OMP_NUM_THREADS"] == "1"
     assert os.environ.get("DFXM_MAX_WORKERS") == before  # restored
+
+
+# ---------------------------------------------------------------------------
+# Task 10: timing.json isolate flag continuity
+# ---------------------------------------------------------------------------
+
+
+def test_write_timing_json_records_isolate_flag(tmp_path: Path) -> None:
+    import json as _json
+
+    c = tmp_path / "c.toml"
+    c.write_text("")
+    results = fanout.run_pool(
+        [c],
+        tmp_path / "out",
+        n_workers=1,
+        mode="identify",
+        worker_fn=_ok_worker,
+        executor_factory=lambda n: ThreadPoolExecutor(max_workers=n),
+    )
+    out = tmp_path / "timing.json"
+    fanout.write_timing_json(
+        out,
+        results,
+        total_wall_s=1.0,
+        n_workers=1,
+        threads_per_worker=1,
+        mode="identify",
+        isolate=False,
+    )
+    payload = _json.loads(out.read_text(encoding="utf-8"))
+    assert payload["sweep"]["isolate"] is False
+    # Pool-mode logs carry the same DFXM_TIMING contract -> rows unchanged.
+    assert payload["configs"][0]["import_s"] == 1.5
+    assert payload["configs"][0]["run_s"] == 2.5
+    assert payload["configs"][0]["images"] == 4

@@ -427,6 +427,7 @@ def write_timing_json(
     n_workers: int,
     threads_per_worker: int,
     mode: str,
+    isolate: bool = False,
 ) -> None:
     """Write the sweep timing manifest: per-config rows + throughput summary.
 
@@ -439,6 +440,13 @@ def write_timing_json(
     Returncode legend in the per-config rows: 0 = ok; >0 = the config's CLI
     exit code; -1 = worker exception (traceback in the log); -2 = pool-mode
     worker death after max retries (re-run that config with ``--isolate``).
+
+    *isolate*: when False (the default, pool mode), ``import_s`` in each
+    per-config row is the per-worker amortized cost — real on the worker's
+    first config, 0.0 on subsequent warm ones (the import/JIT/kernel-load
+    is paid once per worker, not once per config). ``wall_s`` in pool mode
+    excludes queue-wait time between config submissions. When True (--isolate
+    subprocess mode), every config pays the full import cost.
     """
     rows = []
     image_counts: list[int] = []
@@ -459,6 +467,7 @@ def write_timing_json(
     n_ok = sum(1 for r in results if r.returncode == 0)
     sweep: dict[str, object] = {
         "mode": mode,
+        "isolate": isolate,
         "n_configs": len(results),
         "n_ok": n_ok,
         "n_workers": n_workers,
@@ -554,6 +563,7 @@ def main(argv: list[str] | None = None) -> int:
             n_workers=args.n_workers,
             threads_per_worker=args.threads_per_worker,
             mode=args.mode,
+            isolate=args.isolate,
         )
         print(f"fanout: timing manifest -> {args.timing_json}")
     return 1 if n_fail else 0
