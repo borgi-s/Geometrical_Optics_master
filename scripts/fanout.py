@@ -124,6 +124,10 @@ def _pinned_environ(threads_per_worker: int):
     spawn on Windows), so the keys must be set in the PARENT before the
     executor spawns its first worker — and restored afterwards so the
     calling process (tests, notebooks) is not permanently mutated.
+
+    Note: os.environ mutation is process-global — do not call run_pool
+    concurrently from multiple threads of one process (separate processes,
+    e.g. pytest-xdist workers, are fine).
     """
     target = worker_env(threads_per_worker)
     keys = ["DFXM_MAX_WORKERS", *_PINNED_SINGLE]
@@ -199,6 +203,12 @@ def run_pool(
                     log_path = output_root / f"{c.stem}.log"
                     futs[ex.submit(worker_fn, mode, str(c), str(out_dir), str(log_path))] = c
                 not_done: set[Future] = set(futs)
+                # When a real ProcessPoolExecutor breaks, terminate_broken()
+                # poisons ALL outstanding futures at once — every fut.result()
+                # raises BrokenProcessPool, not just the config that killed the
+                # worker. The loop below drains them all; unstarted configs
+                # land in broken[] alongside the actual killer and retry as a
+                # group on the fresh executor.
                 while not_done:
                     done, not_done = wait(not_done, return_when=FIRST_COMPLETED)
                     for fut in done:
@@ -425,6 +435,10 @@ def write_timing_json(
     throughput and look like a regression. ``configs_per_hour`` counts ALL
     configs (failures included): it measures sweep progress rate, not useful
     yield — read it together with ``n_ok``.
+
+    Returncode legend in the per-config rows: 0 = ok; >0 = the config's CLI
+    exit code; -1 = worker exception (traceback in the log); -2 = pool-mode
+    worker death after max retries (re-run that config with ``--isolate``).
     """
     rows = []
     image_counts: list[int] = []

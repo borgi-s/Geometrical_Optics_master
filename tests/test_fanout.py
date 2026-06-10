@@ -433,7 +433,10 @@ def test_write_timing_json_partial_child_data(tmp_path: Path) -> None:
 # Pool mode (v2.6.0 W1). Tests inject worker_fn + executor_factory so no real
 # process pool is spawned: a ThreadPoolExecutor exercises the same
 # submit/as_completed/recovery code paths and imposes no picklability
-# constraint on the fakes.
+# constraint on the fakes. Fidelity gap: a ThreadPoolExecutor cannot
+# reproduce the all-futures-poisoned cascade of a real broken
+# ProcessPoolExecutor — the real-pool paths are covered by the e2e tests
+# (pool-vs-isolate bit-identity gate + pool forward e2e) further below.
 # ---------------------------------------------------------------------------
 
 
