@@ -19,8 +19,10 @@ The accumulators wrap the stage functions at their call sites
 Buckets reported:
 
 * ``kernel_load_s``  — ``_lookup_and_load_kernel`` (the npz LUT load)
-* ``hg_s``           — ``Fd_find_mixed`` + ``Fd_find_multi_dislocs_mixed`` +
-  ``fast_inverse2`` + ``Z_shift``
+* ``hg_s``           — ``find_hg_scene`` (the single W2 seam covering
+  single, multi AND zscan modes) + ``Z_shift``
+  NOTE: post-W2/W3 (v2.6.0), ``find_hg_scene`` uses the fused numba kernel
+  and is no longer the dominant cost (was 61-70 % pre-W2).
 * ``frames_s``       — ``precompute_forward_static`` + every
   ``_compute_frame`` call (sum over worker threads)
 * ``poisson_s``      — ``_maybe_apply_poisson_noise`` (post-write pass)
@@ -88,11 +90,12 @@ def _wrap(fn, acc: _Acc):
 
 # stage name -> (module, attribute). Patched at the call-site module so the
 # pipeline's module-global lookups hit the wrapper.
+# Post-W2 (v2.6.0): Fd_find_mixed / Fd_find_multi_dislocs_mixed / fast_inverse2
+# were replaced by the single find_hg_scene seam imported into pipeline's
+# namespace — one wrap now covers single, multi AND zscan modes.
 _STAGE_SITES = {
     "kernel_load": (pipeline, "_lookup_and_load_kernel"),
-    "fd_mixed": (pipeline, "Fd_find_mixed"),
-    "fd_multi": (pipeline, "Fd_find_multi_dislocs_mixed"),
-    "fast_inverse2": (pipeline, "fast_inverse2"),
+    "find_hg_scene": (pipeline, "find_hg_scene"),
     "z_shift": (fm, "Z_shift"),
     "precompute": (fm, "precompute_forward_static"),
     "frames": (hdf5, "_compute_frame"),
@@ -166,12 +169,7 @@ def profile_one(config_path: Path, output_dir: Path, *, skip_cprofile_dump: bool
         restore()
     total_s = time.perf_counter() - t0
 
-    hg_s = (
-        accs["fd_mixed"].seconds
-        + accs["fd_multi"].seconds
-        + accs["fast_inverse2"].seconds
-        + accs["z_shift"].seconds
-    )
+    hg_s = accs["find_hg_scene"].seconds + accs["z_shift"].seconds
     frames_s = accs["frames"].seconds + accs["precompute"].seconds
     writer_s = accs["writer"].seconds
     # Hg + frame work runs nested inside the writer (lazy generator), so the
