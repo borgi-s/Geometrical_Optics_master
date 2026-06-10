@@ -38,6 +38,7 @@ from dfxm_geo.crystal.dislocations import (
     Fd_find_mixed,
     Fd_find_multi_dislocs_mixed,
     MixedDislocSpec,
+    find_hg_scene,
 )
 from dfxm_geo.crystal.oblique import CrystalMount
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
@@ -1869,8 +1870,16 @@ def _iter_identification_multi(
                     position_lab_um=d2["pos_um"],
                 ),
             ]
-            Fg_combined = Fd_find_multi_dislocs_mixed(rl_eff, Us_, specs, Theta_)
-            Hg_combined = np.transpose(fast_inverse2(Fg_combined), [0, 2, 1]) - np.identity(3)
+            # W2 dedup (v2.6.0): each dislocation's field is computed ONCE;
+            # the combined scene is Σ(Fg_i − I) + I — bit-identical to the
+            # old Fd_find_multi_dislocs_mixed + per-solo recompute path.
+            Hg_combined, solo_hgs = find_hg_scene(
+                rl_eff,
+                Us_,
+                specs,
+                Theta_,
+                per_dislocation=mc.render_per_dislocation,
+            )
 
             combined_args, positioners = _scan_frames_args(
                 Hg_combined, frames_at_z, config.scan, ctx
@@ -1885,26 +1894,9 @@ def _iter_identification_multi(
                 # Per-dislocation Hg: each rendered alone (other one absent), at
                 # its own scene position so the renders overlay the combined
                 # image as ground-truth instance labels. Noiseless by design.
-                Fg_dis0 = Fd_find_mixed(
-                    rl_eff,
-                    Us_,
-                    Ud_mix=d1["Ud"],
-                    rotation_deg=d1["alpha_deg"],
-                    Theta=Theta_,
-                    position_lab_um=d1["pos_um"],
-                )
-                Hg_dis0 = np.transpose(fast_inverse2(Fg_dis0), [0, 2, 1]) - np.identity(3)
-                Fg_dis1 = Fd_find_mixed(
-                    rl_eff,
-                    Us_,
-                    Ud_mix=d2["Ud"],
-                    rotation_deg=d2["alpha_deg"],
-                    Theta=Theta_,
-                    position_lab_um=d2["pos_um"],
-                )
-                Hg_dis1 = np.transpose(fast_inverse2(Fg_dis1), [0, 2, 1]) - np.identity(3)
-                dis0_args, _ = _scan_frames_args(Hg_dis0, frames_at_z, config.scan, ctx)
-                dis1_args, _ = _scan_frames_args(Hg_dis1, frames_at_z, config.scan, ctx)
+                assert solo_hgs is not None
+                dis0_args, _ = _scan_frames_args(solo_hgs[0], frames_at_z, config.scan, ctx)
+                dis1_args, _ = _scan_frames_args(solo_hgs[1], frames_at_z, config.scan, ctx)
                 detectors["dfxm_sim_detector_dis0"] = dis0_args
                 detectors["dfxm_sim_detector_dis1"] = dis1_args
 
