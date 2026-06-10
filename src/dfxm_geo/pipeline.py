@@ -27,8 +27,12 @@ import numpy as np
 
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.analysis.mosaicity import compute_com_maps
-from dfxm_geo.crystal.burgers import burgers_vectors as _burgers_vectors
-from dfxm_geo.crystal.burgers import gb_visible as _gb_visible
+from dfxm_geo.crystal.burgers import (
+    burgers_vectors as _burgers_vectors,
+)
+from dfxm_geo.crystal.burgers import (
+    gb_visible as _gb_visible,
+)
 from dfxm_geo.crystal.burgers import (
     rotated_t_vectors as _rotated_t_vectors,
 )

@@ -30,6 +30,17 @@ def test_gb_visible_threshold_semantics():
     assert gb_visible(np.array([1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]), 10.0)
 
 
+def test_gb_visible_exact_threshold_boundary_is_visible():
+    """gb_cos exactly equal to the cutoff → visible (>= semantics, not >).
+
+    Uses the float-exact case gb_cos = 1.0 with threshold 90° (cutoff
+    cos(0°) = 1.0): no rounding anywhere, so a >= → > regression flips it.
+    """
+    g = np.array([1.0, 0.0, 0.0])
+    assert gb_cos(g, g) == 1.0
+    assert gb_visible(g, g, 90.0)
+
+
 def test_gb_visible_matches_pipeline_passes_invisibility():
     """The pipeline guard must delegate: identical verdicts on random input."""
     from dfxm_geo.pipeline import _passes_invisibility
