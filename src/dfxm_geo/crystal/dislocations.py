@@ -658,6 +658,173 @@ def _specs_to_population_arrays(
     return M, offset, Ud, cos_rot, sin_rot
 
 
+@njit(cache=True, nogil=True, fastmath=False, inline="always")
+def _write_hg_from_f(
+    f00: float,
+    f01: float,
+    f02: float,
+    f10: float,
+    f11: float,
+    f12: float,
+    f20: float,
+    f21: float,
+    f22: float,
+    out: np.ndarray,
+    x: int,
+) -> None:
+    """Write out[x] = inv(F).T − I for one ray's 3×3 F (mirrors fast_inverse2).
+
+    Cofactor layout matches the vectorised ``fast_inverse2`` in
+    ``crystal/rotations.py``; ``out`` receives the TRANSPOSED inverse minus
+    the identity so the caller does not need an extra transpose step.
+    fastmath=False keeps the numerics tame for parity against the NumPy oracle.
+    """
+    c00 = f11 * f22 - f12 * f21
+    c10 = -(f10 * f22 - f12 * f20)
+    c20 = f10 * f21 - f11 * f20
+    idet = 1.0 / (f00 * c00 + f01 * c10 + f02 * c20)
+    # inv[row,col] stored in the adjugate-divided-by-det layout of fast_inverse2.
+    # Hg = inv.T - I  ⟹  Hg[i,j] = inv[j,i] - (i==j)
+    out[x, 0, 0] = c00 * idet - 1.0
+    out[x, 0, 1] = c10 * idet
+    out[x, 0, 2] = c20 * idet
+    out[x, 1, 0] = -idet * (f01 * f22 - f02 * f21)
+    out[x, 1, 1] = idet * (f00 * f22 - f02 * f20) - 1.0
+    out[x, 1, 2] = -idet * (f00 * f21 - f01 * f20)
+    out[x, 2, 0] = idet * (f01 * f12 - f02 * f11)
+    out[x, 2, 1] = -idet * (f00 * f12 - f02 * f10)
+    out[x, 2, 2] = idet * (f00 * f11 - f01 * f10) - 1.0
+
+
+@njit(cache=True, nogil=True, fastmath=False)
+def _scene_perdis_hg_kernel(
+    rl_um: np.ndarray,  # (3, X) float64, MICROMETRES
+    M: np.ndarray,  # (N, 3, 3) = Ud.T @ Us.T @ S.T @ Theta
+    offset: np.ndarray,  # (N, 3) micrometres
+    Ud: np.ndarray,  # (N, 3, 3)
+    cos_rot: np.ndarray,  # (N,)
+    sin_rot: np.ndarray,  # (N,)
+    b: float,
+    ny: float,
+    Hg_combined_out: np.ndarray,  # (X, 3, 3), written in place
+    Hg_per_out: np.ndarray,  # (N, X, 3, 3), written in place
+) -> None:
+    """`_population_hg_kernel` + per-dislocation solo Hg in the same ray pass.
+
+    Each dislocation's field is evaluated ONCE; its grain-frame contribution
+    feeds both the combined Fg = I + Σ (Ud_d @ G_d @ Ud_d.T) and the
+    solo Fg_d = I + Ud_d @ G_d @ Ud_d.T (the W2 dedup, fused). Math is
+    identical to `_population_hg_kernel`; see that kernel's docstring for
+    the reference.
+
+    The combined accumulation uses the same explicit expanded expressions as
+    `_population_hg_kernel` (matching FP op order for the combined output).
+    The solo Fg_d is constructed from the per-dislocation contribution after
+    each Ud @ Tmp matmul.
+    fastmath=False on both kernels keeps parity ≤ rtol=1e-12 / atol=1e-14.
+    """
+    X = rl_um.shape[1]
+    N = M.shape[0]
+    alpha = 1e-20
+    bf = b / (4.0 * math.pi * (1.0 - ny))
+    bf1 = b / (2.0 * math.pi)
+
+    # Per-ray scratch reused across iterations (no per-ray heap allocation).
+    G = np.zeros((3, 3))
+    Tmp = np.zeros((3, 3))
+
+    for x in range(X):
+        rx = rl_um[0, x]
+        ry = rl_um[1, x]
+        rz = rl_um[2, x]
+
+        # Fg accumulator = I + sum_d Ud_d @ G_d @ Ud_d.T
+        f00 = 1.0
+        f01 = 0.0
+        f02 = 0.0
+        f10 = 0.0
+        f11 = 1.0
+        f12 = 0.0
+        f20 = 0.0
+        f21 = 0.0
+        f22 = 1.0
+
+        for d in range(N):
+            dx = rx - offset[d, 0]
+            dy = ry - offset[d, 1]
+            dz = rz - offset[d, 2]
+            rd0 = M[d, 0, 0] * dx + M[d, 0, 1] * dy + M[d, 0, 2] * dz
+            rd1 = M[d, 1, 0] * dx + M[d, 1, 1] * dy + M[d, 1, 2] * dz
+            rd2 = M[d, 2, 0] * dx + M[d, 2, 1] * dy + M[d, 2, 2] * dz
+
+            sqx = rd0 * rd0
+            sqy = rd1 * rd1
+            sqz = rd2 * rd2
+            denom = (sqx + sqy) * (sqx + sqy) + alpha
+            nyf = 2.0 * ny * (sqx + sqy)
+            c = cos_rot[d]
+            s = sin_rot[d]
+            denom1 = sqz + sqy + alpha
+
+            # Pure-field gradient G (= Fdd - I); only 5 entries are nonzero.
+            G[0, 0] = -rd1 * (3.0 * sqx + sqy - nyf) / denom * bf * c
+            G[0, 1] = rd0 * (3.0 * sqx + sqy - nyf) / denom * bf * c + (-rd2 / denom1) * bf1 * s
+            G[0, 2] = (rd1 / denom1) * bf1 * s
+            G[1, 0] = -rd0 * (3.0 * sqy + sqx - nyf) / denom * bf * c
+            G[1, 1] = rd1 * (sqx - sqy + nyf) / denom * bf * c
+            G[1, 2] = 0.0
+            G[2, 0] = 0.0
+            G[2, 1] = 0.0
+            G[2, 2] = 0.0
+
+            # Tmp = G @ Ud_d.T  ; Tmp[a,col] = sum_j G[a,j] * Ud[d,col,j]
+            for a in range(3):
+                for col in range(3):
+                    acc = 0.0
+                    for j in range(3):
+                        acc += G[a, j] * Ud[d, col, j]
+                    Tmp[a, col] = acc
+
+            # contribution = Ud_d @ Tmp; accumulate into combined Fg.
+            # Identical expanded form to _population_hg_kernel for FP-order parity.
+            g00 = Ud[d, 0, 0] * Tmp[0, 0] + Ud[d, 0, 1] * Tmp[1, 0] + Ud[d, 0, 2] * Tmp[2, 0]
+            g01 = Ud[d, 0, 0] * Tmp[0, 1] + Ud[d, 0, 1] * Tmp[1, 1] + Ud[d, 0, 2] * Tmp[2, 1]
+            g02 = Ud[d, 0, 0] * Tmp[0, 2] + Ud[d, 0, 1] * Tmp[1, 2] + Ud[d, 0, 2] * Tmp[2, 2]
+            g10 = Ud[d, 1, 0] * Tmp[0, 0] + Ud[d, 1, 1] * Tmp[1, 0] + Ud[d, 1, 2] * Tmp[2, 0]
+            g11 = Ud[d, 1, 0] * Tmp[0, 1] + Ud[d, 1, 1] * Tmp[1, 1] + Ud[d, 1, 2] * Tmp[2, 1]
+            g12 = Ud[d, 1, 0] * Tmp[0, 2] + Ud[d, 1, 1] * Tmp[1, 2] + Ud[d, 1, 2] * Tmp[2, 2]
+            g20 = Ud[d, 2, 0] * Tmp[0, 0] + Ud[d, 2, 1] * Tmp[1, 0] + Ud[d, 2, 2] * Tmp[2, 0]
+            g21 = Ud[d, 2, 0] * Tmp[0, 1] + Ud[d, 2, 1] * Tmp[1, 1] + Ud[d, 2, 2] * Tmp[2, 1]
+            g22 = Ud[d, 2, 0] * Tmp[0, 2] + Ud[d, 2, 1] * Tmp[1, 2] + Ud[d, 2, 2] * Tmp[2, 2]
+
+            f00 += g00
+            f01 += g01
+            f02 += g02
+            f10 += g10
+            f11 += g11
+            f12 += g12
+            f20 += g20
+            f21 += g21
+            f22 += g22
+
+            # Solo Fg_d = I + g_d  →  Hg_d = inv(Fg_d).T - I
+            _write_hg_from_f(
+                1.0 + g00,
+                g01,
+                g02,
+                g10,
+                1.0 + g11,
+                g12,
+                g20,
+                g21,
+                1.0 + g22,
+                Hg_per_out[d],
+                x,
+            )
+
+        _write_hg_from_f(f00, f01, f02, f10, f11, f12, f20, f21, f22, Hg_combined_out, x)
+
+
 def _find_hg_scene_perdis_numba(
     rl_um: np.ndarray,
     M: np.ndarray,
@@ -669,7 +836,23 @@ def _find_hg_scene_perdis_numba(
     b: float,
     ny: float,
 ) -> tuple[np.ndarray, list[np.ndarray]]:
-    raise NotImplementedError("per-dislocation numba path lands in the next task")
+    X = rl_um.shape[1]
+    n = M.shape[0]
+    Hg_combined = np.empty((X, 3, 3), dtype=np.float64)
+    Hg_per = np.empty((n, X, 3, 3), dtype=np.float64)
+    _scene_perdis_hg_kernel(
+        np.ascontiguousarray(rl_um, dtype=np.float64),
+        np.ascontiguousarray(M, dtype=np.float64),
+        np.ascontiguousarray(offset, dtype=np.float64),
+        np.ascontiguousarray(Ud, dtype=np.float64),
+        np.ascontiguousarray(cos_rot, dtype=np.float64),
+        np.ascontiguousarray(sin_rot, dtype=np.float64),
+        float(b),
+        float(ny),
+        Hg_combined,
+        Hg_per,
+    )
+    return Hg_combined, [Hg_per[d] for d in range(n)]
 
 
 def _find_hg_scene_numpy(

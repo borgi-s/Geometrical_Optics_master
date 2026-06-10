@@ -105,8 +105,11 @@ def test_unknown_engine_raises(scene):
 NUMBA_RTOL = 1e-12
 NUMBA_ATOL = 1e-14
 # Engines differ in FP op order (fast_inverse2 is fastmath=True; the fused
-# kernel's inline inverse is fastmath=False) — parity, not bit-identity.
-# Tolerances follow the Phase-1 population-kernel parity precedent.
+# per-dislocation kernel's inline inverse is fastmath=False) — parity, not
+# bit-identity.  The binding tolerance at this scene's Hg magnitudes
+# (O(1e-10)–O(1e-5)) is atol=1e-14 (rtol·|Hg| ≤ 1e-17 is negligible); rtol
+# is kept at 1e-12 for consistency with the Phase-1 population-kernel
+# parity precedent.
 
 
 def test_numba_combined_matches_numpy_two_specs(scene):
@@ -121,4 +124,31 @@ def test_numba_combined_matches_numpy_single_spec(scene):
     rl_um, Us, Theta, specs = scene
     hg_np, _ = find_hg_scene(rl_um, Us, [specs[0]], Theta, engine="numpy")
     hg_nb, _ = find_hg_scene(rl_um, Us, [specs[0]], Theta, engine="numba")
+    np.testing.assert_allclose(hg_nb, hg_np, rtol=NUMBA_RTOL, atol=NUMBA_ATOL)
+
+
+def test_numba_per_dislocation_matches_numpy(scene):
+    rl_um, Us, Theta, specs = scene
+    hg_np, solos_np = find_hg_scene(rl_um, Us, specs, Theta, per_dislocation=True, engine="numpy")
+    hg_nb, solos_nb = find_hg_scene(rl_um, Us, specs, Theta, per_dislocation=True, engine="numba")
+    np.testing.assert_allclose(hg_nb, hg_np, rtol=NUMBA_RTOL, atol=NUMBA_ATOL)
+    assert solos_nb is not None and len(solos_nb) == len(solos_np)
+    for nb, np_ in zip(solos_nb, solos_np, strict=True):
+        np.testing.assert_allclose(nb, np_, rtol=NUMBA_RTOL, atol=NUMBA_ATOL)
+
+
+def test_numba_perdis_combined_equals_combined_only(scene):
+    # Requesting components must not change the combined result (numba path).
+    rl_um, Us, Theta, specs = scene
+    hg_only, _ = find_hg_scene(rl_um, Us, specs, Theta, engine="numba")
+    hg_with, _ = find_hg_scene(rl_um, Us, specs, Theta, per_dislocation=True, engine="numba")
+    np.testing.assert_array_equal(hg_only, hg_with)
+
+
+def test_numba_combined_matches_numpy_with_remount_S(scene):
+    rl_um, Us, Theta, specs = scene
+    rng = np.random.default_rng(7)
+    S = _rand_rotation(rng)
+    hg_np, _ = find_hg_scene(rl_um, Us, specs, Theta, S=S, engine="numpy")
+    hg_nb, _ = find_hg_scene(rl_um, Us, specs, Theta, S=S, engine="numba")
     np.testing.assert_allclose(hg_nb, hg_np, rtol=NUMBA_RTOL, atol=NUMBA_ATOL)
