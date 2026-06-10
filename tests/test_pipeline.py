@@ -307,6 +307,10 @@ class TestRunPostprocess:
                 (fake_im, fake_qi) if qi_return else (fake_im, None)
             ),
         )
+        # Stub resolution loading too — forward() is mocked, so the ctx never
+        # needs a real kernel, and CI runs without one on disk (same pattern
+        # as test_missing_hg_raises).
+        monkeypatch.setattr("dfxm_geo.pipeline._load_resolution", lambda *a, **k: None)
         # Shrink the instrument ray-grid steps so plot_qi_cross_section indexes
         # the fake (4,4,4) qi_field consistently. These are kept module-level
         # constants; xl_start is now derived per-reflection in ctx.geometry, and
