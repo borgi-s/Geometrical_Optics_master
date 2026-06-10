@@ -1,0 +1,30 @@
+# M1 Phase 2a profiling config — identify "multi" mode (laptop scale).
+# Mirrors the cluster identify-sweep shape (gen_identify_sweep_configs.py:
+# 11-step phi rocking, Poisson noise, no strain provenance) with n_samples
+# shrunk 20 -> 3 so a single-thread profiled run finishes in seconds.
+# 3 scenes x 11 phi frames = 33 images.
+
+mode = "multi"
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
+
+[scan.phi]
+value = 1.25e-4
+range = 1.25e-4
+steps = 11
+
+[noise]
+poisson_noise = true
+rng_seed = 1
+intensity_scale = 7.0
+
+[multi]
+n_samples = 3
+pos_std_um = 5.0
+render_per_dislocation = false
+
+[io]
+include_perfect_crystal = false
+write_strain_provenance = false
