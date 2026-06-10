@@ -95,6 +95,12 @@ def test_reflection_run_is_frozen():
         runs[0].eta = 0.0  # type: ignore[misc]
 
 
+# ---------------------------------------------------------------------------
+# [reflections_auto] expansion tests (Task 3)
+# Paper η = 0.353125 rad (20.233°); we quote 0.3531 (within ETA_MATCH_TOL=1e-3).
+# ---------------------------------------------------------------------------
+
+
 def test_auto_expands_paper_group1():
     """[reflections_auto] with the paper's η must recover the 4-reflection group."""
     runs = resolve_reflections_auto({"eta_target": 0.3531, "hkl_max": 3}, PAPER_MOUNT, KEV)
@@ -103,6 +109,7 @@ def test_auto_expands_paper_group1():
 
 
 def test_auto_zero_matches_raises():
+    """η=1.5 rad is physically inaccessible at 19.1 keV in |h|,|k|,|l|≤2."""
     with pytest.raises(ValueError, match="matched no reflections"):
         resolve_reflections_auto({"eta_target": 1.5, "hkl_max": 2}, PAPER_MOUNT, KEV)
 
