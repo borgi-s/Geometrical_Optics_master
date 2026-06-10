@@ -84,8 +84,20 @@ def test_reflections_and_auto_mutually_exclusive(tmp_path):
 
 def test_geometry_eta_optional_with_reflections(tmp_path):
     # No [geometry] eta — per-entry solution-1 defaults apply.
+    from dfxm_geo.crystal.oblique import CrystalMount, compute_omega_eta
+
     cfg = SimulationConfig.from_toml(_write(tmp_path, _multi_toml()))
-    assert all(r.eta != 0.0 for r in cfg.reflections)
+    mount = CrystalMount(
+        lattice="cubic",
+        a=4.0493e-10,
+        mount_x=(1, 0, 0),
+        mount_y=(0, 1, 0),
+        mount_z=(0, 0, 1),
+    )
+    kev = 19.1
+    for r in cfg.reflections:
+        geom = compute_omega_eta(mount, r.hkl, kev)
+        assert r.eta == pytest.approx(geom.eta_1)
 
 
 def test_geometry_eta_acts_as_default(tmp_path):
@@ -141,3 +153,12 @@ def test_run_identification_refuses_multi_reflection(tmp_path):
 
     with pytest.raises(NotImplementedError, match="multi-reflection"):
         run_identification(cfg, tmp_path)
+
+
+def test_toml_round_trip_serializer_omits_placeholder_eta(tmp_path):
+    """Multi-reflection configs must not serialize the eta=0.0 placeholder (Plan-2 trap)."""
+    from dfxm_geo.pipeline import _dataclass_to_toml_str
+
+    cfg = SimulationConfig.from_toml(_write(tmp_path, _multi_toml()))
+    out = _dataclass_to_toml_str(cfg)
+    assert "eta = 0.0" not in out

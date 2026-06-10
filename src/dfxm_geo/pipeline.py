@@ -522,7 +522,8 @@ def _build_geometry_config(
 
     if multi_reflection:
         # Per-entry angles resolved by _parse_reflections_tables; return a
-        # placeholder GeometryConfig with eta=0.0 (overridden per run later).
+        # placeholder GeometryConfig with eta=0.0 — per-reflection angles live
+        # on the ReflectionRun list, not on this shared GeometryConfig.
         return GeometryConfig(mode="oblique", eta=0.0, theta_validated=None, omega=0.0, mount=mount)
 
     theta_validated, omega = _validate_eta_against_compute_omega_eta(
@@ -570,7 +571,10 @@ def _parse_reflections_tables(
             "exclusive: list every reflection in the reflections table."
         )
     mount = geometry.mount
-    assert mount is not None  # oblique mode guarantees a mount
+    if mount is None:
+        raise ValueError(
+            "[[reflections]] requires a [crystal] mount block (lattice/a/mount_x/y/z)."
+        )
     keV = reciprocal.keV
     if has_auto:
         return _resolve_reflections_auto(raw["reflections_auto"], mount, keV)
@@ -799,8 +803,8 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     )
     zscan = IdentificationZScanConfig(**data["zscan"]) if data.get("zscan") is not None else None
     reciprocal = ReciprocalConfig.from_dict(data.get("reciprocal"))
-    is_multi_reflection = ("reflections" in data) or ("reflections_auto" in data)
-    geometry = _build_geometry_config(data, reciprocal, multi_reflection=is_multi_reflection)
+    multi_refl = ("reflections" in data) or ("reflections_auto" in data)
+    geometry = _build_geometry_config(data, reciprocal, multi_reflection=multi_refl)
     reflections = _parse_reflections_tables(data, geometry, reciprocal)
     # Mirror SimulationConfig.from_toml: the analytic backend reads eta off
     # ReciprocalConfig, so surface the validated oblique eta there (single
@@ -1191,7 +1195,14 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
     if config.geometry.mode == "oblique":
         lines.append("[geometry]")
         lines.append('mode = "oblique"')
-        lines.append(f"eta = {config.geometry.eta}")
+        if not config.reflections:
+            # Single-reflection: emit the validated eta so the config round-trips.
+            lines.append(f"eta = {config.geometry.eta}")
+        else:
+            # Multi-reflection: eta=0.0 on GeometryConfig is a placeholder;
+            # per-reflection angles live on the ReflectionRun list.
+            # TODO(M3 plan 2): emit [[reflections]] here
+            pass
         lines.append("")
 
     # [io] - render every field (default-skipping is brittle here since users
@@ -1665,8 +1676,15 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
             "",
             "[geometry]",
             'mode = "oblique"',
-            f"eta = {cfg.geometry.eta}",
         ]
+        if not cfg.reflections:
+            # Single-reflection: emit the validated eta so the config round-trips.
+            lines.append(f"eta = {cfg.geometry.eta}")
+        else:
+            # Multi-reflection: eta=0.0 on GeometryConfig is a placeholder;
+            # per-reflection angles live on the ReflectionRun list.
+            # TODO(M3 plan 2): emit [[reflections]] here
+            pass
     return "\n".join(lines) + "\n"
 
 
