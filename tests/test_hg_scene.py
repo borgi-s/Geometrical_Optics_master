@@ -100,3 +100,25 @@ def test_unknown_engine_raises(scene):
     rl_um, Us, Theta, specs = scene
     with pytest.raises(ValueError):
         find_hg_scene(rl_um, Us, [specs[0]], Theta, engine="fortran")
+
+
+NUMBA_RTOL = 1e-12
+NUMBA_ATOL = 1e-14
+# Engines differ in FP op order (fast_inverse2 is fastmath=True; the fused
+# kernel's inline inverse is fastmath=False) — parity, not bit-identity.
+# Tolerances follow the Phase-1 population-kernel parity precedent.
+
+
+def test_numba_combined_matches_numpy_two_specs(scene):
+    rl_um, Us, Theta, specs = scene
+    hg_np, _ = find_hg_scene(rl_um, Us, specs, Theta, engine="numpy")
+    hg_nb, solos = find_hg_scene(rl_um, Us, specs, Theta, engine="numba")
+    assert solos is None
+    np.testing.assert_allclose(hg_nb, hg_np, rtol=NUMBA_RTOL, atol=NUMBA_ATOL)
+
+
+def test_numba_combined_matches_numpy_single_spec(scene):
+    rl_um, Us, Theta, specs = scene
+    hg_np, _ = find_hg_scene(rl_um, Us, [specs[0]], Theta, engine="numpy")
+    hg_nb, _ = find_hg_scene(rl_um, Us, [specs[0]], Theta, engine="numba")
+    np.testing.assert_allclose(hg_nb, hg_np, rtol=NUMBA_RTOL, atol=NUMBA_ATOL)

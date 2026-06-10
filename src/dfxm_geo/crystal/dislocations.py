@@ -619,7 +619,57 @@ def find_hg_scene(
         return _find_hg_scene_numpy(
             rl_um, Us, specs, Theta, per_dislocation=per_dislocation, b=b, ny=ny, S=S
         )
-    raise ValueError(f"unknown engine {engine!r}; expected 'numpy' or 'numba'")
+    if engine != "numba":
+        raise ValueError(f"unknown engine {engine!r}; expected 'numpy' or 'numba'")
+    M, offset, Ud, cos_rot, sin_rot = _specs_to_population_arrays(specs, Us, Theta, S)
+    if not per_dislocation:
+        return find_hg_population(rl_um, M, offset, Ud, cos_rot, sin_rot, b=b, ny=ny), None
+    return _find_hg_scene_perdis_numba(rl_um, M, offset, Ud, cos_rot, sin_rot, b=b, ny=ny)
+
+
+def _specs_to_population_arrays(
+    specs: list[MixedDislocSpec],
+    Us: np.ndarray,
+    Theta: np.ndarray,
+    S: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Pack MixedDislocSpec list into the array layout the fused kernels take.
+
+    M_d = Ud_d.T @ Us.T @ S.T @ Theta — the rl->rd transform of
+    ``Fd_find_mixed`` (its offset subtraction happens in lab frame BEFORE
+    Theta, matching the kernels' ``rl - offset`` then ``M @ .``).
+
+    Matches the array construction in ``Find_Hg_from_population`` (forward path),
+    confirmed against ``forward_model.py`` lines 1322-1337.
+    """
+    n = len(specs)
+    M = np.empty((n, 3, 3))
+    offset = np.empty((n, 3))
+    Ud = np.empty((n, 3, 3))
+    cos_rot = np.empty(n)
+    sin_rot = np.empty(n)
+    base = Us.T @ S.T @ Theta
+    for d, spec in enumerate(specs):
+        Ud[d] = spec.Ud_mix
+        M[d] = spec.Ud_mix.T @ base
+        offset[d] = spec.position_lab_um
+        cos_rot[d] = np.cos(np.deg2rad(spec.rotation_deg))
+        sin_rot[d] = np.sin(np.deg2rad(spec.rotation_deg))
+    return M, offset, Ud, cos_rot, sin_rot
+
+
+def _find_hg_scene_perdis_numba(
+    rl_um: np.ndarray,
+    M: np.ndarray,
+    offset: np.ndarray,
+    Ud: np.ndarray,
+    cos_rot: np.ndarray,
+    sin_rot: np.ndarray,
+    *,
+    b: float,
+    ny: float,
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    raise NotImplementedError("per-dislocation numba path lands in the next task")
 
 
 def _find_hg_scene_numpy(
