@@ -1188,6 +1188,17 @@ def run_postprocess(
             f"Expected {h5_path}; run dfxm-forward without --postprocess-only first."
         )
 
+    # Sanity-check that /2.1 exists (the perfect-crystal scan is still part of
+    # the forward-output contract, even though postprocessing no longer reads
+    # it). Data validation comes BEFORE the kernel load so a malformed run
+    # fails with the documented FileNotFoundError, not a kernel-lookup error.
+    with h5py.File(h5_path, "r") as f:
+        if "/2.1" not in f:
+            raise FileNotFoundError(
+                f"{h5_path} has no /2.1 scan (perfect crystal). Re-run with "
+                "include_perfect_crystal=True, or skip postprocess."
+            )
+
     res = _load_resolution(config.reciprocal, config.geometry)
     # Build run ctx after resolution is loaded (analytic_eval / Resq_i are now live).
     # run_postprocess is NOT inside an oblique CM — its qi_field uses the default
@@ -1198,15 +1209,6 @@ def run_postprocess(
         res,
         config.reciprocal.hkl,
     )
-
-    # Sanity-check that /2.1 exists (the perfect-crystal scan is still part of
-    # the forward-output contract, even though postprocessing no longer reads it).
-    with h5py.File(h5_path, "r") as f:
-        if "/2.1" not in f:
-            raise FileNotFoundError(
-                f"{h5_path} has no /2.1 scan (perfect crystal). Re-run with "
-                "include_perfect_crystal=True, or skip postprocess."
-            )
 
     phi_steps = config.scan.phi.steps or 1
     chi_steps = config.scan.chi.steps or 1
