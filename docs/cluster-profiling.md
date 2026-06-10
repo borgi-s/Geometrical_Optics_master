@@ -171,3 +171,84 @@ over `gen_identify_sweep_configs.py --n-configs 16 --n-samples 2`:
 **LSF node baseline: TODO** — submit `lsf/fanout.bsub` with
 `MODE=identify`, `MANIFEST=<16-config sweep>` on a 32-core `hpc` node; the
 `timing.json` it now writes is the cluster row of this table.
+
+## Phase 2b post-optimization (v2.6.0, 2026-06-10)
+
+All runs on the same Windows laptop (8 logical cores, venv Python 3.12).
+Same sweep shape as the recorded baseline: `--n-configs 16 --n-samples 2`
+(identify-multi, 2 scenes × 11 φ frames = 22 images per config, 352 images
+total). `--n-workers 8 --threads-per-worker 1` throughout. Runs were
+sequential (not simultaneous) to avoid core contention.
+
+### 16-config before/after table (same sweep shape as M1 Phase 2a baseline)
+
+| Run | configs/hour | images/s | n\_ok | mean import\_s | mean run\_s |
+|---|---|---|---|---|---|
+| **Recorded baseline** (v2.4.0, `--isolate`, pre-W2/W3) | **703** | **4.3** | 16/16 | 17.8 s | 19.0 s |
+| **New isolate** (v2.6.0, `--isolate`, W2+W3 kernel) | **1309** | **8.0** | 16/16 | 14.5 s | 6.3 s |
+| **New pool** (v2.6.0, default pool, W1+W2+W3) | **2717** | **16.6** | 16/16 | 10.7 s† | 4.3 s |
+
+† Pool mean import\_s is the first-batch workers' amortized cost (8 workers
+each pay ~10.7 s once); the second batch (configs 9–16) has import\_s = 0.0
+and mean run\_s = 3.5 s, confirming JIT/kernel-load reuse across configs.
+
+### Speedup attribution
+
+| Attribution | Ratio |
+|---|---|
+| **W2+W3 kernel work** (isolate-vs-recorded-baseline) | **1.86×** |
+| **W1 pool amortization** (pool-vs-isolate) | **2.08×** |
+| **Full stack W1+W2+W3** (pool-vs-recorded-baseline) — the DoD comparison | **3.87×** |
+
+DoD target was ≥ 5×. **DoD NOT MET** (3.87× achieved on the laptop). The
+largest single lever was W2+W3 (fused Hg kernel + Fd dedup cutting mean
+run\_s from 19.0 s to 6.3 s under isolate), compounded by W1 pool
+amortization (2.08×). The shortfall vs. 5× is that run\_s (W2+W3) and
+import\_s (W1) are no longer co-dominant after the kernel fusion: run\_s
+shrank from 19.0 s to 6.3 s, so the remaining import overhead (14.5 s
+isolate) is already the larger term, and the pool halves that on average.
+The LSF cluster node (more cores → more concurrent configs, larger pool,
+less proportional JIT overhead) is expected to reach or exceed the 5× target.
+
+### Per-call Hg-stage kernel numbers (from the engine-flip audit)
+
+Measured via `scripts/bench_hg_stage.py` immediately after merging W3 (the
+`@njit`-fused `_identify_hg_kernel`), using the same warm Al 111 @ 17 keV
+kernel. These are single-config, single-thread timings, not the 8-worker
+contended numbers above.
+
+| Mode | Pre-flip | Post-flip | Speedup |
+|---|---|---|---|
+| single (6 scans × 5 frames) | 1.205 s | 0.111 s | **10.8×** |
+| multi (3 scenes × 11 frames) | 2.549 s | 0.139 s | **18.4×** |
+| z-scan (3 z × 9 frames) | 2.332 s | 0.162 s | **14.4×** |
+
+### Production-shape datapoint (`render_per_dislocation`)
+
+The `--render-per-dislocation` flag adds per-dislocation noiseless renders
+alongside each scene; it multiplies per-config run time (2–3 extra
+forward passes per scene) and is the production setting for ML training data.
+Same 16-config sweep shape, then a 500-config production run.
+
+| Run | configs/hour | images/s | n\_ok | mean import\_s | mean run\_s |
+|---|---|---|---|---|---|
+| rpd isolate (16 configs) | 1011 | 6.2 | 16/16 | 15.1 s | 11.8 s |
+| rpd pool (16 configs) | 805 | 4.9 | 16/16 | 8.5 s† | 24.9 s‡ |
+| **rpd pool (500 configs, production)** | **2583** | **15.8** | 500/500 | 0.20 s§ | 10.9 s |
+
+† First-batch workers pay ~17 s import once; second-batch workers have
+import\_s = 0.0 and mean run\_s ≈ 15 s.
+
+‡ The 16-config rpd pool run is slower than isolate in configs/hour because
+the run\_s per config is highly variable (12–39 s under 8-way contention with
+render\_per\_dislocation). The first batch of 8 workers completes when the
+slowest finishes, causing idle time before the second batch starts. The
+isolate mode spreads load more evenly across the full wall time. At 500
+configs the pool fully amortizes this batching overhead and pulls well ahead.
+
+§ At 500 configs the amortized import cost per config is ~0.20 s (8 workers
+each pay ~10 s JIT once, spread over 500/8 = 62.5 configs per worker).
+
+The LSF node row follows the same procedure via `lsf/fanout.bsub` and is
+still pending from the cluster side — the "LSF node baseline: TODO" block
+above remains valid.
