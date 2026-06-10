@@ -212,10 +212,11 @@ less proportional JIT overhead) is expected to reach or exceed the 5× target.
 
 ### Per-call Hg-stage kernel numbers (from the engine-flip audit)
 
-Measured via `scripts/bench_hg_stage.py` immediately after merging W3 (the
-`@njit`-fused `_identify_hg_kernel`), using the same warm Al 111 @ 17 keV
-kernel. These are single-config, single-thread timings, not the 8-worker
-contended numbers above.
+Measured with a scratch A/B benchmark of `find_hg_scene` at the real
+identify ray grid, immediately after the W3 engine flip (commit `608f6ac`;
+the `@njit`-fused `_population_hg_kernel` / `_scene_perdis_hg_kernel`),
+using the same warm Al 111 @ 17 keV kernel. These are single-config,
+single-thread timings, not the 8-worker contended numbers above.
 
 | Mode | Pre-flip | Post-flip | Speedup |
 |---|---|---|---|
