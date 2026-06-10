@@ -5,6 +5,10 @@ crystals containing one or more edge dislocations arranged in a wall.
 
 Public functions:
     Fd_find — main entry: returns Fg given lab-frame coords + rotations.
+    Fd_find_mixed — single mixed-character dislocation (edge+screw).
+    Fd_find_multi_dislocs_mixed — sum of N mixed-character dislocations.
+    find_hg_population — numba-fused Hg kernel for population of dislocations.
+    find_hg_scene — unified Hg entry (numpy oracle or numba engine) for identify.
     multi_dislocs_parallel — internal worker for parallel ndis>100 path.
 """
 
@@ -569,7 +573,7 @@ def find_hg_scene(
     b: float = BURGERS_VECTOR,
     ny: float = POISSON_RATIO,
     S: np.ndarray = _S_IDENTITY,
-    engine: str = "numpy",  # flipped to "numba" in v2.6.0 W3 (Task 7)
+    engine: str = "numpy",
 ) -> tuple[np.ndarray, list[np.ndarray] | None]:
     """Hg for a scene of mixed dislocations, optionally with per-dislocation Hg.
 
@@ -581,6 +585,18 @@ def find_hg_scene(
     `Fd_find_multi_dislocs_mixed` performs), so the solo renders come for
     free instead of doubling the Fd work (spec §4).
 
+    **Computation details:**
+
+    - **Single-spec fast path** (one spec, per_dislocation=False): Calls
+      ``Fd_find_mixed`` once and returns Hg_combined; solos=None. No
+      accumulation or intermediate memory.
+    - **Multi-spec accumulation invariant**: For >1 spec (or per_dislocation=True),
+      each Fg_i is computed once in spec order, then combined as
+      ``Fg_combined = (Σ(Fg_i − I) + I)``. This is the exact formula
+      ``Fd_find_multi_dislocs_mixed`` implements, ensuring bit-identity when
+      ``engine="numpy"``. Per-dislocation Hg are extracted from the same solo
+      Fg_i arrays, reusing the computation.
+
     Args:
         rl_um: Lab-frame ray grid, shape (3, X), MICROMETRES.
         Us: Sample-to-grain rotation, (3, 3).
@@ -588,8 +604,10 @@ def find_hg_scene(
         Theta: Lab-to-sample rotation, (3, 3).
         per_dislocation: also return each dislocation's solo Hg.
         b, ny, S: as in `Fd_find_mixed`.
-        engine: "numpy" (bit-identical legacy composition, the parity
-            oracle) or "numba" (fused kernel, parity ≤1e-12).
+        engine: "numpy" (bit-identical legacy composition, the parity oracle
+            and default) or "numba" (fused kernel, parity ≤1e-12). The "numpy"
+            engine is used for verification and will be flipped to "numba" in
+            v2.6.0 Task 7.
 
     Returns:
         (Hg_combined, solos) — solos is a list of (X, 3, 3) arrays when
@@ -615,7 +633,24 @@ def _find_hg_scene_numpy(
     ny: float,
     S: np.ndarray,
 ) -> tuple[np.ndarray, list[np.ndarray] | None]:
-    """Bit-identical NumPy oracle: exactly the legacy call-site composition."""
+    """Bit-identical NumPy oracle: exactly the legacy call-site composition.
+
+    This function is the specification for future numba engines; verify parity
+    against this oracle before shipping a new implementation.
+
+    **Single-spec fast path** (len(specs)==1, per_dislocation=False):
+        One call to ``Fd_find_mixed``, immediate ``Hg`` transform, return with
+        solos=None. No accumulation, minimal memory.
+
+    **Multi-spec accumulation** (len(specs)>1 or per_dislocation=True):
+        Build ``Fg`` for each spec in order (stored in ``parts``), compute
+        combined ``Fg_combined = Σ(Fg_i − I) + I``, then extract ``Hg_combined``.
+        If per_dislocation requested, convert each solo Fg_i to Hg_i while
+        releasing the (X, 3, 3) Fg reference to bound transient peak memory
+        (~106 MB per array at px510). This is the exact accumulation formula
+        that ``Fd_find_multi_dislocs_mixed`` computes, so bit-identity is
+        guaranteed.
+    """
     identity = np.identity(3)
 
     def _hg(Fg: np.ndarray) -> np.ndarray:
@@ -636,7 +671,7 @@ def _find_hg_scene_numpy(
         )
         return _hg(Fg), None
 
-    parts: list[np.ndarray] = [
+    parts: list[np.ndarray | None] = [
         Fd_find_mixed(
             rl_um,
             Us,
@@ -655,6 +690,7 @@ def _find_hg_scene_numpy(
     # bit-identical to the legacy path.
     Fg_sum = np.zeros((rl_um.shape[1], 3, 3))
     for Fg_one in parts:
+        assert Fg_one is not None
         Fg_sum += Fg_one - identity
     hg_combined = _hg(Fg_sum + identity)
     if not per_dislocation:
@@ -663,6 +699,8 @@ def _find_hg_scene_numpy(
     # bounds the transient peak at px510 (~106 MB per array).
     solos: list[np.ndarray] = []
     for i in range(len(parts)):
-        solos.append(_hg(parts[i]))
-        parts[i] = None  # type: ignore[call-overload]
+        Fg_one = parts[i]
+        assert Fg_one is not None
+        solos.append(_hg(Fg_one))
+        parts[i] = None
     return hg_combined, solos

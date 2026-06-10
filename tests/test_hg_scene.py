@@ -50,7 +50,7 @@ def scene():
 
 
 def _legacy_hg_single(rl_um, Us, spec, Theta):
-    """Exactly the single-dislocation composition at pipeline.py:1673-1680."""
+    """Exactly the single-dislocation composition in pipeline._iter_identification_single."""
     Fg = Fd_find_mixed(
         rl_um,
         Us,
@@ -83,7 +83,7 @@ def test_per_dislocation_solos_bit_identical(scene):
     rl_um, Us, Theta, specs = scene
     hg, solos = find_hg_scene(rl_um, Us, specs, Theta, per_dislocation=True, engine="numpy")
     assert solos is not None and len(solos) == 2
-    for spec, solo in zip(specs, solos, strict=False):
+    for spec, solo in zip(specs, solos, strict=True):
         np.testing.assert_array_equal(solo, _legacy_hg_single(rl_um, Us, spec, Theta))
     # combined unchanged by requesting components
     hg2, _ = find_hg_scene(rl_um, Us, specs, Theta, engine="numpy")
