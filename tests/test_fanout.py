@@ -683,3 +683,108 @@ def test_write_timing_json_records_isolate_flag(tmp_path: Path) -> None:
     assert payload["configs"][0]["import_s"] == 1.5
     assert payload["configs"][0]["run_s"] == 2.5
     assert payload["configs"][0]["images"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Task 11: pool-vs-isolate bit-identity gate (§7.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_pool_and_isolate_produce_bit_identical_identify_output(tmp_path: Path) -> None:
+    """Spec §7.1 gate: same seeded identify-multi configs through the pool
+    path and the subprocess (--isolate) path must yield byte-identical
+    detector datasets + positioners. Compares datasets, not raw files —
+    master files embed timestamps and cli strings."""
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip("No bootstrapped kernel npz found; skipping integration run.")
+
+    import h5py
+    import numpy as np
+
+    cfg_text = """\
+mode = "multi"
+
+[reciprocal]
+hkl = [-1, 1, -1]
+keV = 17.0
+
+[scan.phi]
+value = 1.25e-4
+range = 1.25e-4
+steps = 2
+
+[noise]
+poisson_noise = true
+rng_seed = {seed}
+intensity_scale = 7.0
+
+[multi]
+n_samples = 1
+pos_std_um = 5.0
+render_per_dislocation = true
+
+[io]
+include_perfect_crystal = false
+write_strain_provenance = false
+"""
+    manifest_dir = tmp_path / "configs"
+    manifest_dir.mkdir()
+    for seed in (11, 12):
+        (manifest_dir / f"seed{seed}.toml").write_text(cfg_text.format(seed=seed), encoding="utf-8")
+    configs = fanout.discover_configs(manifest_dir)
+
+    out_iso = tmp_path / "out_isolate"
+    out_pool = tmp_path / "out_pool"
+    res_iso = fanout.run_manifest(
+        configs, out_iso, n_workers=1, threads_per_worker=2, mode="identify", isolate=True
+    )
+    res_pool = fanout.run_manifest(
+        configs, out_pool, n_workers=1, threads_per_worker=2, mode="identify"
+    )
+    assert all(r.returncode == 0 for r in res_iso), [
+        r.log_path.read_text() for r in res_iso if r.returncode
+    ]
+    assert all(r.returncode == 0 for r in res_pool), [
+        r.log_path.read_text() for r in res_pool if r.returncode
+    ]
+
+    def _collect_from_file(h5path: Path, root: Path, accumulator: dict[str, object]) -> None:
+        """Collect all datasets from one per-scan HDF5 into accumulator."""
+        with h5py.File(h5path, "r") as f:
+            prefix = str(h5path.relative_to(root))
+
+            def _grab(name: str, obj: object) -> None:
+                if isinstance(obj, h5py.Dataset):
+                    accumulator[f"{prefix}::{name}"] = obj[()]
+
+            f.visititems(_grab)
+
+    def _datasets(root: Path) -> dict[str, object]:
+        """name -> array/scalar for every dataset in every per-scan HDF5 under root.
+
+        Skips dfxm_identify.h5 (the master: contains cli= sys.argv, timestamps,
+        and ExternalLinks — all legitimately differ between pool and isolate runs).
+        Per-scan detector files contain only image arrays — no path-embedding data.
+        """
+        out: dict[str, object] = {}
+        for h5path in sorted(root.rglob("*.h5")):
+            if h5path.name == "dfxm_identify.h5":
+                continue  # master: external links + timestamped metadata
+            _collect_from_file(h5path, root, out)
+        return out
+
+    for stem in ("seed11", "seed12"):
+        d_iso = _datasets(out_iso / stem)
+        d_pool = _datasets(out_pool / stem)
+        assert d_iso.keys() == d_pool.keys(), f"dataset key mismatch for {stem}"
+        assert d_iso, f"no datasets found for {stem}"
+        for key in d_iso:
+            a, b_ = d_iso[key], d_pool[key]
+            if isinstance(a, np.ndarray) and a.dtype.kind == "f":
+                np.testing.assert_array_equal(a, b_, err_msg=key)  # BIT-identical
+            elif isinstance(a, np.ndarray):
+                assert np.array_equal(a, b_), f"mismatch for {key}"
+            else:
+                assert a == b_, f"mismatch for {key}"
