@@ -41,9 +41,13 @@ def _resolve_entry(
     """Resolve one [[reflections]] entry → (hkl, eta, theta, omega)."""
     if "hkl" not in entry:
         raise ValueError(f"[[reflections]] entry missing 'hkl': {entry!r}.")
-    hkl = tuple(int(c) for c in entry["hkl"])
-    if len(hkl) != 3:
-        raise ValueError(f"[[reflections]] hkl must have 3 components, got {entry['hkl']!r}.")
+    raw_hkl = entry["hkl"]
+    if len(raw_hkl) != 3:
+        raise ValueError(f"[[reflections]] hkl must have 3 components, got {raw_hkl!r}.")
+    if any(int(c) != c for c in raw_hkl):
+        raise ValueError(f"[[reflections]] hkl components must be integers, got {raw_hkl!r}.")
+    h, k, l = (int(c) for c in raw_hkl)
+    hkl: tuple[int, int, int] = (h, k, l)
 
     geom = compute_omega_eta(mount, hkl, keV)
     if np.isnan(geom.omega_1) and np.isnan(geom.omega_2):
@@ -56,14 +60,14 @@ def _resolve_entry(
         2: (geom.eta_2, geom.theta_2, geom.omega_2),
     }
 
-    eta_requested = entry.get("eta", default_eta)
+    if "eta" in entry and "omega_solution" in entry:
+        raise ValueError(
+            f"[[reflections]] entry for hkl={hkl}: give 'eta' or 'omega_solution', "
+            "not both (eta already selects the solution branch)."
+        )
+    eta_requested = entry.get("eta", None if "omega_solution" in entry else default_eta)
     if eta_requested is not None:
         eta_requested = float(eta_requested)
-        if "omega_solution" in entry:
-            raise ValueError(
-                f"[[reflections]] entry for hkl={hkl}: give 'eta' or 'omega_solution', "
-                "not both (eta already selects the solution branch)."
-            )
         for eta_i, theta_i, omega_i in solutions.values():
             if not np.isnan(eta_i) and abs(eta_i - eta_requested) <= ETA_MATCH_TOL:
                 return hkl, float(eta_i), float(theta_i), float(omega_i)
@@ -123,7 +127,11 @@ def resolve_reflections_auto(
     mount: CrystalMount,
     keV: float,
 ) -> list[ReflectionRun]:
-    """Expand [reflections_auto] via find_reflections. One shared group by construction."""
+    """Expand [reflections_auto] via find_reflections.
+
+    Typically one group when eta_target identifies a unique (theta, eta) geometry;
+    multiple groups are returned if the target matches reflections at different Bragg angles.
+    """
     if "eta_target" not in auto:
         raise ValueError("[reflections_auto] requires 'eta_target' (radians).")
     eta_target = float(auto["eta_target"])

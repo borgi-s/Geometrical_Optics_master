@@ -48,8 +48,20 @@ def _crystal_mount_from_toml(data: dict | None) -> CrystalMount:
         raise ValueError(f"[crystal] block missing key: {exc.args[0]}") from None
 
 
-def _parse_geometry_block(data: dict | None) -> tuple[str, float]:
-    """Parse [geometry] block. Returns (mode, eta_rad)."""
+def _parse_geometry_block(
+    data: dict | None,
+    *,
+    allow_missing_eta: bool = False,
+) -> tuple[str, float]:
+    """Parse [geometry] block. Returns (mode, eta_rad).
+
+    Args:
+        data: raw ``[geometry]`` TOML table, or None.
+        allow_missing_eta: when True and mode='oblique' lacks ``eta``, return
+            ``("oblique", float("nan"))`` instead of raising.  Used by the
+            multi-reflection path where per-entry η values are resolved
+            separately from ``[[reflections]]`` entries.
+    """
     if data is None:
         return "simplified", 0.0
     mode = data.get("mode", "simplified")
@@ -64,6 +76,8 @@ def _parse_geometry_block(data: dict | None) -> tuple[str, float]:
         return "simplified", 0.0
     # oblique
     if "eta" not in data:
+        if allow_missing_eta:
+            return "oblique", float("nan")
         raise ValueError("[geometry] mode='oblique' requires [geometry] eta (radians).")
     eta = float(data["eta"])
     if not math.isfinite(eta):

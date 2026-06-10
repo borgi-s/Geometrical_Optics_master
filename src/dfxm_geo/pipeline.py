@@ -44,6 +44,15 @@ from dfxm_geo.crystal.dislocations import (
     find_hg_scene,
 )
 from dfxm_geo.crystal.oblique import CrystalMount
+from dfxm_geo.crystal.reflections import (
+    ReflectionRun as _ReflectionRun,
+)
+from dfxm_geo.crystal.reflections import (
+    resolve_reflections as _resolve_reflections,
+)
+from dfxm_geo.crystal.reflections import (
+    resolve_reflections_auto as _resolve_reflections_auto,
+)
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.io.hdf5 import (
     DETECTOR_FILE_FMT,
@@ -474,13 +483,26 @@ class GeometryConfig:
     mount: CrystalMount | None = None
 
 
-def _build_geometry_config(raw: dict, reciprocal: ReciprocalConfig) -> GeometryConfig:
+def _build_geometry_config(
+    raw: dict,
+    reciprocal: ReciprocalConfig,
+    multi_reflection: bool = False,
+) -> GeometryConfig:
     """Build a GeometryConfig from raw TOML tables (``[geometry]`` + ``[crystal]``).
 
     Mirrors ``reciprocal_space.kernel.cli_main``'s bootstrap-side parsing so the
     consumer (forward/identify) and the producer (dfxm-bootstrap) agree on the
     geometry. For oblique mode, validates ``eta`` against the reflection geometry
     and resolves the Bragg ``theta`` / azimuthal ``omega`` from the solver.
+
+    Args:
+        raw: parsed TOML dict.
+        reciprocal: already-built ReciprocalConfig (provides hkl + keV for
+            the single-reflection eta cross-check).
+        multi_reflection: when True (``[[reflections]]`` / ``[reflections_auto]``
+            present), parse mode + mount but skip single-eta validation — each
+            reflection carries its own eta/theta/omega resolved by
+            ``_parse_reflections_tables``.
 
     Raises:
         ValueError: on a malformed ``[geometry]`` block, a missing mount key, or
@@ -492,11 +514,17 @@ def _build_geometry_config(raw: dict, reciprocal: ReciprocalConfig) -> GeometryC
         _validate_eta_against_compute_omega_eta,
     )
 
-    mode, eta = _parse_geometry_block(raw.get("geometry"))
+    mode, eta = _parse_geometry_block(raw.get("geometry"), allow_missing_eta=multi_reflection)
     if mode == "simplified":
         return GeometryConfig(mode="simplified")
 
     mount = _crystal_mount_from_toml(raw.get("crystal"))
+
+    if multi_reflection:
+        # Per-entry angles resolved by _parse_reflections_tables; return a
+        # placeholder GeometryConfig with eta=0.0 (overridden per run later).
+        return GeometryConfig(mode="oblique", eta=0.0, theta_validated=None, omega=0.0, mount=mount)
+
     theta_validated, omega = _validate_eta_against_compute_omega_eta(
         mount, reciprocal.hkl, reciprocal.keV, eta
     )
@@ -506,6 +534,52 @@ def _build_geometry_config(raw: dict, reciprocal: ReciprocalConfig) -> GeometryC
         theta_validated=theta_validated,
         omega=omega,
         mount=mount,
+    )
+
+
+def _parse_reflections_tables(
+    raw: dict,
+    geometry: GeometryConfig,
+    reciprocal: ReciprocalConfig,
+) -> list[_ReflectionRun]:
+    """Resolve ``[[reflections]]`` / ``[reflections_auto]`` from raw TOML.
+
+    Returns an empty list when neither block is present (single-reflection config).
+
+    Validation rules per spec §5: oblique-only, mutually exclusive with
+    ``[reciprocal] hkl`` and with each other.
+
+    Raises:
+        ValueError: on any of the three exclusivity or mode violations.
+    """
+    has_list = "reflections" in raw
+    has_auto = "reflections_auto" in raw
+    if not has_list and not has_auto:
+        return []
+    if has_list and has_auto:
+        raise ValueError("[[reflections]] and [reflections_auto] are mutually exclusive.")
+    if geometry.mode != "oblique":
+        raise ValueError(
+            "[[reflections]] / [reflections_auto] require [geometry] mode='oblique' "
+            "(sweep simplified-mode reflections by emitting one config per hkl via "
+            "the gen-sweep scripts instead)."
+        )
+    if "hkl" in raw.get("reciprocal", {}):
+        raise ValueError(
+            "[reciprocal] hkl and [[reflections]]/[reflections_auto] are mutually "
+            "exclusive: list every reflection in the reflections table."
+        )
+    mount = geometry.mount
+    assert mount is not None  # oblique mode guarantees a mount
+    keV = reciprocal.keV
+    if has_auto:
+        return _resolve_reflections_auto(raw["reflections_auto"], mount, keV)
+    default_eta = raw.get("geometry", {}).get("eta")
+    return _resolve_reflections(
+        raw["reflections"],
+        mount,
+        keV,
+        default_eta=float(default_eta) if default_eta is not None else None,
     )
 
 
@@ -520,6 +594,8 @@ class SimulationConfig:
     reciprocal: ReciprocalConfig = field(default_factory=ReciprocalConfig)
     # v2.3.0: diffraction geometry (simplified vs oblique-angle).
     geometry: GeometryConfig = field(default_factory=GeometryConfig)
+    # v2.6.0 (M3): resolved multi-reflection runs; empty = single-reflection config.
+    reflections: list[_ReflectionRun] = field(default_factory=list)
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -531,11 +607,13 @@ class SimulationConfig:
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
         reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
-        geometry = _build_geometry_config(raw, reciprocal)
+        multi = ("reflections" in raw) or ("reflections_auto" in raw)
+        geometry = _build_geometry_config(raw, reciprocal, multi_reflection=multi)
+        reflections = _parse_reflections_tables(raw, geometry, reciprocal)
         # The analytic backend reads eta off ReciprocalConfig (see
         # forward_model._load_analytic_resolution). The user supplies it in
-        # [geometry], so surface it there for oblique runs.
-        if geometry.mode == "oblique":
+        # [geometry], so surface it there for single oblique runs only.
+        if geometry.mode == "oblique" and not reflections:
             reciprocal.eta = geometry.eta
         return cls(
             crystal=crystal,
@@ -544,6 +622,7 @@ class SimulationConfig:
             postprocess=postprocess,
             reciprocal=reciprocal,
             geometry=geometry,
+            reflections=reflections,
         )
 
 
@@ -639,6 +718,8 @@ class IdentificationConfig:
     # SimulationConfig. Defaults to simplified so existing identify configs
     # are unchanged.
     geometry: GeometryConfig = field(default_factory=GeometryConfig)
+    # v2.6.0 (M3): resolved multi-reflection runs; empty = single-reflection config.
+    reflections: list[_ReflectionRun] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.mode not in ("single", "multi", "z-scan"):
@@ -718,10 +799,13 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     )
     zscan = IdentificationZScanConfig(**data["zscan"]) if data.get("zscan") is not None else None
     reciprocal = ReciprocalConfig.from_dict(data.get("reciprocal"))
-    geometry = _build_geometry_config(data, reciprocal)
+    is_multi_reflection = ("reflections" in data) or ("reflections_auto" in data)
+    geometry = _build_geometry_config(data, reciprocal, multi_reflection=is_multi_reflection)
+    reflections = _parse_reflections_tables(data, geometry, reciprocal)
     # Mirror SimulationConfig.from_toml: the analytic backend reads eta off
-    # ReciprocalConfig, so surface the validated oblique eta there.
-    if geometry.mode == "oblique":
+    # ReciprocalConfig, so surface the validated oblique eta there (single
+    # reflection only — multi-reflection runs carry per-entry angles).
+    if geometry.mode == "oblique" and not reflections:
         reciprocal.eta = geometry.eta
 
     return IdentificationConfig(
@@ -734,6 +818,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         zscan=zscan,
         reciprocal=reciprocal,
         geometry=geometry,
+        reflections=reflections,
     )
 
 
@@ -863,6 +948,14 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
+    if config.reflections:
+        raise NotImplementedError(
+            "multi-reflection orchestration is not wired yet (M3 plan 2, pending "
+            "the omega-handling decision in docs/superpowers/specs/"
+            "2026-06-10-m3-multi-reflection-sweeps-design.md §3). Bootstrap and "
+            "config validation work; forward/identify of [[reflections]] configs "
+            "land in the next arc."
+        )
     res = _load_resolution(config.reciprocal, config.geometry)
     # #16: geometry is built from run_theta(config) inside build_forward_context
     # (called in _run_simulation_inner); Z_shift callers pass
@@ -2202,6 +2295,14 @@ def run_identification(
     output_dir: Path,
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode."""
+    if config.reflections:
+        raise NotImplementedError(
+            "multi-reflection orchestration is not wired yet (M3 plan 2, pending "
+            "the omega-handling decision in docs/superpowers/specs/"
+            "2026-06-10-m3-multi-reflection-sweeps-design.md §3). Bootstrap and "
+            "config validation work; forward/identify of [[reflections]] configs "
+            "land in the next arc."
+        )
     res = _load_resolution(config.reciprocal, config.geometry)
 
     # S3 (#16): CM call site retired. build_forward_context uses run_theta(config)
