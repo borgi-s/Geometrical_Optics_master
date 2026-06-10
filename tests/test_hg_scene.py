@@ -1,0 +1,102 @@
+"""find_hg_scene — the single Hg seam for the identify orchestrators (v2.6.0).
+
+NumPy-engine tests prove bit-identity with the legacy compositions; numba
+engine tests (added in Tasks 5-6) prove parity at tight tolerance.
+No resolution kernel needed: pure crystal/dislocations level.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from dfxm_geo.crystal.dislocations import (
+    Fd_find_mixed,
+    Fd_find_multi_dislocs_mixed,
+    MixedDislocSpec,
+    find_hg_scene,
+)
+from dfxm_geo.crystal.rotations import fast_inverse2
+
+
+def _rand_rotation(rng: np.random.Generator) -> np.ndarray:
+    """Random proper rotation via QR (det +1)."""
+    q, r = np.linalg.qr(rng.normal(size=(3, 3)))
+    q *= np.sign(np.diag(r))
+    if np.linalg.det(q) < 0:
+        q[:, 0] = -q[:, 0]
+    return q
+
+
+@pytest.fixture()
+def scene():
+    rng = np.random.default_rng(42)
+    rl_um = rng.uniform(-50.0, 50.0, size=(3, 200))
+    Us = _rand_rotation(rng)
+    Theta = _rand_rotation(rng)
+    specs = [
+        MixedDislocSpec(
+            Ud_mix=_rand_rotation(rng),
+            rotation_deg=float(rng.uniform(0, 180)),
+            position_lab_um=(1.5, -2.0, 0.5),
+        ),
+        MixedDislocSpec(
+            Ud_mix=_rand_rotation(rng),
+            rotation_deg=float(rng.uniform(0, 180)),
+            position_lab_um=(-3.0, 1.0, 0.0),
+        ),
+    ]
+    return rl_um, Us, Theta, specs
+
+
+def _legacy_hg_single(rl_um, Us, spec, Theta):
+    """Exactly the single-dislocation composition at pipeline.py:1673-1680."""
+    Fg = Fd_find_mixed(
+        rl_um,
+        Us,
+        Ud_mix=spec.Ud_mix,
+        rotation_deg=spec.rotation_deg,
+        Theta=Theta,
+        position_lab_um=spec.position_lab_um,
+    )
+    return np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
+
+
+def test_single_spec_bit_identical_to_legacy(scene):
+    rl_um, Us, Theta, specs = scene
+    hg, solos = find_hg_scene(rl_um, Us, [specs[0]], Theta, engine="numpy")
+    expected = _legacy_hg_single(rl_um, Us, specs[0], Theta)
+    assert solos is None
+    np.testing.assert_array_equal(hg, expected)  # BIT-identical
+
+
+def test_combined_bit_identical_to_multi_dislocs(scene):
+    rl_um, Us, Theta, specs = scene
+    hg, solos = find_hg_scene(rl_um, Us, specs, Theta, engine="numpy")
+    Fg = Fd_find_multi_dislocs_mixed(rl_um, Us, specs, Theta)
+    expected = np.transpose(fast_inverse2(Fg), [0, 2, 1]) - np.identity(3)
+    assert solos is None
+    np.testing.assert_array_equal(hg, expected)
+
+
+def test_per_dislocation_solos_bit_identical(scene):
+    rl_um, Us, Theta, specs = scene
+    hg, solos = find_hg_scene(rl_um, Us, specs, Theta, per_dislocation=True, engine="numpy")
+    assert solos is not None and len(solos) == 2
+    for spec, solo in zip(specs, solos, strict=False):
+        np.testing.assert_array_equal(solo, _legacy_hg_single(rl_um, Us, spec, Theta))
+    # combined unchanged by requesting components
+    hg2, _ = find_hg_scene(rl_um, Us, specs, Theta, engine="numpy")
+    np.testing.assert_array_equal(hg, hg2)
+
+
+def test_empty_specs_raises(scene):
+    rl_um, Us, Theta, _ = scene
+    with pytest.raises(ValueError):
+        find_hg_scene(rl_um, Us, [], Theta, engine="numpy")
+
+
+def test_unknown_engine_raises(scene):
+    rl_um, Us, Theta, specs = scene
+    with pytest.raises(ValueError):
+        find_hg_scene(rl_um, Us, [specs[0]], Theta, engine="fortran")

@@ -17,6 +17,7 @@ from joblib import cpu_count
 from numba import jit, njit
 
 from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
+from dfxm_geo.crystal.rotations import fast_inverse2
 
 # Module-level identity used as the default for the S kwarg in Fd_find.
 # Defined here (not inline) to satisfy ruff B008 (no function calls in defaults).
@@ -556,3 +557,112 @@ def find_hg_population(
         Hg_out,
     )
     return Hg_out
+
+
+def find_hg_scene(
+    rl_um: np.ndarray,
+    Us: np.ndarray,
+    specs: list[MixedDislocSpec],
+    Theta: np.ndarray,
+    *,
+    per_dislocation: bool = False,
+    b: float = BURGERS_VECTOR,
+    ny: float = POISSON_RATIO,
+    S: np.ndarray = _S_IDENTITY,
+    engine: str = "numpy",  # flipped to "numba" in v2.6.0 W3 (Task 7)
+) -> tuple[np.ndarray, list[np.ndarray] | None]:
+    """Hg for a scene of mixed dislocations, optionally with per-dislocation Hg.
+
+    The single seam used by all three identify orchestrators (v2.6.0 W2/W3).
+    Replaces the per-call composition
+    ``transpose(fast_inverse2(Fd_find_*)) - I`` and, when
+    ``per_dislocation=True``, computes each dislocation's field ONCE — the
+    combined scene is derived as ``Σ(Fg_i − I) + I`` (the exact accumulation
+    `Fd_find_multi_dislocs_mixed` performs), so the solo renders come for
+    free instead of doubling the Fd work (spec §4).
+
+    Args:
+        rl_um: Lab-frame ray grid, shape (3, X), MICROMETRES.
+        Us: Sample-to-grain rotation, (3, 3).
+        specs: ≥1 dislocation specs (Ud_mix, rotation_deg, position_lab_um).
+        Theta: Lab-to-sample rotation, (3, 3).
+        per_dislocation: also return each dislocation's solo Hg.
+        b, ny, S: as in `Fd_find_mixed`.
+        engine: "numpy" (bit-identical legacy composition, the parity
+            oracle) or "numba" (fused kernel, parity ≤1e-12).
+
+    Returns:
+        (Hg_combined, solos) — solos is a list of (X, 3, 3) arrays when
+        ``per_dislocation`` else None.
+    """
+    if not specs:
+        raise ValueError("find_hg_scene requires at least one dislocation spec")
+    if engine == "numpy":
+        return _find_hg_scene_numpy(
+            rl_um, Us, specs, Theta, per_dislocation=per_dislocation, b=b, ny=ny, S=S
+        )
+    raise ValueError(f"unknown engine {engine!r}; expected 'numpy' or 'numba'")
+
+
+def _find_hg_scene_numpy(
+    rl_um: np.ndarray,
+    Us: np.ndarray,
+    specs: list[MixedDislocSpec],
+    Theta: np.ndarray,
+    *,
+    per_dislocation: bool,
+    b: float,
+    ny: float,
+    S: np.ndarray,
+) -> tuple[np.ndarray, list[np.ndarray] | None]:
+    """Bit-identical NumPy oracle: exactly the legacy call-site composition."""
+    identity = np.identity(3)
+
+    def _hg(Fg: np.ndarray) -> np.ndarray:
+        return np.transpose(fast_inverse2(Fg), [0, 2, 1]) - identity
+
+    if len(specs) == 1 and not per_dislocation:
+        spec = specs[0]
+        Fg = Fd_find_mixed(
+            rl_um,
+            Us,
+            Ud_mix=spec.Ud_mix,
+            rotation_deg=spec.rotation_deg,
+            Theta=Theta,
+            b=b,
+            ny=ny,
+            position_lab_um=spec.position_lab_um,
+            S=S,
+        )
+        return _hg(Fg), None
+
+    parts: list[np.ndarray] = [
+        Fd_find_mixed(
+            rl_um,
+            Us,
+            Ud_mix=spec.Ud_mix,
+            rotation_deg=spec.rotation_deg,
+            Theta=Theta,
+            b=b,
+            ny=ny,
+            position_lab_um=spec.position_lab_um,
+            S=S,
+        )
+        for spec in specs
+    ]
+    # Same accumulation order as Fd_find_multi_dislocs_mixed: zeros, then
+    # += (Fg_i − I) in spec order, then + I — keeps the combined result
+    # bit-identical to the legacy path.
+    Fg_sum = np.zeros((rl_um.shape[1], 3, 3))
+    for Fg_one in parts:
+        Fg_sum += Fg_one - identity
+    hg_combined = _hg(Fg_sum + identity)
+    if not per_dislocation:
+        return hg_combined, None
+    # Convert each part to its solo Hg, releasing the (X,3,3) Fg as we go —
+    # bounds the transient peak at px510 (~106 MB per array).
+    solos: list[np.ndarray] = []
+    for i in range(len(parts)):
+        solos.append(_hg(parts[i]))
+        parts[i] = None  # type: ignore[call-overload]
+    return hg_combined, solos
