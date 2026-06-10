@@ -114,8 +114,11 @@ each thread-capped, rather than one over-threaded scan.
    float32 HDF5 plus its own log at `output/fanout_<JOBID>/<config-stem>.log`.
    The bsub templates also pass `--timing-json`, so every sweep writes a
    `timing.json` manifest: per-config wall time, the child-reported
-   import-vs-run split (`DFXM_TIMING` log lines), and sweep throughput
-   (configs/hour, images/sec where the CLI reports image counts).
+   import-vs-run split (`DFXM_TIMING` log lines; `import_s` covers the
+   dfxm_geo import only, so `wall_s − import_s − run_s` is the interpreter
+   spawn overhead), and sweep throughput (configs/hour; images/sec when the
+   mode's CLI reports an image count — single reports `images`, multi
+   `samples` (scenes), z-scan `configurations`).
 
 ## Identify fan-out baseline (M1 Phase 2a, 2026-06-10)
 

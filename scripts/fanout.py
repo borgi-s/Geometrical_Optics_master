@@ -217,20 +217,30 @@ def run_manifest(
 
 
 _TIMING_PREFIX = "DFXM_TIMING "
-_IMAGES_RE = re.compile(r"^Wrote (\d+) images", re.MULTILINE)
-# identify-multi reports scenes ("Wrote N samples"), each a full rocking scan
-# of frames — kept under a separate key so it is never summed as an image count.
-_SAMPLES_RE = re.compile(r"^Wrote (\d+) samples", re.MULTILINE)
+# The three identify CLIs report different units on their final line; each is
+# kept under its own key so a scene/configuration count is never summed as an
+# image count: single prints "Wrote N images", multi "Wrote N samples"
+# (scenes, each a full rocking scan of frames), z-scan "Wrote N configurations"
+# (z-layer x b x angle combos, each a phi x chi grid).
+_COUNT_RES = {
+    "images": re.compile(r"^Wrote (\d+) images", re.MULTILINE),
+    "samples": re.compile(r"^Wrote (\d+) samples", re.MULTILINE),
+    "configurations": re.compile(r"^Wrote (\d+) configurations", re.MULTILINE),
+}
 
 
 def parse_timing_log(log_path: Path) -> dict[str, float | int]:
     """Harvest child-emitted timing facts from one per-config log.
 
     Returns a (possibly empty) dict with whichever of these were found:
-    ``import_s`` / ``run_s`` from the last ``DFXM_TIMING {json}`` line, and
-    ``images`` from the CLI's "Wrote N images" line. Missing files, absent
-    lines, or garbled json all degrade to ``{}`` — a config that crashed
-    before printing timing must not break the sweep summary.
+    ``import_s`` / ``run_s`` from the last ``DFXM_TIMING {json}`` line
+    (``import_s`` covers the dfxm_geo module import only — interpreter launch
+    happens before the child's timer starts; the launcher-side ``wall_s``
+    minus ``import_s + run_s`` is that spawn overhead), and the CLI's final
+    count line (``images`` / ``samples`` / ``configurations`` depending on
+    mode). Missing files, absent lines, or garbled json all degrade to ``{}``
+    — a config that crashed before printing timing must not break the sweep
+    summary.
     """
     try:
         text = log_path.read_text(encoding="utf-8", errors="replace")
@@ -241,12 +251,10 @@ def parse_timing_log(log_path: Path) -> dict[str, float | int]:
     if timing_lines:
         with contextlib.suppress(json.JSONDecodeError):
             out.update(json.loads(timing_lines[-1][len(_TIMING_PREFIX) :]))
-    images = _IMAGES_RE.findall(text)
-    if images:
-        out["images"] = int(images[-1])
-    samples = _SAMPLES_RE.findall(text)
-    if samples:
-        out["samples"] = int(samples[-1])
+    for key, regex in _COUNT_RES.items():
+        counts = regex.findall(text)
+        if counts:
+            out[key] = int(counts[-1])
     return out
 
 
@@ -263,7 +271,9 @@ def write_timing_json(
 
     Sweep-level ``images_total`` / ``images_per_s`` are only emitted when every
     successful config reported an image count — a partial sum would understate
-    throughput and look like a regression.
+    throughput and look like a regression. ``configs_per_hour`` counts ALL
+    configs (failures included): it measures sweep progress rate, not useful
+    yield — read it together with ``n_ok``.
     """
     rows = []
     image_counts: list[int] = []
@@ -275,10 +285,11 @@ def write_timing_json(
             "wall_s": round(r.wall_s, 3),
             "log": str(r.log_path),
         }
-        row.update(parse_timing_log(r.log_path))
+        timing = parse_timing_log(r.log_path)
+        row.update(timing)
         rows.append(row)
-        if r.returncode == 0 and "images" in row:
-            image_counts.append(int(row["images"]))  # type: ignore[arg-type]
+        if r.returncode == 0 and "images" in timing:
+            image_counts.append(int(timing["images"]))
 
     n_ok = sum(1 for r in results if r.returncode == 0)
     sweep: dict[str, object] = {

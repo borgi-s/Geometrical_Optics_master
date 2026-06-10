@@ -328,6 +328,17 @@ def test_parse_timing_log_captures_samples_line(tmp_path: Path) -> None:
     assert fanout.parse_timing_log(log) == {"import_s": 1.0, "run_s": 2.0, "samples": 2}
 
 
+def test_parse_timing_log_captures_zscan_configurations_line(tmp_path: Path) -> None:
+    """identify-zscan prints 'Wrote N configurations' — captured under its own
+    key so z-scan sweeps still get a per-config count in the manifest."""
+    log = tmp_path / "c.log"
+    log.write_text(
+        'DFXM_TIMING {"import_s": 1.0, "run_s": 2.0}\nWrote 3 configurations to out\n',
+        encoding="utf-8",
+    )
+    assert fanout.parse_timing_log(log) == {"import_s": 1.0, "run_s": 2.0, "configurations": 3}
+
+
 def test_parse_timing_log_tolerates_missing_data(tmp_path: Path) -> None:
     no_line = tmp_path / "plain.log"
     no_line.write_text("just output, no timing\n", encoding="utf-8")

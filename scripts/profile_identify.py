@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import cProfile
+import functools
 import io
 import json
 import pstats
@@ -50,6 +51,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import dfxm_geo.direct_space.forward_model as fm
@@ -73,6 +75,7 @@ class _Acc:
 
 
 def _wrap(fn, acc: _Acc):
+    @functools.wraps(fn)
     def timed(*args, **kwargs):
         t0 = time.perf_counter()
         try:
@@ -98,7 +101,7 @@ _STAGE_SITES = {
 }
 
 
-def _install_stage_timers() -> tuple[dict[str, _Acc], callable]:
+def _install_stage_timers() -> tuple[dict[str, _Acc], Callable[[], None]]:
     """Wrap every stage function; return (accumulators, restore_fn)."""
     accs: dict[str, _Acc] = {}
     originals: list[tuple[object, str, object]] = []
@@ -117,8 +120,13 @@ def _install_stage_timers() -> tuple[dict[str, _Acc], callable]:
 
 
 def _fresh_import_seconds() -> float:
-    """Time `import dfxm_geo.pipeline` in a fresh interpreter (per-subprocess
-    fixed cost that a persistent worker pool would amortize)."""
+    """Time `import dfxm_geo.pipeline` in a fresh interpreter.
+
+    Measures the module import only — interpreter launch happens before the
+    child's timer starts, so the true per-subprocess fixed cost a persistent
+    worker pool would amortize is slightly larger than this number (fanout's
+    per-config ``wall_s - (import_s + run_s)`` is that spawn overhead).
+    """
     snippet = (
         "import time; t = time.perf_counter(); "
         "import dfxm_geo.pipeline; print(time.perf_counter() - t)"
@@ -174,16 +182,19 @@ def profile_one(config_path: Path, output_dir: Path, *, skip_cprofile_dump: bool
         total_s - accs["kernel_load"].seconds - writer_s - accs["poisson"].seconds,
     )
 
-    result = {
-        "config": str(config_path),
-        "total_s": round(total_s, 3),
-        "cold_start_s": round(cold_start_s, 3),
+    buckets: dict[str, float] = {
         "kernel_load_s": round(accs["kernel_load"].seconds, 3),
         "hg_s": round(hg_s, 3),
         "frames_s": round(frames_s, 3),
-        "poisson_s": round(accs["poisson"].seconds, 3),
         "io_other_s": round(io_other_s, 3),
+        "poisson_s": round(accs["poisson"].seconds, 3),
         "unattributed_s": round(unattributed_s, 3),
+    }
+    result: dict = {
+        "config": str(config_path),
+        "total_s": round(total_s, 3),
+        "cold_start_s": round(cold_start_s, 3),
+        **buckets,
         "stage_calls": {name: acc.calls for name, acc in accs.items()},
         "stage_seconds_raw": {name: round(acc.seconds, 3) for name, acc in accs.items()},
     }
@@ -197,9 +208,9 @@ def profile_one(config_path: Path, output_dir: Path, *, skip_cprofile_dump: bool
     buf.write(f"cold-start (warm) : {cold_start_s:8.3f} s  (numba compile + first kernel load)\n")
     buf.write(f"warm total        : {total_s:8.3f} s  (single-thread)\n")
     buf.write("\n=== stage breakdown (wall seconds, all threads) ===\n")
-    for key in ("kernel_load_s", "hg_s", "frames_s", "io_other_s", "poisson_s", "unattributed_s"):
-        share = 100.0 * result[key] / total_s if total_s > 0 else 0.0
-        buf.write(f"  {key:18s} {result[key]:8.3f}  ({share:5.1f} %)\n")
+    for key, seconds in buckets.items():
+        share = 100.0 * seconds / total_s if total_s > 0 else 0.0
+        buf.write(f"  {key:18s} {seconds:8.3f}  ({share:5.1f} %)\n")
     buf.write("\n=== per-function accumulators ===\n")
     for name, acc in accs.items():
         buf.write(f"  {name:16s} {acc.seconds:8.3f} s  in {acc.calls:6d} calls\n")

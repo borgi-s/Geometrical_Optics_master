@@ -44,6 +44,7 @@ write_strain_provenance = false
 """
 
 
+@pytest.mark.slow
 def test_profile_one_reports_stage_breakdown(tmp_path: Path) -> None:
     """profile_one must run a real identify config single-threaded and return
     the M1 Phase 2a stage split: kernel load vs Hg vs frames vs write vs noise,
