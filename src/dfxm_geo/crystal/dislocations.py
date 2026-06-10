@@ -608,9 +608,8 @@ def find_hg_scene(
         per_dislocation: also return each dislocation's solo Hg.
         b, ny, S: as in `Fd_find_mixed`.
         engine: "numba" (fused kernel, the default, parity ≤1e-12) or "numpy"
-            (bit-identical legacy composition, the parity oracle kept for
-            parity tests and verification). Flipped to "numba" default in
-            v2.6.0 Task 7.
+            (bit-identical legacy composition). Pass engine="numpy" only to
+            run the legacy bit-identical path for parity verification.
 
     Returns:
         (Hg_combined, solos) — solos is a list of (X, 3, 3) arrays when
