@@ -32,6 +32,7 @@ def test_single_entry_defaults_to_solution_1():
     assert r.omega == pytest.approx(geom.omega_1)
     assert r.theta == pytest.approx(geom.theta_1)
     assert r.group == 0
+    assert r.keV == pytest.approx(KEV)
 
 
 def test_omega_solution_2_selects_second_branch():
@@ -117,3 +118,34 @@ def test_auto_zero_matches_raises():
 def test_auto_requires_eta_target():
     with pytest.raises(ValueError, match="eta_target"):
         resolve_reflections_auto({}, PAPER_MOUNT, KEV)
+
+
+# ---------------------------------------------------------------------------
+# Precedence / validation tests added by code-review fixes
+# ---------------------------------------------------------------------------
+
+
+def test_omega_solution_overrides_default_eta():
+    """Per-entry omega_solution wins over the global [geometry] eta default."""
+    geom = compute_omega_eta(PAPER_MOUNT, (1, 1, 3), KEV)
+    runs = resolve_reflections(
+        _entries([(1, 1, 3)], omega_solution=2), PAPER_MOUNT, KEV, default_eta=geom.eta_1
+    )
+    assert runs[0].omega == pytest.approx(geom.omega_2)
+
+
+def test_entry_eta_and_omega_solution_together_raise():
+    with pytest.raises(ValueError, match="not both"):
+        resolve_reflections(
+            [{"hkl": [1, 1, 3], "eta": 0.3531, "omega_solution": 1}], PAPER_MOUNT, KEV
+        )
+
+
+def test_hkl_non_integer_raises():
+    with pytest.raises(ValueError, match="integers"):
+        resolve_reflections([{"hkl": [1.5, 1, 3]}], PAPER_MOUNT, KEV)
+
+
+def test_omega_solution_invalid_value_raises():
+    with pytest.raises(ValueError, match="must be 1 or 2"):
+        resolve_reflections(_entries([(1, 1, 3)], omega_solution=3), PAPER_MOUNT, KEV)
