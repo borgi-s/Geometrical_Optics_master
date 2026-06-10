@@ -97,7 +97,7 @@ packages = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["legacy/", "notebooks/"]
+extend-exclude = ["legacy/", "notebooks/", "tmp/"]
 
 [tool.ruff.lint]
 # Lint is intentionally permissive while cleanup is in progress.
