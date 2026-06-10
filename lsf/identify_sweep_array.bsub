@@ -78,6 +78,9 @@ if [ ! -f "${SLICE}" ]; then
     exit 1
 fi
 
+# v2.6.0: fanout runs a persistent worker pool by default (import/JIT/kernel
+# loaded once per worker). Append --isolate to fall back to the pre-v2.6.0
+# subprocess-per-config mode when debugging a config that kills workers.
 python scripts/fanout.py \
     --manifest "${SLICE}" \
     --output "output/idsweep_${LSB_JOBID}/task_${LSB_JOBINDEX}" \

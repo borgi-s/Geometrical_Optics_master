@@ -778,8 +778,11 @@ write_strain_provenance = false
     for stem in ("seed11", "seed12"):
         d_iso = _datasets(out_iso / stem)
         d_pool = _datasets(out_pool / stem)
+        # Non-empty guards FIRST: an empty-vs-empty key comparison would pass
+        # vacuously and the gate would silently compare nothing.
+        assert d_iso, f"no datasets found in isolate output for {stem}"
+        assert d_pool, f"no datasets found in pool output for {stem}"
         assert d_iso.keys() == d_pool.keys(), f"dataset key mismatch for {stem}"
-        assert d_iso, f"no datasets found for {stem}"
         for key in d_iso:
             a, b_ = d_iso[key], d_pool[key]
             if isinstance(a, np.ndarray) and a.dtype.kind == "f":

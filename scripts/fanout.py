@@ -445,6 +445,7 @@ def write_timing_json(
     per-config row is the per-worker amortized cost — real on the worker's
     first config, 0.0 on subsequent warm ones (the import/JIT/kernel-load
     is paid once per worker, not once per config). ``wall_s`` in pool mode
+    covers only the worker's active execution (run_one entry to return) and
     excludes queue-wait time between config submissions. When True (--isolate
     subprocess mode), every config pays the full import cost.
     """
