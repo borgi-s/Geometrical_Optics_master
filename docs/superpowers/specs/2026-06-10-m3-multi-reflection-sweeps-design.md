@@ -245,7 +245,8 @@ existing geometry attrs. The super-master records the full resolved table.
 ## 9. CLI + sweep tooling
 
 - **`dfxm-find-reflections`** (also closes roadmap G1.3): new
-  `[project.scripts]` entry → `crystal/oblique.py:cli_main`. Reads a config
+  `[project.scripts]` entry → `find_reflections_cmd.py:cli_main` (new module;
+  `crystal/oblique.py` stays pure math, no I/O). Reads a config
   TOML (mount + keV [+ optional eta-target/θ-range/hkl-max flags]), prints
   the Table-A.2-style table: hkl, θ, η₁, ω₁, η₂, ω₂, group id. Acceptance
   test = paper Table A.2 reproduction (already unit-tested at function
