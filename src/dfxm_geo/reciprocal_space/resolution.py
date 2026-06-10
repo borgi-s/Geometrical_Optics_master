@@ -149,6 +149,107 @@ def _chunked_truncnorm_rvs(
     return out
 
 
+def _fill_resq_i_batch(
+    Resq_i: np.ndarray,
+    n: int,
+    rng: np.random.Generator,
+    *,
+    npoints1: int,
+    npoints2: int,
+    npoints3: int,
+    qi1_range: float,
+    qi2_range: float,
+    qi3_range: float,
+    zeta_v_fwhm: float,
+    zeta_h_fwhm: float,
+    NA_rms: float,
+    eps_rms: float,
+    theta: float,
+    phys_aper: float,
+    dphi_range: float,
+    eta: float,
+    beamstop: bool,
+    bs_height: float | None,
+    aperture: bool,
+    knife_edge: bool,
+) -> None:
+    """Generate ``n`` rays and accumulate their (qrock', qroll, q2th) counts into ``Resq_i``.
+
+    Mirrors the per-ray formulas of the single-shot body in
+    :func:`reciprocal_res_func`. A single call with ``n == Nrays`` consumes the
+    RNG stream in the same order and produces the same histogram, so the chunked
+    path reproduces the unbatched kernel bit-for-bit for one batch (enforced by
+    ``tests/test_kernel_batched.py::test_single_batch_matches_unbatched``).
+
+    Mutates ``Resq_i`` in place; holds only ``O(n)`` temporaries so the caller
+    can keep peak memory bounded by looping over modest ``n``.
+    """
+    zeta_v_sigma = zeta_v_fwhm / 2.355
+    lower, upper, mu = -1.4e-4, 1.4e-4, 0
+    zeta_v = _chunked_truncnorm_rvs(
+        a=(lower - mu) / zeta_v_sigma,
+        b=(upper - mu) / zeta_v_sigma,
+        loc=mu,
+        scale=zeta_v_sigma,
+        size=n,
+        random_state=rng,
+    )
+    zeta_h = rng.normal(size=n) * zeta_h_fwhm / 2.35
+    eps = rng.normal(size=n) * eps_rms
+    dphi: np.ndarray | float = (
+        rng.uniform(-dphi_range / 2, dphi_range / 2, n) if dphi_range > 0.0 else 0.0
+    )
+    x1 = rng.normal(size=int(1.01 * n)) * NA_rms
+    x2 = rng.normal(size=int(1.01 * n)) * NA_rms
+    delta_2theta = x1[np.abs(x1) < phys_aper / 2][:n]
+    xi = x2[np.abs(x2) < phys_aper / 2][:n]
+    if len(delta_2theta) < n or len(xi) < n:
+        raise ValueError(
+            f"batch under-filled the aperture: got delta_2theta={len(delta_2theta)}, "
+            f"xi={len(xi)} of n={n} through phys_aper={phys_aper:g}. Use a larger "
+            "batch_size (more aperture headroom) or widen phys_aper."
+        )
+
+    qrock = (-zeta_v / 2) - (delta_2theta / 2) + dphi
+    qroll = -zeta_h / (2 * np.sin(theta)) - xi / (2 * np.sin(theta))
+    qpar = eps + (1 / np.tan(theta)) * (-zeta_v / 2 + delta_2theta / 2)
+    qrock_prime = np.cos(theta) * qrock + np.sin(theta) * qpar
+    q2th = -np.sin(theta) * qrock + np.cos(theta) * qpar
+    if eta != 0.0:
+        c_e, s_e = float(np.cos(eta)), float(np.sin(eta))
+        qroll_new = c_e * qroll - s_e * q2th
+        q2th_new = s_e * qroll + c_e * q2th
+        qroll, q2th = qroll_new, q2th_new
+
+    if beamstop:
+        if bs_height is None:
+            raise ValueError("bs_height must be provided when beamstop=True")
+        if aperture and not knife_edge:
+            keep = _apply_aperture(np.abs(delta_2theta / 2), np.abs(xi / 2), bs_height / 2)
+        elif knife_edge and not aperture:
+            keep = _apply_knife_edge(delta_2theta / 2, bs_height / 2)
+        elif not aperture and not knife_edge:
+            keep = _apply_wire(np.abs(delta_2theta / 2), bs_height / 2, rng)
+        else:
+            raise ValueError("aperture and knife_edge are mutually exclusive")
+        qrock_prime = qrock_prime[keep][:n]
+        qroll = qroll[keep][:n]
+        q2th = q2th[keep][:n]
+
+    index1 = (np.floor((qrock_prime + (qi1_range / 2)) / qi1_range * npoints1)).astype(np.int16)
+    index2 = (np.floor((qroll + (qi2_range / 2)) / qi2_range * npoints2)).astype(np.int16)
+    index3 = (np.floor((q2th + (qi3_range / 2)) / qi3_range * npoints3)).astype(np.int16)
+    idx = (
+        (index3 >= 0)
+        * (index2 >= 0)
+        * (index1 >= 0)
+        * (index1 < npoints1)
+        * (index2 < npoints2)
+        * (index3 < npoints3)
+    )
+    np.add.at(Resq_i, tuple([index1[idx], index2[idx], index3[idx]]), 1)
+
+
 def reciprocal_res_func(
     Nrays: int,
     npoints1: int,
@@ -167,6 +268,7 @@ def reciprocal_res_func(
     phys_aper: float,
     date: str,
     mem_save: bool = True,
+    batch_size: int | None = None,
     rng: np.random.Generator | None = None,
     return_qs: bool = False,
     dphi_range: float = 0.0,
@@ -181,6 +283,60 @@ def reciprocal_res_func(
     print("Defining properties of rays")
     if rng is None:
         rng = np.random.default_rng()
+
+    # Chunked (low-peak-memory) path: process the Nrays rays in batches,
+    # accumulating into the shared Resq_i histogram, so peak memory is
+    # ~O(batch_size) rather than ~O(Nrays). A single batch (batch_size >= Nrays)
+    # reproduces the unbatched result bit-for-bit. Diagnostic modes (return_qs /
+    # plot_figs) keep the per-ray arrays and stay on the single-shot path below.
+    if batch_size is not None and not return_qs and plot_figs != 1:
+        Resq_i = np.zeros([npoints1, npoints2, npoints3])
+        remaining = Nrays
+        n_batches = 0
+        while remaining > 0:
+            b = min(int(batch_size), remaining)
+            _fill_resq_i_batch(
+                Resq_i,
+                b,
+                rng,
+                npoints1=npoints1,
+                npoints2=npoints2,
+                npoints3=npoints3,
+                qi1_range=qi1_range,
+                qi2_range=qi2_range,
+                qi3_range=qi3_range,
+                zeta_v_fwhm=zeta_v_fwhm,
+                zeta_h_fwhm=zeta_h_fwhm,
+                NA_rms=NA_rms,
+                eps_rms=eps_rms,
+                theta=theta,
+                phys_aper=phys_aper,
+                dphi_range=dphi_range,
+                eta=eta,
+                beamstop=beamstop,
+                bs_height=bs_height,
+                aperture=aperture,
+                knife_edge=knife_edge,
+            )
+            remaining -= b
+            n_batches += 1
+        print(f"Resq_i filled (chunked: {n_batches} batches of <= {int(batch_size)} rays)")
+        normResq_i = Resq_i / Resq_i.max()
+        if save_resqi == 1:
+            meta_arrays = {k: np.asarray(v) for k, v in (kernel_meta or {}).items()}
+            meta_arrays["eta"] = np.asarray(np.float64(eta))
+            if output_path is not None:
+                out_path = Path(output_path)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                np.savez(out_path, Resq_i=normResq_i, **cast(Any, meta_arrays))
+                print(f"Resq_i saved to {out_path}")
+            else:
+                check_folder("", "pkl_files")
+                default_path = Path("pkl_files") / f"Resq_i_{date}.npz"
+                np.savez(default_path, Resq_i=normResq_i, **cast(Any, meta_arrays))
+                print(f"Resq_i saved as Resq_i_{date}.npz")
+        return None
+
     # Define the properties of one ray
 
     zeta_v_sigma = zeta_v_fwhm / 2.355
