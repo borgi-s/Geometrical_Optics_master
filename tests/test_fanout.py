@@ -788,3 +788,55 @@ write_strain_provenance = false
                 assert np.array_equal(a, b_), f"mismatch for {key}"
             else:
                 assert a == b_, f"mismatch for {key}"
+
+
+# ---------------------------------------------------------------------------
+# Task 12: pool-mode forward e2e smoke
+# ---------------------------------------------------------------------------
+
+
+def test_fanout_pool_end_to_end_forward(tmp_path: Path) -> None:
+    """Pool-mode twin of test_fanout_end_to_end_runs_two_configs: real
+    ProcessPoolExecutor + run_one, two tiny forward configs, n_workers=1."""
+    kernel_dir = Path(fm.pkl_fpath)
+    if not sorted(kernel_dir.glob("Resq_i_h-1_k1_l-1_17keV_*.npz")):
+        pytest.skip("No bootstrapped kernel npz found; skipping integration run.")
+
+    import h5py
+    import numpy as np
+
+    cfg_text = (
+        "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n\n"
+        "[scan.phi]\nrange = 0.001\nsteps = 2\n\n"
+        "[io]\ninclude_perfect_crystal = false\n\n"
+        "[postprocess]\nenabled = false\n"
+    )
+    manifest_dir = tmp_path / "configs"
+    manifest_dir.mkdir()
+    for name in ("alpha.toml", "beta.toml"):
+        (manifest_dir / name).write_text(cfg_text)
+
+    out_root = tmp_path / "out"
+    results = fanout.run_manifest(
+        fanout.discover_configs(manifest_dir),
+        out_root,
+        n_workers=1,
+        threads_per_worker=2,
+        mode="forward",
+    )
+    assert all(r.returncode == 0 for r in results), [r.log_path.read_text() for r in results]
+    for stem in ("alpha", "beta"):
+        det = out_root / stem / "scan0001" / "dfxm_sim_detector_0000.h5"
+        assert det.is_file()
+        with h5py.File(det, "r") as f:
+            img = f["/entry_0000/dfxm_sim_detector/image"]
+            assert img.dtype == np.float32
+            assert img.shape[0] == 2
+        timing = fanout.parse_timing_log(out_root / f"{stem}.log")
+        assert timing.get("run_s", 0) > 0
+    # One worker, two configs: exactly one config paid the import.
+    imports = [
+        fanout.parse_timing_log(out_root / f"{s}.log").get("import_s") for s in ("alpha", "beta")
+    ]
+    assert None not in imports
+    assert min(imports) == 0.0  # the warm config reports 0.0

@@ -61,6 +61,9 @@ conda activate dfxm-geo
 dfxm-bootstrap --if-missing --config "${WORKDIR}/configs/profile_rocking.toml"
 
 # Stage 1 — fan out the configs across the node.
+# v2.6.0: fanout runs a persistent worker pool by default (import/JIT/kernel
+# loaded once per worker). Append --isolate to fall back to the pre-v2.6.0
+# subprocess-per-config mode when debugging a config that kills workers.
 python scripts/fanout.py \
     --manifest "${MANIFEST}" \
     --output "${OUTROOT}" \
