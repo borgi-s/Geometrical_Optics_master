@@ -135,9 +135,28 @@ write_strain_provenance = false
 """
 
 
+_ZSCAN_TOML_NO_SECONDARY = _ZSCAN_TOML.replace(
+    "include_secondary = true",
+    "include_secondary = false",
+).replace(
+    "render_per_dislocation = true",
+    "render_per_dislocation = false",
+)
+
+
 def test_zscan_render_per_dislocation_is_one_scene_call(monkeypatch, tmp_path):
     # 1 z × 1 plane × 1 b × 1 angle, secondary on, render_per_dislocation on
     # → exactly ONE find_hg_scene call with both specs and per_dislocation=True.
     # Pre-W2: 1 combined + 2 solo Fd computations, zero seam calls.
     calls = _spy_scene_calls(monkeypatch, _ZSCAN_TOML, tmp_path)
     assert calls == [{"n_specs": 2, "per_dislocation": True}]
+
+
+def test_zscan_without_secondary_is_one_single_spec_call(monkeypatch, tmp_path):
+    # Secondary off -> the primary alone still routes through the seam.
+    # The else-branch omits per_dislocation kwarg; spy records False via
+    # kwargs.get default.
+    # Note: render_per_dislocation=True is invalid with include_secondary=False
+    # (the validator rejects it), so _ZSCAN_TOML_NO_SECONDARY sets both to false.
+    calls = _spy_scene_calls(monkeypatch, _ZSCAN_TOML_NO_SECONDARY, tmp_path)
+    assert calls == [{"n_specs": 1, "per_dislocation": False}]
