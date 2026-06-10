@@ -576,7 +576,7 @@ def find_hg_scene(
     b: float = BURGERS_VECTOR,
     ny: float = POISSON_RATIO,
     S: np.ndarray = _S_IDENTITY,
-    engine: str = "numpy",
+    engine: str = "numba",
 ) -> tuple[np.ndarray, list[np.ndarray] | None]:
     """Hg for a scene of mixed dislocations, optionally with per-dislocation Hg.
 
@@ -607,9 +607,9 @@ def find_hg_scene(
         Theta: Lab-to-sample rotation, (3, 3).
         per_dislocation: also return each dislocation's solo Hg.
         b, ny, S: as in `Fd_find_mixed`.
-        engine: "numpy" (bit-identical legacy composition, the parity oracle
-            and default) or "numba" (fused kernel, parity ≤1e-12). The "numpy"
-            engine is used for verification and will be flipped to "numba" in
+        engine: "numba" (fused kernel, the default, parity ≤1e-12) or "numpy"
+            (bit-identical legacy composition, the parity oracle kept for
+            parity tests and verification). Flipped to "numba" default in
             v2.6.0 Task 7.
 
     Returns:
