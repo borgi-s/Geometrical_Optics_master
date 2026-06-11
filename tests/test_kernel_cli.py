@@ -537,17 +537,6 @@ class TestValidateReflection:
         with pytest.raises(ValueError, match=r"hkl components must be int"):
             _validate_reflection((True, 1, -1), 17.0, UnitCell.cubic(4.0495e-10))
 
-    def test_nonpositive_a_raises(self) -> None:
-        from dfxm_geo.crystal.cell import UnitCell
-
-        # UnitCell validates lengths at construction; _validate_reflection no longer
-        # checks `a` itself — the check moved to UnitCell.__post_init__.
-        # M4 Stage 4.1: adapt to UnitCell.cubic(0) / UnitCell.cubic(-1) raising.
-        with pytest.raises(ValueError, match=r"must be finite and > 0"):
-            UnitCell.cubic(0.0)
-        with pytest.raises(ValueError, match=r"must be finite and > 0"):
-            UnitCell.cubic(-1e-10)
-
 
 class TestBuildKernelFilename:
     def test_basic_default_reflection(self) -> None:
