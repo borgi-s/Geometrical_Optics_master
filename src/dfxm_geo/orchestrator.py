@@ -77,6 +77,8 @@ from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 # kernel-path global the check used to cross-reference).
 _KERNEL_CTX_CACHE: dict[Path, fm.ResolutionContext] = {}
 
+# === FORWARD ORCHESTRATION (kernel/resolution, run_simulation, postprocess) ===
+
 
 def _lookup_and_load_kernel(
     hkl: tuple[int, int, int],
@@ -767,6 +769,9 @@ def _positioners_for_scan_frames(
         else:
             out[axis_name] = float(arr[0])
     return out
+
+
+# === IDENTIFICATION ORCHESTRATION ===
 
 
 def _identify_title(scan_mode: str, n_frames: int, scan: ScanConfig) -> str:

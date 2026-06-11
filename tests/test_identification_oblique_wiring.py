@@ -212,10 +212,10 @@ def _run_identify_with_stubbed_forward(
 ) -> Path:
     """run_identification end-to-end with physics stubbed out (fast)."""
     import dfxm_geo.direct_space.forward_model as fm
-    import dfxm_geo.orchestrator as pipeline_mod
+    import dfxm_geo.orchestrator as orch
 
     monkeypatch.setattr(
-        pipeline_mod,
+        orch,
         "_load_resolution",
         lambda *a, **k: _stub_analytic_resolution(),
     )
