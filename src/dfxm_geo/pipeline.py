@@ -31,6 +31,9 @@ from dfxm_geo.crystal.burgers import (
     burgers_vectors as _burgers_vectors,
 )
 from dfxm_geo.crystal.burgers import (
+    gb_cos as _gb_cos,
+)
+from dfxm_geo.crystal.burgers import (
     gb_visible as _gb_visible,
 )
 from dfxm_geo.crystal.burgers import (
@@ -1953,6 +1956,14 @@ def _iter_identification_single(
                         int(round(b_table[b_idx, 1] * np.sqrt(2))),
                         int(round(b_table[b_idx, 2] * np.sqrt(2))),
                     )
+                    # g·b labels (Task 5, M3 plan 2): per-scan visibility scalars
+                    # computed from this run's q_hkl and the scan's Burgers vector.
+                    # gb_cos normalises both inputs, so any non-zero multiple of b works.
+                    _b_vec_single = b_table[b_idx]
+                    _gb_cos_val = _gb_cos(q_hkl, _b_vec_single)
+                    _gb_vis_val = int(
+                        _gb_visible(q_hkl, _b_vec_single, crystal_cfg.invisibility_threshold_deg)
+                    )
                     yield ScanSpec(
                         title=_identify_title(scan_mode, frames_at_z.n_frames, config.scan),
                         sample={
@@ -1968,6 +1979,8 @@ def _iter_identification_single(
                             "theta": float(theta_0_),
                             "psize": float(psize_),
                             "zl_rms": float(zl_rms_),
+                            "gb_cos": _gb_cos_val,
+                            "gb_visible": _gb_vis_val,
                         },
                         detectors={"dfxm_sim_detector": args_list},
                         attrs={
@@ -2184,6 +2197,15 @@ def _iter_identification_multi(
                 },
             }
 
+            # g·b labels (Task 5, M3 plan 2): per-dislocation arrays (length = 2).
+            # Order matches the specs list (d1 at index 0, d2 at index 1),
+            # which matches per-dislocation file naming (_dis0, _dis1).
+            _thr_multi = config.crystal.invisibility_threshold_deg
+            _gb_cos_multi = np.array([_gb_cos(q_hkl, d["b_vec"]) for d in (d1, d2)])
+            _gb_vis_multi = np.array(
+                [int(_gb_visible(q_hkl, d["b_vec"], _thr_multi)) for d in (d1, d2)],
+                dtype=np.int8,
+            )
             yield ScanSpec(
                 title=_identify_title(scan_mode, frames_at_z.n_frames, config.scan),
                 sample=sample,
@@ -2194,6 +2216,8 @@ def _iter_identification_multi(
                     "theta": float(theta_0_),
                     "psize": float(psize_),
                     "zl_rms": float(zl_rms_),
+                    "gb_cos": _gb_cos_multi,
+                    "gb_visible": _gb_vis_multi,
                 },
                 detectors=detectors,
                 attrs={
@@ -2455,17 +2479,34 @@ def _iter_identification_zscan(
                     args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan, ctx)
                     detectors["dfxm_sim_detector"] = args_list
 
+                    # g·b labels (Task 5, M3 plan 2): primary dislocation scalars.
+                    # Label the PRIMARY (deterministic sweep b) with gb_cos/gb_visible.
+                    # If a secondary is present and its b is distinct, also write
+                    # gb_cos_secondary / gb_visible_secondary for completeness.
+                    _thr_z = crystal_cfg.invisibility_threshold_deg
+                    _b_primary = b_table[b_idx]
+                    _zscan_dfxm_geo: dict[str, Any] = {
+                        "Hg": Hg,
+                        "q_hkl": q_hkl,
+                        "theta": float(theta_0_),
+                        "psize": float(psize_),
+                        "zl_rms": float(zl_rms_),
+                        "gb_cos": _gb_cos(q_hkl, _b_primary),
+                        "gb_visible": int(_gb_visible(q_hkl, _b_primary, _thr_z)),
+                    }
+                    if zscan.include_secondary and "secondary" in sample:
+                        # `sec` is the dict from _draw_dislocation; b_vec is the
+                        # physical Burgers direction (before integer rounding).
+                        _b_sec = sec["b_vec"]
+                        _zscan_dfxm_geo["gb_cos_secondary"] = _gb_cos(q_hkl, _b_sec)
+                        _zscan_dfxm_geo["gb_visible_secondary"] = int(
+                            _gb_visible(q_hkl, _b_sec, _thr_z)
+                        )
                     yield ScanSpec(
                         title=_identify_title(scan_mode, n_frames, config.scan),
                         sample=sample,
                         positioners=positioners,
-                        dfxm_geo={
-                            "Hg": Hg,
-                            "q_hkl": q_hkl,
-                            "theta": float(theta_0_),
-                            "psize": float(psize_),
-                            "zl_rms": float(zl_rms_),
-                        },
+                        dfxm_geo=_zscan_dfxm_geo,
                         detectors=detectors,
                         attrs={
                             "scan_mode": scan_mode,
