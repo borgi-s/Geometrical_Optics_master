@@ -14,6 +14,7 @@ import numpy as np
 from dfxm_geo.crystal.burgers import (
     burgers_vectors as _burgers_vectors,
 )
+from dfxm_geo.crystal.cell import UnitCell
 from dfxm_geo.crystal.oblique import CrystalMount
 from dfxm_geo.crystal.reflections import (
     ReflectionRun as _ReflectionRun,
@@ -385,7 +386,7 @@ class ReciprocalConfig:
         # lattice_a defaults to Al (4.0495e-10) but is now config-driven, so a
         # non-Al cubic lattice can be supplied via [reciprocal] lattice_a and
         # flows through to both the Bragg-validity check and the analytic backend.
-        _validate_reflection(self.hkl, self.keV, self.lattice_a)
+        _validate_reflection(self.hkl, self.keV, UnitCell.cubic(self.lattice_a))
 
     @classmethod
     def from_dict(cls, data: dict | None) -> ReciprocalConfig:
@@ -799,7 +800,7 @@ def run_theta(config: SimulationConfig | IdentificationConfig) -> float:
     from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
     r = config.reciprocal
-    return float(_validate_reflection(r.hkl, r.keV, r.lattice_a))
+    return float(_validate_reflection(r.hkl, r.keV, UnitCell.cubic(r.lattice_a)))
 
 
 @dataclass(frozen=True, kw_only=True)

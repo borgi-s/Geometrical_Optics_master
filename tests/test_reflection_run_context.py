@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from dfxm_geo.crystal.cell import UnitCell
 from dfxm_geo.crystal.oblique import CrystalMount
 from dfxm_geo.crystal.reflections import resolve_reflections
 from dfxm_geo.pipeline import (
@@ -70,7 +71,7 @@ def test_resolution_for_run_uses_run_hkl_in_recip(run113):
     # Must resolve to run113.theta, not (1,1,1)'s theta
     from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
-    theta_113 = float(_validate_reflection((1, 1, 3), 19.1, 4.0493e-10))
+    theta_113 = float(_validate_reflection((1, 1, 3), 19.1, UnitCell.cubic(4.0493e-10)))
     assert res.analytic_eval is not None
     assert res.analytic_eval.theta == pytest.approx(theta_113)
 

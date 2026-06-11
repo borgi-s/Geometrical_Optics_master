@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
+from dfxm_geo.crystal.cell import UnitCell
 from dfxm_geo.crystal.oblique import CrystalMount, compute_omega_eta
 from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func
 
@@ -136,14 +137,15 @@ def _default_theta_al_111(keV: float = 17) -> float:
 def _validate_reflection(
     hkl: tuple[int, int, int],
     keV: float,
-    a: float,
+    cell: UnitCell,
 ) -> float:
-    """Compute and validate the Bragg angle θ for an arbitrary cubic reflection.
+    """Compute and validate the Bragg angle θ for an arbitrary reflection.
 
     Args:
         hkl: Miller indices (must be ints, length 3, not all zero).
         keV: beam energy in keV (must be > 0).
-        a: cubic lattice parameter in metres.
+        cell: unit cell; d-spacing is the metric-tensor form d = 2π/|B·G|
+            (bit-identical to the legacy a/√(h²+k²+l²) for cubic cells).
 
     Returns:
         Bragg angle θ in radians.
@@ -163,11 +165,8 @@ def _validate_reflection(
         raise ValueError("hkl=(0,0,0) is not a valid reflection (no diffraction).")
     if keV <= 0:
         raise ValueError(f"keV must be > 0, got {keV}.")
-    if a <= 0:
-        raise ValueError(f"lattice parameter `a` must be > 0, got {a}.")
 
-    h, k, l = hkl
-    d_hkl = a / np.sqrt(h * h + k * k + l * l)
+    d_hkl = cell.d_spacing(hkl)
     wavelength = 1.239841984e-9 / keV  # hc/E, metres
     sin_theta = wavelength / (2 * d_hkl)
     if sin_theta > 1:
@@ -778,11 +777,11 @@ def cli_main(argv: list[str] | None = None) -> int:
             pkl_fpath=fm.pkl_fpath,
         )
 
-    a_lattice = mount.a
+    cell = mount.cell
     if raw_hkl is not None and raw_keV is not None:
         try:
             hkl_tuple: tuple[int, int, int] = tuple(raw_hkl)
-            theta = _validate_reflection(hkl_tuple, float(raw_keV), a_lattice)
+            theta = _validate_reflection(hkl_tuple, float(raw_keV), cell)
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1

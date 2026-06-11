@@ -562,6 +562,7 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> "ResolutionContext"
     no module-global side effects — the evaluator is returned on the
     ResolutionContext and threaded into build_forward_context.
     """
+    from dfxm_geo.crystal.cell import UnitCell
     from dfxm_geo.reciprocal_space.analytic_resolution import AnalyticResolution
     from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
@@ -570,7 +571,7 @@ def _load_analytic_resolution(config: "ReciprocalConfig") -> "ResolutionContext"
     # one — same getattr-default pattern as `eta` below. Mirrors how
     # reciprocal_space/kernel.py threads the mount's lattice into the MC path.
     lattice_a = float(getattr(config, "lattice_a", 4.0495e-10))
-    theta = _validate_reflection(config.hkl, config.keV, lattice_a)
+    theta = _validate_reflection(config.hkl, config.keV, UnitCell.cubic(lattice_a))
     eta_val = float(getattr(config, "eta", 0.0))  # safe default for v2.2.0-era configs
     analytic_eval = AnalyticResolution(
         theta=theta,
