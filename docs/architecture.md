@@ -50,7 +50,7 @@ entry points. It re-exports everything from `config`, `orchestrator`, and
 
 `dfxm_geo.config` owns all config dataclasses (`SimulationConfig`,
 `IdentificationConfig`, `GeometryConfig`, `ScanConfig`, …) and the TOML
-loaders (`load_config`, `load_identification_config`). It imports nothing from
+loaders (`SimulationConfig.from_toml`, `load_identification_config`). It imports nothing from
 `orchestrator` or `cli`; this keeps the dependency graph acyclic.
 
 `dfxm_geo.orchestrator` is where the work happens: `run_simulation`,
