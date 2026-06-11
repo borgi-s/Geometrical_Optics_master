@@ -156,6 +156,13 @@ git commit -m "refactor: extract CLI entry points to dfxm_geo.cli (facade routin
 
 ### Task 3: Extract `orchestrator.py` + retarget the orchestrator-internal patch strings (ONE commit)
 
+> **Patch-surface rule (from Task 2's quality review):** the CLI's patch
+> surface is PERMANENTLY the facade — `dfxm_geo.pipeline.run_simulation`
+> / `run_postprocess` / `run_identification` (cli.py resolves names off the
+> facade at call time). Any NEW CLI test must patch the facade, never
+> `dfxm_geo.orchestrator.*` (an orchestrator patch would silently no-op for
+> CLI calls). Orchestrator-INTERNAL callees follow the table below instead.
+
 **Files:**
 - Create: `src/dfxm_geo/orchestrator.py`
 - Modify: `src/dfxm_geo/pipeline.py` (becomes pure facade)
