@@ -100,4 +100,5 @@ mount_z = [0, 0, 1]
     rc = cli_main(["--config", str(p)])
     assert rc == 1
     err = capsys.readouterr().err
-    assert "non-cubic" in err and "oblique" in err
+    assert "non-cubic" in err, f"expected 'non-cubic' in stderr; got: {err!r}"
+    assert "oblique" in err, f"expected 'oblique' in stderr; got: {err!r}"

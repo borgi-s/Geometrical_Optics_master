@@ -70,6 +70,29 @@ mode = "simplified"
         SimulationConfig.from_toml(p)
 
 
+def test_cubic_simplified_mode_with_lattice_key_loads(tmp_path):
+    cfg = """
+[crystal]
+lattice = "cubic"
+a       = 4.0495e-10
+mount_x = [1, 0, 0]
+mount_y = [0, 1, 0]
+mount_z = [0, 0, 1]
+mode = "centered"
+[crystal.centered]
+b = [1, 0, -1]
+n = [1, 1, 1]
+t = [1, -2, 1]
+
+[geometry]
+mode = "simplified"
+"""
+    p = tmp_path / "cubic_simplified.toml"
+    p.write_text(cfg, encoding="utf-8")
+    config = SimulationConfig.from_toml(p)
+    assert config.geometry.mode == "simplified"
+
+
 def test_noncubic_oblique_forward_rejected_until_stage43(tmp_path):
     cfg = (
         HEX_CRYSTAL_LINES

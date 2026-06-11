@@ -473,6 +473,9 @@ def _build_geometry_config(
     mode, eta = _parse_geometry_block(raw.get("geometry"), allow_missing_eta=multi_reflection)
     if mode == "simplified":
         crystal_raw = raw.get("crystal") or {}
+        # A "lattice" key signals an explicit bootstrap-style mount; parse it
+        # (which may surface mount errors simplified mode previously ignored)
+        # so non-cubic cells cannot slip through the cubic-only path.
         if "lattice" in crystal_raw:
             mount = _crystal_mount_from_toml(crystal_raw)
             if not mount.cell.is_cubic:
