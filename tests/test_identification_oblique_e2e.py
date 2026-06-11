@@ -151,3 +151,61 @@ def test_identify_single_oblique_e2e(tmp_path: Path) -> None:
     parsed = tomllib.loads(toml_str)
     assert parsed["geometry"]["mode"] == "oblique"
     assert np.isclose(parsed["geometry"]["eta"], _OBLIQUE_ETA, atol=1e-6)
+
+
+@pytest.mark.slow
+def test_identify_multi_oblique_e2e(tmp_path: Path) -> None:
+    """G1.1 (multi): one Monte-Carlo scene under oblique geometry; per-scan
+    oblique attrs + per-dislocation sample metadata both present."""
+    from dfxm_geo.crystal.oblique import CrystalMount
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        GeometryConfig,
+        IdentificationConfig,
+        IdentificationCrystalConfig,
+        IdentificationMonteCarloConfig,
+        IdentificationNoiseConfig,
+        IOConfig,
+        ReciprocalConfig,
+        ScanConfig,
+    )
+
+    mount = CrystalMount(
+        lattice="cubic",
+        a=4.0493e-10,
+        mount_x=(1, 0, 0),
+        mount_y=(0, 1, 0),
+        mount_z=(0, 0, 1),
+    )
+    cfg = IdentificationConfig(
+        mode="multi",
+        crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, -1)),
+        scan=ScanConfig(phi=AxisScanConfig(value=0.46e-3)),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        multi=IdentificationMonteCarloConfig(n_samples=1, pos_std_um=5.0),
+        geometry=GeometryConfig(
+            mode="oblique",
+            eta=_OBLIQUE_ETA,
+            theta_validated=float(_OBLIQUE_THETA),
+            mount=mount,
+        ),
+        reciprocal=ReciprocalConfig(
+            hkl=(-1, -1, 3),
+            keV=19.1,
+            lattice_a=4.0493e-10,
+            eta=_OBLIQUE_ETA,
+            beamstop=False,
+        ),
+    )
+
+    out = tmp_path / "out"
+    run_identification(cfg, out)
+
+    master = out / "dfxm_identify.h5"
+    assert master.is_file()
+    scan_ids = _assert_oblique_scan_attrs(master)
+    assert scan_ids == ["1.1"]
+    with h5py.File(master, "r") as f:
+        assert f["1.1"].attrs["identify_mode"] == "multi"
+        assert "dislocations" in f["1.1/sample"]
