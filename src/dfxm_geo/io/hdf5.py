@@ -616,6 +616,7 @@ def write_identification_h5(
     kernel_npz: Path | None = None,
     max_workers: int | None = None,
     write_strain_provenance: bool = True,
+    geometry_attrs: dict[str, Any] | None = None,
     ctx: _fm.ForwardContext,
 ) -> int:
     """Drive an identification run: consume ScanSpecs, write master + per-scan dirs.
@@ -631,6 +632,11 @@ def write_identification_h5(
     (matching ``write_simulation_h5``); the tiny ``q_hkl``/``theta``/``psize``/
     ``zl_rms`` scalars are retained. The ``Hg`` dump dominates per-scan size,
     so disable it for batch/ML identification runs.
+
+    `geometry_attrs`: optional geometry provenance attrs
+    (from ``geometry_provenance_attrs``) merged into every scan's attrs —
+    parity with the ``geometry_mode``/``eta``/``theta``/``mount_*`` attrs
+    ``write_simulation_h5`` writes (M2, v2.5.x).
 
     `ctx` is the run's ``ForwardContext`` (#16 Slice 5: required). Per-frame
     rendering uses the ctx carried inside each ``_FrameArgs`` tuple in
@@ -697,7 +703,7 @@ def write_identification_h5(
                 positioners=spec.positioners,
                 detector_links=detector_links,
                 dfxm_geo=dfxm_geo_meta,
-                attrs=spec.attrs,
+                attrs=({**spec.attrs, **geometry_attrs} if geometry_attrs else spec.attrs),
             )
             n_scans += 1
     return n_scans
