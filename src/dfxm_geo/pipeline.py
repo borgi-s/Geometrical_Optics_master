@@ -62,6 +62,7 @@ from dfxm_geo.io.hdf5 import (
     DETECTOR_INTERNAL_PATH,
     SCAN_DIR_FMT,
     ScanSpec,
+    geometry_provenance_attrs,
     load_h5_scan,
     write_identification_h5,
     write_multi_reflection_master,
@@ -2029,6 +2030,7 @@ def _run_identification_single(
         config_toml=config_toml,
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
+        geometry_attrs=_identify_geometry_attrs(config, ctx),
         ctx=ctx,
         reflection_attrs=reflection_attrs,
     )
@@ -2264,6 +2266,7 @@ def _run_identification_multi(
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
+        geometry_attrs=_identify_geometry_attrs(config, ctx),
         ctx=ctx,
         reflection_attrs=reflection_attrs,
     )
@@ -2552,6 +2555,7 @@ def _run_identification_zscan(
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
+        geometry_attrs=_identify_geometry_attrs(config, ctx),
         ctx=ctx,
         reflection_attrs=reflection_attrs,
     )
@@ -2561,6 +2565,18 @@ def _run_identification_zscan(
         "output_dir": output_dir,
         "master_path": output_dir / "dfxm_identify.h5",
     }
+
+
+def _identify_geometry_attrs(
+    config: IdentificationConfig, ctx: fm.ForwardContext
+) -> dict[str, Any]:
+    """Geometry provenance attrs for every /N.1 of an identify run (M2 parity)."""
+    return geometry_provenance_attrs(
+        geometry_mode=config.geometry.mode,
+        eta=config.geometry.eta,
+        theta_0=float(ctx.geometry.theta_0),
+        mount=config.geometry.mount,
+    )
 
 
 def _dispatch_identification(

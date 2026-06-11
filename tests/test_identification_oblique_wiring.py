@@ -185,3 +185,101 @@ def test_oblique_identify_provenance_round_trips_through_toml_str(tmp_path: Path
     assert reloaded.geometry.mode == "oblique"
     assert reloaded.geometry.eta == pytest.approx(_OBLIQUE_ETA, abs=1e-6)
     assert reloaded.geometry.theta_validated == pytest.approx(_OBLIQUE_THETA, abs=1e-3)
+
+
+def _stub_analytic_resolution():
+    """ResolutionContext stub that satisfies the writer's backend guard."""
+    from dfxm_geo.direct_space.forward_model import ResolutionContext
+
+    return ResolutionContext(
+        Resq_i=None,
+        qi1_start=0.0,
+        qi1_step=1.0,
+        qi2_start=0.0,
+        qi2_step=1.0,
+        qi3_start=0.0,
+        qi3_step=1.0,
+        npoints1=None,
+        npoints2=None,
+        npoints3=None,
+        analytic_eval=object(),  # writer guard: needs SOME backend marker
+        loaded_kernel_path=None,
+    )
+
+
+def _run_identify_with_stubbed_forward(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cfg
+) -> Path:
+    """run_identification end-to-end with physics stubbed out (fast)."""
+    import dfxm_geo.direct_space.forward_model as fm
+    import dfxm_geo.pipeline as pipeline_mod
+
+    monkeypatch.setattr(
+        pipeline_mod,
+        "_load_resolution",
+        lambda *a, **k: _stub_analytic_resolution(),
+    )
+    monkeypatch.setattr(fm, "precompute_forward_static", lambda *a, **k: object())
+    monkeypatch.setattr(fm, "forward_from_static", lambda *a, **k: np.ones((170, 510)))
+    out = tmp_path / "out"
+    run_identification(cfg, out)
+    return out / "dfxm_identify.h5"
+
+
+def test_identify_master_scan_attrs_carry_oblique_geometry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """M2 provenance parity: every /N.1 in identify output carries the same
+    geometry attrs block forward output has (geometry_mode/eta/theta/mount)."""
+    import h5py
+
+    p = tmp_path / "oblique_identify.toml"
+    _write_oblique_identify_toml(p)
+    cfg = load_identification_config(p)
+    master = _run_identify_with_stubbed_forward(monkeypatch, tmp_path, cfg)
+
+    with h5py.File(master, "r") as f:
+        scan_ids = [k for k in f if k != "dfxm_geo"]
+        assert scan_ids, "expected at least one scan group"
+        for sid in scan_ids:
+            attrs = f[sid].attrs
+            assert attrs["geometry_mode"] == "oblique"
+            assert np.isclose(float(attrs["eta"]), _OBLIQUE_ETA, atol=1e-6)
+            assert np.isclose(float(attrs["theta"]), _OBLIQUE_THETA, atol=1e-3)
+            assert attrs["lattice"] == "cubic"
+            assert np.isclose(float(attrs["a"]), 4.0493e-10)
+            np.testing.assert_array_equal(attrs["mount_x"], [1, 0, 0])
+            # the pre-existing attrs are still there (merge, not replace)
+            assert attrs["identify_mode"] == "single"
+
+
+def test_identify_master_scan_attrs_simplified_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Back-compat: a simplified identify run writes geometry_mode='simplified',
+    eta=0 (additive attrs; nothing else changes)."""
+    import h5py
+
+    p = tmp_path / "simple_identify.toml"
+    p.write_text(
+        'mode = "single"\n'
+        "[crystal]\n"
+        "slip_plane_normal = [1, 1, -1]\n"
+        "angle_start_deg = 0.0\n"
+        "angle_stop_deg = 0.0\n"
+        "angle_step_deg = 10.0\n"
+        "b_vector_indices = [0]\n"
+        "sweep_all_slip_planes = false\n"
+        "exclude_invisibility = false\n"
+        "[reciprocal]\n"
+        "hkl = [-1, 1, -1]\n"
+        "keV = 17.0\n"
+    )
+    cfg = load_identification_config(p)
+    master = _run_identify_with_stubbed_forward(monkeypatch, tmp_path, cfg)
+
+    with h5py.File(master, "r") as f:
+        sid = next(k for k in f if k != "dfxm_geo")
+        attrs = f[sid].attrs
+        assert attrs["geometry_mode"] == "simplified"
+        assert float(attrs["eta"]) == 0.0
