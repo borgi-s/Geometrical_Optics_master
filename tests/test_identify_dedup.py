@@ -61,6 +61,7 @@ _MULTI_TOML_NO_SOLOS = _MULTI_TOML.replace(
 
 def _spy_scene_calls(monkeypatch, toml_text: str, tmp_path: Path) -> list[dict]:
     """Run one identify config with find_hg_scene wrapped in a recording spy."""
+    import dfxm_geo.orchestrator as orch
     import dfxm_geo.pipeline as pipeline
 
     calls: list[dict] = []
@@ -74,8 +75,10 @@ def _spy_scene_calls(monkeypatch, toml_text: str, tmp_path: Path) -> list[dict]:
         )
         return _real_scene(rl_um, Us, specs, Theta, **kwargs)
 
-    # The orchestrators call the name imported into the pipeline namespace.
-    monkeypatch.setattr(pipeline, "find_hg_scene", spy)
+    # The orchestrators call the name imported into the orchestrator namespace
+    # (refactor gate); patch it there. run_identification is still driven through
+    # the pipeline facade below.
+    monkeypatch.setattr(orch, "find_hg_scene", spy)
 
     cfg_path = tmp_path / "cfg.toml"
     cfg_path.write_text(toml_text, encoding="utf-8")

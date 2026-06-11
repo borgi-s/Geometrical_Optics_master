@@ -86,7 +86,7 @@ def test_per_dis_renders_are_positioned(tmp_path: Path, monkeypatch) -> None:
     HDF5-stored values.
     """
     _require_kernel()
-    import dfxm_geo.pipeline as pipeline
+    import dfxm_geo.orchestrator as pipeline
     from dfxm_geo.crystal.dislocations import find_hg_scene as _real_scene
 
     captured_specs: list = []
