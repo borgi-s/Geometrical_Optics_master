@@ -2738,12 +2738,21 @@ def cli_main_identify(argv: list[str] | None = None) -> int:
         cfg.__post_init__()  # re-run validation
 
     result = run_identification(cfg, args.output)
-    if cfg.mode == "single":
-        print(f"Wrote {result['n_images']} images to {result['output_dir']}")
-    elif cfg.mode == "multi":
-        print(f"Wrote {result['n_samples']} samples to {result['output_dir']}")
-    else:  # z-scan
-        print(f"Wrote {result['n_configurations']} configurations to {result['output_dir']}")
+    count_key, noun = {
+        "single": ("n_images", "images"),
+        "multi": ("n_samples", "samples"),
+        "z-scan": ("n_configurations", "configurations"),
+    }[cfg.mode]
+    if "n_reflections" in result:
+        # Multi-reflection return shape: per-reflection results nested under
+        # "reflections" (one reflection_NNN/ master each) + a super-master.
+        total = sum(r[count_key] for r in result["reflections"])
+        print(
+            f"Wrote {total} {noun} across {result['n_reflections']} reflections "
+            f"to {args.output} (per-reflection masters in reflection_NNN/)"
+        )
+    else:
+        print(f"Wrote {result[count_key]} {noun} to {result['output_dir']}")
     return 0
 
 
