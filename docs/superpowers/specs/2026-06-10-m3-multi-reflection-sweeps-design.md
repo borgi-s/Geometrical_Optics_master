@@ -53,6 +53,12 @@ v2.5.1 (2026-06-10):
 
 ## 3. THE open decision — ω handling (for Sina)
 
+> **DECIDED 2026-06-11: B′** (Sina, "go" on the recommended default). ω is
+> applied at the projection step (`Us_eff = R_z(ω) @ Us`), Hg stays shared
+> within a run; the per-reflection adjustment is isolated in one function so
+> a later full-ω upgrade stays contained. The option table below is kept as
+> the decision record.
+
 How much of the per-reflection crystal reorientation ω enters the image
 formation? This was the exact question the 2026-05-29 Phase-B brainstorm
 paused on (the "end goal" question, never resumed; the roadmap's step-3
