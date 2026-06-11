@@ -4,7 +4,7 @@ import tomllib
 
 import pytest
 
-from dfxm_geo.reciprocal_space.kernel import _crystal_mount_from_toml
+from dfxm_geo.reciprocal_space.kernel import _crystal_mount_from_toml, cli_main
 
 
 def test_paper_al_crystal_block_parses() -> None:
@@ -76,3 +76,28 @@ class TestNonCubicCrystalBlock:
                     "mount_z": [0, 0, 1],
                 }
             )
+
+
+def test_bootstrap_noncubic_simplified_rejected(tmp_path, capsys):
+    cfg_text = """
+[reciprocal]
+hkl = [1, 0, 0]
+keV = 17.0
+
+[geometry]
+mode = "simplified"
+
+[crystal]
+lattice = "hexagonal"
+a       = 3.2094e-10
+c       = 5.2108e-10
+mount_x = [2, -1, 0]
+mount_y = [0, 1, 0]
+mount_z = [0, 0, 1]
+"""
+    p = tmp_path / "hex.toml"
+    p.write_text(cfg_text, encoding="utf-8")
+    rc = cli_main(["--config", str(p)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "non-cubic" in err and "oblique" in err

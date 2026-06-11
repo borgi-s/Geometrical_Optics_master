@@ -472,9 +472,25 @@ def _build_geometry_config(
 
     mode, eta = _parse_geometry_block(raw.get("geometry"), allow_missing_eta=multi_reflection)
     if mode == "simplified":
+        crystal_raw = raw.get("crystal") or {}
+        if "lattice" in crystal_raw:
+            mount = _crystal_mount_from_toml(crystal_raw)
+            if not mount.cell.is_cubic:
+                raise ValueError(
+                    "non-cubic [crystal] cells require [geometry] mode='oblique' "
+                    "(simplified mode hardwires the cubic symmetric geometry)."
+                )
         return GeometryConfig(mode="simplified")
 
     mount = _crystal_mount_from_toml(raw.get("crystal"))
+
+    if not mount.cell.is_cubic:
+        raise ValueError(
+            "non-cubic cells are not yet supported in the forward/identify "
+            "pipeline (lands in M4 Stage 4.3 with general slip systems). "
+            "Stage 4.1 supports non-cubic lattices in dfxm-bootstrap and "
+            "dfxm-find-reflections."
+        )
 
     if multi_reflection:
         # Per-entry angles resolved by _parse_reflections_tables; return a

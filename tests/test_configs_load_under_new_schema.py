@@ -7,6 +7,21 @@ import pytest
 from dfxm_geo.data import configs_root
 from dfxm_geo.pipeline import SimulationConfig, load_identification_config
 
+HEX_CRYSTAL_LINES = """
+[crystal]
+lattice = "hexagonal"
+a       = 3.2094e-10
+c       = 5.2108e-10
+mount_x = [2, -1, 0]
+mount_y = [0, 1, 0]
+mount_z = [0, 0, 1]
+mode = "centered"
+[crystal.centered]
+b = [1, 0, -1]
+n = [1, 1, 1]
+t = [1, -2, 1]
+"""
+
 CONFIGS_DIR = configs_root()
 
 
@@ -39,3 +54,32 @@ def test_identification_config_loads(config_name: str) -> None:
     path = CONFIGS_DIR / config_name
     cfg = load_identification_config(path)
     assert cfg.mode in ("single", "multi", "z-scan")
+
+
+def test_noncubic_simplified_mode_rejected(tmp_path):
+    cfg = (
+        HEX_CRYSTAL_LINES
+        + """
+[geometry]
+mode = "simplified"
+"""
+    )
+    p = tmp_path / "hex_simplified.toml"
+    p.write_text(cfg, encoding="utf-8")
+    with pytest.raises(ValueError, match="non-cubic .* require .*oblique"):
+        SimulationConfig.from_toml(p)
+
+
+def test_noncubic_oblique_forward_rejected_until_stage43(tmp_path):
+    cfg = (
+        HEX_CRYSTAL_LINES
+        + """
+[geometry]
+mode = "oblique"
+eta = 0.0
+"""
+    )
+    p = tmp_path / "hex_oblique.toml"
+    p.write_text(cfg, encoding="utf-8")
+    with pytest.raises(ValueError, match="Stage 4.3"):
+        SimulationConfig.from_toml(p)

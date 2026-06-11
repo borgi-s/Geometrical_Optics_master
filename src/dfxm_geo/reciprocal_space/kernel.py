@@ -779,6 +779,14 @@ def cli_main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    if not mount.cell.is_cubic and mode == "simplified":
+        print(
+            "error: non-cubic [crystal] cells require [geometry] mode='oblique' "
+            "(simplified mode hardwires the cubic symmetric geometry).",
+            file=sys.stderr,
+        )
+        return 1
+
     # -------------------------------------------------------------------------
     # Multi-reflection branch: [[reflections]] / [reflections_auto]
     # -------------------------------------------------------------------------
