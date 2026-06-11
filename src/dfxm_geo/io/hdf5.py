@@ -574,6 +574,39 @@ def _scan_title_from_frames(frames: ScanFrames, phi_steps: int, chi_steps: int) 
     )
 
 
+def geometry_provenance_attrs(
+    *,
+    geometry_mode: str,
+    eta: float,
+    theta_0: float,
+    mount: CrystalMount | None,
+) -> dict[str, Any]:
+    """Per-scan geometry provenance attrs (oblique-angle arc, v2.3.0+).
+
+    Single source for the attrs block written on every /N.1 scan group by
+    BOTH write_simulation_h5 and write_identification_h5. eta=0 /
+    "simplified" reproduces the v2.2.0 forward behaviour; mount=None
+    defaults to the Al identity mount.
+    """
+    resolved: CrystalMount
+    if mount is not None:
+        resolved = mount
+    else:
+        from dfxm_geo.reciprocal_space.kernel import _DEFAULT_AL_CRYSTAL
+
+        resolved = _DEFAULT_AL_CRYSTAL
+    return {
+        "geometry_mode": geometry_mode,
+        "eta": float(eta),
+        "theta": float(theta_0),
+        "lattice": resolved.lattice,
+        "a": float(resolved.a),
+        "mount_x": np.array(resolved.mount_x, dtype=np.int64),
+        "mount_y": np.array(resolved.mount_y, dtype=np.int64),
+        "mount_z": np.array(resolved.mount_z, dtype=np.int64),
+    }
+
+
 def write_identification_h5(
     output_dir: Path,
     *,
@@ -772,21 +805,14 @@ def write_simulation_h5(
         attrs_1_1["crystal_mode"] = crystal_mode
 
     # Oblique-angle provenance (v2.3.0+). eta=0 / simplified for v2.2.0 configs.
-    _resolved_mount: CrystalMount
-    if mount is not None:
-        _resolved_mount = mount
-    else:
-        from dfxm_geo.reciprocal_space.kernel import _DEFAULT_AL_CRYSTAL
-
-        _resolved_mount = _DEFAULT_AL_CRYSTAL
-    attrs_1_1["geometry_mode"] = geometry_mode
-    attrs_1_1["eta"] = float(eta)
-    attrs_1_1["theta"] = float(_ctx.geometry.theta_0)
-    attrs_1_1["lattice"] = _resolved_mount.lattice
-    attrs_1_1["a"] = float(_resolved_mount.a)
-    attrs_1_1["mount_x"] = np.array(_resolved_mount.mount_x, dtype=np.int64)
-    attrs_1_1["mount_y"] = np.array(_resolved_mount.mount_y, dtype=np.int64)
-    attrs_1_1["mount_z"] = np.array(_resolved_mount.mount_z, dtype=np.int64)
+    attrs_1_1.update(
+        geometry_provenance_attrs(
+            geometry_mode=geometry_mode,
+            eta=eta,
+            theta_0=float(_ctx.geometry.theta_0),
+            mount=mount,
+        )
+    )
 
     # Build positioners dict once; reused for both /1.1 and /2.1 add_scan calls.
     if positioners is None:
