@@ -86,3 +86,19 @@ def test_context_for_run_q_hkl_direction(run113):
     # Parallel to hkl
     h = np.asarray(run113.hkl, dtype=float)
     assert np.abs(np.dot(q, h / np.linalg.norm(h))) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_analytic_with_beamstop_rejected_through_helper(run113):
+    """_resolution_for_run must propagate the analytic+beamstop ValueError from
+    _load_resolution — the guard must not be silently bypassed for multi-reflection
+    runs."""
+    geom = GeometryConfig(mode="oblique", eta=0.0, mount=MOUNT)
+    recip = ReciprocalConfig(
+        hkl=(1, 1, 3),
+        keV=19.1,
+        backend="analytic",
+        beamstop=True,
+        lattice_a=4.0493e-10,
+    )
+    with pytest.raises(ValueError, match="beamstop"):
+        _resolution_for_run(recip, geom, run113)

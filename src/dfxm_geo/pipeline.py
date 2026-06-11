@@ -919,7 +919,10 @@ def run_theta(config: SimulationConfig | IdentificationConfig) -> float:
 
 
 def _load_resolution(
-    config: ReciprocalConfig, geometry: GeometryConfig | None = None
+    config: ReciprocalConfig,
+    geometry: GeometryConfig | None = None,
+    *,
+    skip_hkl_check: bool = False,
 ) -> fm.ResolutionContext:
     """Select and load the resolution backend per config (spec sec. 5.4).
 
@@ -931,6 +934,10 @@ def _load_resolution(
     ``geometry.mode == 'oblique'``; the analytic backend reads ``eta`` straight
     off ``config`` (already propagated from [geometry] by
     SimulationConfig.from_toml). Defaults to simplified when omitted.
+
+    ``skip_hkl_check`` is forwarded to ``_lookup_and_load_kernel`` for
+    multi-reflection group members whose kernel was bootstrapped for the group
+    representative's hkl (spec §6). Single-reflection callers leave this False.
 
     Returns:
         ResolutionContext snapshotting the loaded/cached backend. Threaded into
@@ -950,7 +957,9 @@ def _load_resolution(
     # so forward() reads ctx.resolution — no module-global toggling needed.
     if use_analytic:
         return fm._load_analytic_resolution(config)
-    return _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
+    return _lookup_and_load_kernel(
+        config.hkl, config.keV, geometry=geometry, skip_hkl_check=skip_hkl_check
+    )
 
 
 def _resolution_for_run(
@@ -960,6 +969,14 @@ def _resolution_for_run(
 ) -> fm.ResolutionContext:
     """Per-reflection resolution: build a run-specific (ReciprocalConfig,
     GeometryConfig) pair and delegate to ``_load_resolution``.
+
+    Constructs ``recip_run`` (hkl and eta overridden to the run's values) and
+    ``geom_run`` (oblique mode pinned to run.theta/run.eta/run.omega), then
+    calls ``_load_resolution(recip_run, geom_run, skip_hkl_check=True)``.
+
+    Full backend dispatch — including the ``backend='analytic' + beamstop=True``
+    ValueError guard — is inherited from ``_load_resolution``.  No dispatch logic
+    is duplicated here.
 
     For the analytic backend the per-run hkl drives the Bragg-angle derivation
     (via ``_load_analytic_resolution``), and the per-run eta feeds the analytic
@@ -981,12 +998,9 @@ def _resolution_for_run(
     )
     # For the MC path the group kernel's bundled hkl is the representative's,
     # not necessarily run.hkl — bypass the per-hkl metadata check (spec §6).
-    use_analytic = recip_run.backend == "analytic" or (
-        recip_run.backend == "auto" and not recip_run.beamstop
-    )
-    if use_analytic:
-        return fm._load_analytic_resolution(recip_run)
-    return _lookup_and_load_kernel(run.hkl, run.keV, geometry=geom_run, skip_hkl_check=True)
+    # All other dispatch (including the analytic+beamstop guard) is handled by
+    # _load_resolution — no duplicate logic here.
+    return _load_resolution(recip_run, geom_run, skip_hkl_check=True)
 
 
 def _context_for_run(
