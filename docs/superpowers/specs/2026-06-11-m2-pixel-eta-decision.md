@@ -1,6 +1,9 @@
 # M2 decision: pixel-level R_x(eta) in forward() — implement or accept?
 
-**Status: OPEN — Sina's call.** This is roadmap gaps G1.4/G1.5; the decision
+**Status: DECIDED 2026-06-11 — Option B (accept + document), per Sina.**
+Accept-paragraph copied into the 2026-05-29 rescope spec as a closing note;
+the M2 "decision recorded" DoD box is ticked. The analysis below is kept
+as the record of the options. This was roadmap gaps G1.4/G1.5; the decision
 changes M2's scope by ~a week and is required by the M2 DoD ("decision
 recorded ... either implement pixel-level eta or document the ~4 %
 approximation as accepted").
@@ -44,8 +47,8 @@ darkmod parity work in auto-memory darkmod_analytic_resolution_parity).
 
 ## Decision
 
-- [ ] Option A (implement G1.4; G1.5 yes/no separately)
-- [x] **Option B (accept + document) — recommended** _(pending Sina)_
+- [ ] Option A (implement G1.4; G1.5 yes/no separately) — declined 2026-06-11
+- [x] **Option B (accept + document)** — DECIDED by Sina 2026-06-11
 
 Once decided: if B, copy the "accept" paragraph into
 docs/superpowers/specs/2026-05-29-v230-oblique-ship-gate-rescope.md as a

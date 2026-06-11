@@ -77,3 +77,24 @@ darkmod replacement. The oblique arc's real deliverables are: (1) don't break
 simplified mode, (2) get the η physics right where dfxm actually models it — the
 resolution, (3) produce sensible oblique images. Gates A/B/C test exactly those.
 Pixel-matching darkmod's Fig 3 is neither achievable with this model nor the point.
+
+## CLOSING NOTE (2026-06-11): pixel-level eta DECIDED - accepted approximation
+
+Roadmap M2 gaps G1.4/G1.5 are CLOSED as **Option B: accept + document**
+(Sina, 2026-06-11; full options analysis in
+`2026-06-11-m2-pixel-eta-decision.md`). The ~3.9 % residual on the thinnest
+covariance eigenvalue of the resolution function (eta entering ONLY via the
+resolution kernel, no pixel-level R_x(eta) in the direct-space ray grid) is
+an ACCEPTED approximation of dfxm_geo's forward model. Rationale: contrast
+statistics (the ML-training-data consumer) are unaffected; M3's B-prime
+omega model is deliberately first-order at the same level; the gap is
+confined to the resolution function's narrowest axis.
+
+**Revisit triggers** (would reopen as G1.4 implement, 3-5 d + darkmod
+parity re-validation; +2-3 d for the G1.5 eta-weave): any quantitative
+pixel-level oblique comparison against darkmod or measured Fig-3-class
+data (e.g. a paper figure), or M4/CIF-era non-cubic reflections where the
+approximation is unvalidated.
+
+With this, the M2 "decision recorded" DoD box is ticked and M2 oblique
+full compatibility is 100 % closed.
