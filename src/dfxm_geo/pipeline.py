@@ -831,6 +831,7 @@ def _lookup_and_load_kernel(
     keV: float,
     *,
     geometry: GeometryConfig | None = None,
+    skip_hkl_check: bool = False,
 ) -> fm.ResolutionContext:
     """Pre-flight: look up the kernel npz for this geometry and load it.
 
@@ -854,6 +855,13 @@ def _lookup_and_load_kernel(
 
     Raises KeyError on lookup miss, ValueError on metadata mismatch,
     KeyError on pre-sub-project-D legacy npz lacking metadata.
+
+    Args:
+        skip_hkl_check: Pass True for multi-reflection group members whose
+            kernel was bootstrapped for the group REPRESENTATIVE's hkl (the
+            LUT covers the group, not one hkl — spec §6). Single-reflection
+            callers always leave this False so the sub-project-D metadata guard
+            remains active.
 
     Returns:
         ResolutionContext snapshotting the newly (or previously) loaded kernel.
@@ -881,7 +889,7 @@ def _lookup_and_load_kernel(
         return cached
     res = fm._load_default_kernel(
         str(target),
-        expected_hkl=hkl,
+        expected_hkl=None if skip_hkl_check else hkl,
         expected_keV=keV,
     )
     _KERNEL_CTX_CACHE[target] = res
@@ -942,6 +950,54 @@ def _load_resolution(
     if use_analytic:
         return fm._load_analytic_resolution(config)
     return _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
+
+
+def _resolution_for_run(
+    reciprocal: ReciprocalConfig,
+    geometry: GeometryConfig,
+    run: _ReflectionRun,
+) -> fm.ResolutionContext:
+    """Per-reflection resolution: build a run-specific (ReciprocalConfig,
+    GeometryConfig) pair and delegate to ``_load_resolution``.
+
+    For the analytic backend the per-run hkl drives the Bragg-angle derivation
+    (via ``_load_analytic_resolution``), and the per-run eta feeds the analytic
+    resolution function.  For the MC backend the group kernel is looked up by
+    (run.theta, run.eta, keV) — the kernel's bundled hkl metadata is the
+    bootstrap group REPRESENTATIVE's hkl, which may differ from run.hkl for
+    group members; the hkl metadata check is therefore relaxed with
+    ``skip_hkl_check=True`` (the (theta, eta, keV) match is the contract, spec §6).
+    Single-reflection callers go through ``_load_resolution`` directly and keep
+    the sub-project-D hkl guard active.
+    """
+    recip_run = replace(reciprocal, hkl=run.hkl, eta=run.eta)
+    geom_run = GeometryConfig(
+        mode="oblique",
+        eta=run.eta,
+        theta_validated=run.theta,
+        omega=run.omega,
+        mount=geometry.mount,
+    )
+    # For the MC path the group kernel's bundled hkl is the representative's,
+    # not necessarily run.hkl — bypass the per-hkl metadata check (spec §6).
+    use_analytic = recip_run.backend == "analytic" or (
+        recip_run.backend == "auto" and not recip_run.beamstop
+    )
+    if use_analytic:
+        return fm._load_analytic_resolution(recip_run)
+    return _lookup_and_load_kernel(run.hkl, run.keV, geometry=geom_run, skip_hkl_check=True)
+
+
+def _context_for_run(
+    res: fm.ResolutionContext,
+    run: _ReflectionRun,
+) -> fm.ForwardContext:
+    """Build a ``ForwardContext`` for a single ``ReflectionRun``.
+
+    Wraps ``fm.build_forward_context`` with the run's Bragg angle, hkl, and
+    omega so the orchestrator loop has a single call-site.
+    """
+    return fm.build_forward_context(run.theta, res, run.hkl, omega=run.omega)
 
 
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
