@@ -110,3 +110,78 @@ class UnitCell:
             return float(self.a / np.sqrt(h * h + k * k + l * l))
         g = self.B @ np.array([h, k, l], dtype=float)
         return float(2.0 * np.pi / np.linalg.norm(g))
+
+    @classmethod
+    def from_lattice(
+        cls,
+        lattice: str,
+        *,
+        a: float,
+        b: float | None = None,
+        c: float | None = None,
+        alpha_deg: float | None = None,
+        beta_deg: float | None = None,
+        gamma_deg: float | None = None,
+    ) -> UnitCell:
+        """Build a UnitCell from a lattice-system name, filling constrained params.
+
+        Per-system rules (a constrained parameter may be omitted or must equal
+        the constrained value; a free parameter is required):
+
+        - cubic:        b = c = a; alpha = beta = gamma = 90
+        - tetragonal:   b = a; c free; angles 90
+        - orthorhombic: b, c free; angles 90
+        - hexagonal:    b = a; c free; alpha = beta = 90, gamma = 120
+        - trigonal:     rhombohedral setting — b = c = a; alpha free,
+          beta = gamma = alpha. (Hexagonal-setting trigonal cells: use
+          lattice = "hexagonal".)
+        - monoclinic:   b, c free; beta free; alpha = gamma = 90
+        - triclinic:    all six free
+        """
+        if lattice not in _LATTICE_SYSTEMS:
+            raise ValueError(f"unknown lattice {lattice!r}; expected one of {_LATTICE_SYSTEMS}.")
+
+        def _fill(name: str, given: float | None, constrained: float | None) -> float:
+            if constrained is None:
+                if given is None:
+                    raise ValueError(f"[crystal] lattice={lattice!r} requires {name}.")
+                return float(given)
+            if given is not None and float(given) != constrained:
+                raise ValueError(
+                    f"[crystal] lattice={lattice!r} constrains {name}={constrained:g}; "
+                    f"got {given!r}. Omit it or fix the lattice label."
+                )
+            return constrained
+
+        # (b, c, alpha, beta, gamma) constraints; None = free (required).
+        spec: tuple[float | None, float | None, float | None, float | None, float | None]
+        if lattice == "cubic":
+            spec = (a, a, 90.0, 90.0, 90.0)
+        elif lattice == "tetragonal":
+            spec = (a, None, 90.0, 90.0, 90.0)
+        elif lattice == "orthorhombic":
+            spec = (None, None, 90.0, 90.0, 90.0)
+        elif lattice == "hexagonal":
+            spec = (a, None, 90.0, 90.0, 120.0)
+        elif lattice == "trigonal":
+            if alpha_deg is None:
+                raise ValueError(
+                    "[crystal] lattice='trigonal' requires alpha_deg "
+                    "(rhombohedral setting; use lattice='hexagonal' for the "
+                    "hexagonal setting)."
+                )
+            spec = (a, a, float(alpha_deg), float(alpha_deg), float(alpha_deg))
+        elif lattice == "monoclinic":
+            spec = (None, None, 90.0, None, 90.0)
+        else:  # triclinic
+            spec = (None, None, None, None, None)
+
+        cb_, cc_, c_alpha, c_beta, c_gamma = spec
+        return cls(
+            a=float(a),
+            b=_fill("b", b, cb_),
+            c=_fill("c", c, cc_),
+            alpha_deg=_fill("alpha_deg", alpha_deg, c_alpha),
+            beta_deg=_fill("beta_deg", beta_deg, c_beta),
+            gamma_deg=_fill("gamma_deg", gamma_deg, c_gamma),
+        )

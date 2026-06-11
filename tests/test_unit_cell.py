@@ -93,3 +93,54 @@ class TestValidation:
         # alpha=10, beta=10, gamma=170 has no real cell volume
         with pytest.raises(ValueError, match="do not form a valid cell"):
             UnitCell(a=1e-10, b=1e-10, c=1e-10, alpha_deg=10.0, beta_deg=10.0, gamma_deg=170.0)
+
+
+class TestFromLattice:
+    def test_cubic_fills_everything(self):
+        cell = UnitCell.from_lattice("cubic", a=A_AL)
+        assert cell == UnitCell.cubic(A_AL)
+
+    def test_hexagonal_fills_b_and_angles(self):
+        cell = UnitCell.from_lattice("hexagonal", a=MG_A, c=MG_C)
+        assert cell.b == MG_A
+        assert (cell.alpha_deg, cell.beta_deg, cell.gamma_deg) == (90.0, 90.0, 120.0)
+
+    def test_hexagonal_missing_c_rejected(self):
+        with pytest.raises(ValueError, match="requires c"):
+            UnitCell.from_lattice("hexagonal", a=MG_A)
+
+    def test_cubic_conflicting_gamma_rejected(self):
+        with pytest.raises(ValueError, match="constrains gamma_deg=90"):
+            UnitCell.from_lattice("cubic", a=A_AL, gamma_deg=120.0)
+
+    def test_tetragonal(self):
+        cell = UnitCell.from_lattice("tetragonal", a=3e-10, c=5e-10)
+        assert (cell.b, cell.c) == (3e-10, 5e-10)
+        assert (cell.alpha_deg, cell.beta_deg, cell.gamma_deg) == (90.0, 90.0, 90.0)
+
+    def test_orthorhombic_requires_b_and_c(self):
+        with pytest.raises(ValueError, match="requires b"):
+            UnitCell.from_lattice("orthorhombic", a=3e-10, c=5e-10)
+
+    def test_trigonal_rhombohedral_setting(self):
+        cell = UnitCell.from_lattice("trigonal", a=4e-10, alpha_deg=85.0)
+        assert (cell.b, cell.c) == (4e-10, 4e-10)
+        assert (cell.alpha_deg, cell.beta_deg, cell.gamma_deg) == (85.0, 85.0, 85.0)
+
+    def test_trigonal_missing_alpha_rejected(self):
+        with pytest.raises(ValueError, match="requires alpha_deg"):
+            UnitCell.from_lattice("trigonal", a=4e-10)
+
+    def test_monoclinic(self):
+        cell = UnitCell.from_lattice("monoclinic", a=5e-10, b=6e-10, c=7e-10, beta_deg=101.0)
+        assert (cell.alpha_deg, cell.beta_deg, cell.gamma_deg) == (90.0, 101.0, 90.0)
+
+    def test_triclinic_requires_all_six(self):
+        with pytest.raises(ValueError, match="requires alpha_deg"):
+            UnitCell.from_lattice(
+                "triclinic", a=5e-10, b=6e-10, c=7e-10, beta_deg=98.0, gamma_deg=105.0
+            )
+
+    def test_unknown_lattice_rejected(self):
+        with pytest.raises(ValueError, match="unknown lattice"):
+            UnitCell.from_lattice("bcc", a=A_AL)
