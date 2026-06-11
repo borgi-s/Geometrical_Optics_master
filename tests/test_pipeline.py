@@ -310,7 +310,7 @@ class TestRunPostprocess:
         # Stub resolution loading too — forward() is mocked, so the ctx never
         # needs a real kernel, and CI runs without one on disk (same pattern
         # as test_missing_hg_raises).
-        monkeypatch.setattr("dfxm_geo.pipeline._load_resolution", lambda *a, **k: None)
+        monkeypatch.setattr("dfxm_geo.orchestrator._load_resolution", lambda *a, **k: None)
         # Shrink the instrument ray-grid steps so plot_qi_cross_section indexes
         # the fake (4,4,4) qi_field consistently. These are kept module-level
         # constants; xl_start is now derived per-reflection in ctx.geometry, and
@@ -389,7 +389,7 @@ class TestRunPostprocess:
         # Stub resolution loading so the (kernel-independent) Hg-resolution guard
         # is what trips; #16 Slice 5 removed the fm.Hg module-global fallback, so
         # the HDF5 simply has no /1.1/dfxm_geo/Hg to recover.
-        monkeypatch.setattr("dfxm_geo.pipeline._load_resolution", lambda *a, **k: None)
+        monkeypatch.setattr("dfxm_geo.orchestrator._load_resolution", lambda *a, **k: None)
         with pytest.raises(RuntimeError, match="Cannot postprocess"):
             run_postprocess(output_dir, config)
 

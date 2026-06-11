@@ -58,7 +58,7 @@ from pathlib import Path
 
 import dfxm_geo.direct_space.forward_model as fm
 import dfxm_geo.io.hdf5 as hdf5
-import dfxm_geo.pipeline as pipeline
+import dfxm_geo.orchestrator as orchestrator
 from dfxm_geo.pipeline import load_identification_config, run_identification
 
 
@@ -89,18 +89,21 @@ def _wrap(fn, acc: _Acc):
 
 
 # stage name -> (module, attribute). Patched at the call-site module so the
-# pipeline's module-global lookups hit the wrapper.
+# orchestration's module-global lookups hit the wrapper. Refactor gate
+# (2026-06-11): the call sites live in dfxm_geo.orchestrator — patching the
+# pipeline FACADE would install timers on dead re-export bindings that the
+# orchestrator's bare-name lookups never consult (timers would read 0.0 s).
 # Post-W2 (v2.6.0): Fd_find_mixed / Fd_find_multi_dislocs_mixed / fast_inverse2
-# were replaced by the single find_hg_scene seam imported into pipeline's
-# namespace — one wrap now covers single, multi AND zscan modes.
+# were replaced by the single find_hg_scene seam imported into the
+# orchestrator's namespace — one wrap covers single, multi AND zscan modes.
 _STAGE_SITES = {
-    "kernel_load": (pipeline, "_lookup_and_load_kernel"),
-    "find_hg_scene": (pipeline, "find_hg_scene"),
+    "kernel_load": (orchestrator, "_lookup_and_load_kernel"),
+    "find_hg_scene": (orchestrator, "find_hg_scene"),
     "z_shift": (fm, "Z_shift"),
     "precompute": (fm, "precompute_forward_static"),
     "frames": (hdf5, "_compute_frame"),
-    "writer": (pipeline, "write_identification_h5"),
-    "poisson": (pipeline, "_maybe_apply_poisson_noise"),
+    "writer": (orchestrator, "write_identification_h5"),
+    "poisson": (orchestrator, "_maybe_apply_poisson_noise"),
 }
 
 

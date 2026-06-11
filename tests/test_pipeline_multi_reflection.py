@@ -59,11 +59,12 @@ class TestForwardMultiReflection:
         in _lookup_and_load_kernel could (in pathological cases) skip a
         reload it should perform.
         """
-        import dfxm_geo.pipeline as p
+        import dfxm_geo.orchestrator as orch
 
         # #16 Slice 5: the per-process kernel-path global is gone; idempotency is
-        # the module-level _KERNEL_CTX_CACHE, so clear it to avoid cross-test bleed.
-        monkeypatch.setattr(p, "_KERNEL_CTX_CACHE", {})
+        # the module-level _KERNEL_CTX_CACHE, which now lives in dfxm_geo.orchestrator
+        # (refactor gate). Clear it to avoid cross-test bleed.
+        monkeypatch.setattr(orch, "_KERNEL_CTX_CACHE", {})
 
     def test_happy_path_with_explicit_hkl(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -71,6 +72,7 @@ class TestForwardMultiReflection:
         """run_simulation looks up the kernel from [reciprocal].hkl/keV, loads it,
         runs the (monkey-patched) forward, records actual loaded path in module state."""
         import dfxm_geo.direct_space.forward_model as fm
+        import dfxm_geo.orchestrator as orch
         import dfxm_geo.pipeline as p
         from dfxm_geo.pipeline import SimulationConfig
 
@@ -88,10 +90,12 @@ class TestForwardMultiReflection:
         monkeypatch.setattr(fm, "Find_Hg", lambda *a, **k: (np.zeros((4, 4, 4)), np.zeros(3)))
         _captured: dict[str, object] = {}
         monkeypatch.setattr(
-            p,
+            orch,
             "write_simulation_h5",
             # #16 Slice 5: the loaded kernel path now rides on the run's ctx
             # (ctx.resolution.loaded_kernel_path), not a module global.
+            # Refactor gate: the orchestrator calls write_simulation_h5 via its
+            # own bare-name binding, so the patch targets dfxm_geo.orchestrator.
             lambda *a, **k: _captured.__setitem__("path", k["ctx"].resolution.loaded_kernel_path),
         )
 
@@ -181,11 +185,12 @@ class TestRunSimulationCrystalModes:
     @pytest.fixture(autouse=True)
     def _reset_kernel_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Reset fm module-level state between tests."""
-        import dfxm_geo.pipeline as p
+        import dfxm_geo.orchestrator as orch
 
         # #16 Slice 5: the per-process kernel-path global is gone; idempotency is
-        # the module-level _KERNEL_CTX_CACHE, so clear it to avoid cross-test bleed.
-        monkeypatch.setattr(p, "_KERNEL_CTX_CACHE", {})
+        # the module-level _KERNEL_CTX_CACHE, which now lives in dfxm_geo.orchestrator
+        # (refactor gate). Clear it to avoid cross-test bleed.
+        monkeypatch.setattr(orch, "_KERNEL_CTX_CACHE", {})
 
     def _make_kernel(self, tmp_path: Path) -> Path:
         return _make_kernel_npz(

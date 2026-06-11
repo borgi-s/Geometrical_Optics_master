@@ -113,9 +113,9 @@ def test_run_identification_threads_eta_for_each_sub_mode(
     stub_result: dict[str, Any] = {"n_images": 0, "output_dir": tmp_path}
 
     runner_map = {
-        "single": "dfxm_geo.pipeline._run_identification_single",
-        "multi": "dfxm_geo.pipeline._run_identification_multi",
-        "z-scan": "dfxm_geo.pipeline._run_identification_zscan",
+        "single": "dfxm_geo.orchestrator._run_identification_single",
+        "multi": "dfxm_geo.orchestrator._run_identification_multi",
+        "z-scan": "dfxm_geo.orchestrator._run_identification_zscan",
     }
 
     captured: dict[str, Any] = {}

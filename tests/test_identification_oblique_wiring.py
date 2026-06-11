@@ -153,8 +153,8 @@ def test_run_identification_threads_geometry(
         captured["ctx_theta"] = ctx.geometry.theta_0
         return {"n_images": 0, "output_dir": output_dir}
 
-    monkeypatch.setattr("dfxm_geo.pipeline._load_resolution", fake_load_resolution)
-    monkeypatch.setattr("dfxm_geo.pipeline._run_identification_single", fake_single)
+    monkeypatch.setattr("dfxm_geo.orchestrator._load_resolution", fake_load_resolution)
+    monkeypatch.setattr("dfxm_geo.orchestrator._run_identification_single", fake_single)
 
     cfg = IdentificationConfig(
         mode="single",
@@ -212,10 +212,10 @@ def _run_identify_with_stubbed_forward(
 ) -> Path:
     """run_identification end-to-end with physics stubbed out (fast)."""
     import dfxm_geo.direct_space.forward_model as fm
-    import dfxm_geo.pipeline as pipeline_mod
+    import dfxm_geo.orchestrator as orch
 
     monkeypatch.setattr(
-        pipeline_mod,
+        orch,
         "_load_resolution",
         lambda *a, **k: _stub_analytic_resolution(),
     )

@@ -398,10 +398,12 @@ def test_run_identification_dispatches_to_single(tmp_path, monkeypatch):
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
-    from dfxm_geo import pipeline
+    from dfxm_geo import orchestrator
 
     monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
-    monkeypatch.setattr(pipeline, "_load_resolution", lambda *args, **kwargs: _stub_resolution())
+    monkeypatch.setattr(
+        orchestrator, "_load_resolution", lambda *args, **kwargs: _stub_resolution()
+    )
 
     cfg = _tiny_single_config(tmp_path)
     result = run_identification(cfg, tmp_path / "out")
@@ -412,10 +414,12 @@ def test_run_identification_dispatches_to_multi(tmp_path, monkeypatch):
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
-    from dfxm_geo import pipeline
+    from dfxm_geo import orchestrator
 
     monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
-    monkeypatch.setattr(pipeline, "_load_resolution", lambda *args, **kwargs: _stub_resolution())
+    monkeypatch.setattr(
+        orchestrator, "_load_resolution", lambda *args, **kwargs: _stub_resolution()
+    )
 
     cfg = _tiny_multi_config()
     result = run_identification(cfg, tmp_path / "out")
@@ -427,10 +431,12 @@ def test_cli_main_identify_parses_args(tmp_path, monkeypatch):
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
-    from dfxm_geo import pipeline
+    from dfxm_geo import orchestrator
 
     monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
-    monkeypatch.setattr(pipeline, "_load_resolution", lambda *args, **kwargs: _stub_resolution())
+    monkeypatch.setattr(
+        orchestrator, "_load_resolution", lambda *args, **kwargs: _stub_resolution()
+    )
 
     toml_text = """
 mode = "single"
@@ -819,10 +825,12 @@ def test_run_identification_dispatches_to_zscan(tmp_path, monkeypatch):
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
-    from dfxm_geo import pipeline
+    from dfxm_geo import orchestrator
 
     monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
-    monkeypatch.setattr(pipeline, "_load_resolution", lambda *args, **kwargs: _stub_resolution())
+    monkeypatch.setattr(
+        orchestrator, "_load_resolution", lambda *args, **kwargs: _stub_resolution()
+    )
 
     cfg = _tiny_zscan_config()
     result = run_identification(cfg, tmp_path / "out")
@@ -834,10 +842,12 @@ def test_cli_main_identify_zscan_mode(tmp_path, monkeypatch):
     import numpy as np
 
     import dfxm_geo.direct_space.forward_model as fm
-    from dfxm_geo import pipeline
+    from dfxm_geo import orchestrator
 
     monkeypatch.setattr(fm, "forward_from_static", lambda *args, **kwargs: np.ones((170, 510)))
-    monkeypatch.setattr(pipeline, "_load_resolution", lambda *args, **kwargs: _stub_resolution())
+    monkeypatch.setattr(
+        orchestrator, "_load_resolution", lambda *args, **kwargs: _stub_resolution()
+    )
 
     toml_text = """
 mode = "z-scan"
