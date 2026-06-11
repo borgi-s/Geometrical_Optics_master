@@ -79,6 +79,24 @@ def _write(tmp_path, content: str):
 # ---------------------------------------------------------------------------
 
 
+def test_cli_main_identify_multi_reflection_summary(tmp_path, capsys):
+    """dfxm-identify must exit 0 on a [[reflections]] config and print an
+    aggregate summary (regression: the CLI print assumed the single-reflection
+    return shape and crashed with KeyError('n_images') AFTER all per-reflection
+    masters were already written — caught on the cluster, 2026-06-11)."""
+    from dfxm_geo.pipeline import cli_main_identify
+
+    p = _write(tmp_path, _MULTI_IDENTIFY_TOML)
+    out = tmp_path / "out"
+    rc = cli_main_identify(["--config", str(p), "--output", str(out)])
+    assert rc == 0
+    captured = capsys.readouterr().out
+    assert "2 reflections" in captured
+    # the per-reflection masters really exist (the CLI didn't just exit early)
+    for idx in (1, 2):
+        assert (out / f"reflection_{idx:03d}" / "dfxm_identify.h5").is_file()
+
+
 def test_two_reflection_identify_layout(tmp_path):
     """result n_reflections==2, both reflection_NNN/dfxm_identify.h5 exist,
     super-master dfxm_identify_multi.h5 exists."""
