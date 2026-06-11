@@ -1821,6 +1821,12 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _q_unit(hkl: tuple[int, int, int] | list[int]) -> np.ndarray:
+    """Return the unit diffraction vector for hkl (float64, length 1)."""
+    q = np.asarray(hkl, dtype=float)
+    return q / np.linalg.norm(q)
+
+
 def _passes_invisibility(
     q_hkl: np.ndarray,
     b_vec: np.ndarray,
@@ -1838,6 +1844,8 @@ def _passes_invisibility(
 def _iter_identification_single(
     config: IdentificationConfig,
     ctx: fm.ForwardContext,
+    *,
+    visibility_qs: list[np.ndarray] | None = None,
 ) -> Iterator[ScanSpec]:
     """Yield one ScanSpec per (z, plane, b_idx, alpha) configuration.
 
@@ -1854,6 +1862,12 @@ def _iter_identification_single(
     build_forward_context(run_theta(config), ...) and passed in. Geometry globals
     (Theta/rl/Us/psize/zl_rms/theta_0) are NOT read here — all geometry is
     sourced from ``ctx`` (S2a+S3 of #16).
+
+    visibility_qs: when None, the exclude_invisibility gate uses ctx.q_hkl
+    (single-reflection, today's behaviour). When provided (multi-reflection
+    orchestrator), a config is kept if it is visible to AT LEAST ONE reflection
+    q — so the sweep grid is IDENTICAL across all reflection masters, and ML
+    labels align by scan index (spec §8, M3 plan 2).
     """
     crystal_cfg = config.crystal
     # Noiseless frames are emitted here; intensity scaling and optional
@@ -1909,9 +1923,13 @@ def _iter_identification_single(
             rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
             Ud_all = _ud_matrices(n_arr, rotated)
 
+            # Resolve visibility query vectors: None -> [ctx.q_hkl] (single-reflection);
+            # provided list -> all-reflections gate (keep if visible to any).
+            _vis_qs: list[np.ndarray] = visibility_qs if visibility_qs is not None else [q_hkl]
             for j, b_idx in enumerate(b_indices):
-                if crystal_cfg.exclude_invisibility and not _passes_invisibility(
-                    q_hkl, b_table[b_idx], crystal_cfg.invisibility_threshold_deg
+                if crystal_cfg.exclude_invisibility and not any(
+                    _passes_invisibility(q, b_table[b_idx], crystal_cfg.invisibility_threshold_deg)
+                    for q in _vis_qs
                 ):
                     continue
                 for i, alpha in enumerate(angles_deg):
@@ -1964,25 +1982,35 @@ def _run_identification_single(
     config: IdentificationConfig,
     output_dir: Path,
     ctx: fm.ForwardContext,
+    *,
+    reflection_index: int = 0,
+    n_reflections: int = 0,
+    visibility_qs: list[np.ndarray] | None = None,
+    reflection_attrs: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Dispatcher: feed `_iter_identification_single` into write_identification_h5.
 
     Empty sweep (e.g. exclude_invisibility filters out everything) is
     allowed: the orchestrator writes an empty master with `n_images=0`.
     Mirrors the old behavior which also emitted an empty manifest.
+
+    reflection_index, n_reflections, visibility_qs, reflection_attrs:
+    forwarded from _dispatch_identification; defaults preserve the
+    single-reflection byte-identical path.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     config_toml = _identification_config_to_toml_str(config)
     n_scans = write_identification_h5(
         output_dir,
-        scan_iter=_iter_identification_single(config, ctx),
+        scan_iter=_iter_identification_single(config, ctx, visibility_qs=visibility_qs),
         cli=" ".join(sys.argv),
         config_toml=config_toml,
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
         ctx=ctx,
+        reflection_attrs=reflection_attrs,
     )
-    _maybe_apply_poisson_noise(config, output_dir, n_scans)
+    _maybe_apply_poisson_noise(config, output_dir, n_scans, reflection_index=reflection_index)
     return {
         "n_images": n_scans,
         "output_dir": output_dir,
@@ -2180,12 +2208,19 @@ def _run_identification_multi(
     config: IdentificationConfig,
     output_dir: Path,
     ctx: fm.ForwardContext,
+    *,
+    reflection_index: int = 0,
+    reflection_attrs: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Dispatcher: feed `_iter_identification_multi` into write_identification_h5.
 
     After the master + per-scan detector files are written, applies a
     post-write Poisson noise pass (and intensity scaling) to combined
     detector files only — per-dislocation files stay noiseless.
+
+    reflection_index, reflection_attrs: forwarded from _dispatch_identification;
+    defaults preserve the single-reflection byte-identical path.
+    Multi mode has no deterministic visibility gate — visibility_qs unused.
     """
     assert config.multi is not None  # validated in __post_init__
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -2197,8 +2232,9 @@ def _run_identification_multi(
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
         ctx=ctx,
+        reflection_attrs=reflection_attrs,
     )
-    _maybe_apply_poisson_noise(config, output_dir, n_scans)
+    _maybe_apply_poisson_noise(config, output_dir, n_scans, reflection_index=reflection_index)
     return {
         "n_samples": config.multi.n_samples,
         "output_dir": output_dir,
@@ -2207,7 +2243,7 @@ def _run_identification_multi(
 
 
 def _maybe_apply_poisson_noise(
-    config: IdentificationConfig, output_dir: Path, n_scans: int
+    config: IdentificationConfig, output_dir: Path, n_scans: int, *, reflection_index: int = 0
 ) -> None:
     """Apply intensity scaling (always) and Poisson noise (if enabled) to
     combined-detector files post-write.
@@ -2216,16 +2252,33 @@ def _maybe_apply_poisson_noise(
     detector files (`*_dis0_0000.h5`, `*_dis1_0000.h5`) are intentionally
     left untouched so they remain deterministic ground-truth labels.
 
-    Determinism contract: two runs at the same `noise.rng_seed` produce
-    identical combined detector files. The noise stream is the second
-    spawn of `np.random.default_rng(rng_seed).spawn(2)` — the same split
-    used by `_iter_identification_*` for parameter draws (first stream).
+    Determinism contract (RNG policy, M3 plan 2):
+    - reflection_index == 0 (single-reflection / default): noise stream is
+      the second spawn of `np.random.default_rng(rng_seed).spawn(2)` — the
+      same split used by `_iter_identification_*` for parameter draws.
+      Bit-compatible with all v2.5.x releases.
+    - reflection_index > 0 (multi-reflection loop): noise seeded from
+      `np.random.default_rng([rng_seed, reflection_index])` so every
+      reflection gets an INDEPENDENT noise draw (multi-reflection data must
+      have independent detector noise even though all reflections share the
+      same crystal/dislocation realization).
     """
     noise_cfg = config.noise
     scale = noise_cfg.intensity_scale
     if scale == 1.0 and not noise_cfg.poisson_noise:
         return  # nothing to do; skip the per-scan file open
-    rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)[1] if noise_cfg.poisson_noise else None
+    if noise_cfg.poisson_noise:
+        if reflection_index > 0:
+            # Multi-reflection: per-reflection independent noise stream
+            # (same crystal / dislocation params, independent detector noise).
+            rng: np.random.Generator | None = np.random.default_rng(
+                [noise_cfg.rng_seed, reflection_index]
+            )
+        else:
+            # Single-reflection: bit-compatible stream (v2.5.x behaviour).
+            rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)[1]
+    else:
+        rng = None
     for k in range(1, n_scans + 1):
         det_file = (
             output_dir / SCAN_DIR_FMT.format(k) / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
@@ -2243,6 +2296,8 @@ def _maybe_apply_poisson_noise(
 def _iter_identification_zscan(
     config: IdentificationConfig,
     ctx: fm.ForwardContext,
+    *,
+    visibility_qs: list[np.ndarray] | None = None,
 ) -> Iterator[ScanSpec]:
     """Yield one ScanSpec per (z_offset, plane, b_idx, alpha) configuration.
 
@@ -2259,6 +2314,11 @@ def _iter_identification_zscan(
     build_forward_context(run_theta(config), ...) and passed in. Geometry globals
     (Theta/rl/Us/psize/zl_rms/theta_0) are NOT read here — all geometry is
     sourced from ``ctx`` (S2a+S3 of #16).
+
+    visibility_qs: when None, the exclude_invisibility gate uses ctx.q_hkl
+    (single-reflection, today's behaviour). When provided (multi-reflection
+    orchestrator), a config is kept if it is visible to AT LEAST ONE reflection
+    q — identical grid semantics to _iter_identification_single (spec §8).
     """
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
@@ -2312,9 +2372,13 @@ def _iter_identification_zscan(
             rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
             Ud_all = _ud_matrices(n_arr, rotated)
 
+            # Resolve visibility query vectors: None -> [ctx.q_hkl] (single-reflection);
+            # provided list -> all-reflections gate (keep if visible to any).
+            _vis_qs_z: list[np.ndarray] = visibility_qs if visibility_qs is not None else [q_hkl]
             for j, b_idx in enumerate(b_indices):
-                if crystal_cfg.exclude_invisibility and not _passes_invisibility(
-                    q_hkl, b_table[b_idx], crystal_cfg.invisibility_threshold_deg
+                if crystal_cfg.exclude_invisibility and not any(
+                    _passes_invisibility(q, b_table[b_idx], crystal_cfg.invisibility_threshold_deg)
+                    for q in _vis_qs_z
                 ):
                     continue
                 for i, alpha in enumerate(angles_deg):
@@ -2415,25 +2479,33 @@ def _run_identification_zscan(
     config: IdentificationConfig,
     output_dir: Path,
     ctx: fm.ForwardContext,
+    *,
+    reflection_index: int = 0,
+    visibility_qs: list[np.ndarray] | None = None,
+    reflection_attrs: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Dispatcher: feed ``_iter_identification_zscan`` into write_identification_h5.
 
     After the master + per-scan detector files are written, applies the
     post-write Poisson / intensity-scale pass to the combined detector only;
     any per-dislocation files (`render_per_dislocation=True`) stay noiseless.
+
+    reflection_index, visibility_qs, reflection_attrs: forwarded from
+    _dispatch_identification; defaults preserve the single-reflection path.
     """
     assert config.zscan is not None  # validated in __post_init__
     output_dir.mkdir(parents=True, exist_ok=True)
     n_scans = write_identification_h5(
         output_dir,
-        scan_iter=_iter_identification_zscan(config, ctx),
+        scan_iter=_iter_identification_zscan(config, ctx, visibility_qs=visibility_qs),
         cli=" ".join(sys.argv),
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
         ctx=ctx,
+        reflection_attrs=reflection_attrs,
     )
-    _maybe_apply_poisson_noise(config, output_dir, n_scans)
+    _maybe_apply_poisson_noise(config, output_dir, n_scans, reflection_index=reflection_index)
     return {
         "n_configurations": n_scans,
         "output_dir": output_dir,
@@ -2441,19 +2513,111 @@ def _run_identification_zscan(
     }
 
 
+def _dispatch_identification(
+    config: IdentificationConfig,
+    output_dir: Path,
+    ctx: fm.ForwardContext,
+    *,
+    reflection: _ReflectionRun | None = None,
+    reflection_index: int = 0,
+    n_reflections: int = 0,
+    visibility_qs: list[np.ndarray] | None = None,
+) -> dict[str, Any]:
+    """Route to the appropriate mode runner, threading multi-reflection params.
+
+    This factors the 3-way mode dispatch so it is shared between:
+    - single-reflection run_identification (reflection=None, all other params 0/None
+      → identical byte output to pre-M3 code)
+    - the multi-reflection loop (reflection given, reflection_index > 0, etc.)
+
+    reflection_attrs: assembled from `reflection` when given, else None.
+    """
+    reflection_attrs: dict[str, object] | None = None
+    if reflection is not None:
+        reflection_attrs = {
+            "hkl_reflection": np.asarray(reflection.hkl, dtype=np.int64),
+            "omega": float(reflection.omega),
+            "reflection_index": reflection_index,
+            "n_reflections": n_reflections,
+        }
+    if config.mode == "single":
+        return _run_identification_single(
+            config,
+            output_dir,
+            ctx,
+            reflection_index=reflection_index,
+            n_reflections=n_reflections,
+            visibility_qs=visibility_qs,
+            reflection_attrs=reflection_attrs,
+        )
+    if config.mode == "multi":
+        return _run_identification_multi(
+            config,
+            output_dir,
+            ctx,
+            reflection_index=reflection_index,
+            reflection_attrs=reflection_attrs,
+        )
+    return _run_identification_zscan(
+        config,
+        output_dir,
+        ctx,
+        reflection_index=reflection_index,
+        visibility_qs=visibility_qs,
+        reflection_attrs=reflection_attrs,
+    )
+
+
 def run_identification(
     config: IdentificationConfig,
     output_dir: Path,
 ) -> dict[str, Any]:
-    """Dispatch to single / multi / z-scan runner based on config.mode."""
+    """Dispatch to single / multi / z-scan runner based on config.mode.
+
+    Multi-reflection configs (``[[reflections]]``): loops over the resolved
+    ReflectionRun list, one standard dfxm_identify.h5 master per
+    reflection in ``output_dir/reflection_NNN/``, then writes a thin
+    super-master ``dfxm_identify_multi.h5`` with ExternalLinks.
+
+    RNG policy (M3 plan 2): the dislocation parameter stream uses
+    ``config.noise.rng_seed`` UNCHANGED for every reflection — all
+    reflections image the SAME crystal realization (the scientific
+    requirement for multi-reflection data). Poisson noise is seeded
+    independently per reflection via ``[rng_seed, reflection_index]``
+    so detector noise is not correlated across reflections.
+    """
     if config.reflections:
-        raise NotImplementedError(
-            "multi-reflection orchestration is not wired yet (M3 plan 2, pending "
-            "the omega-handling decision in docs/superpowers/specs/"
-            "2026-06-10-m3-multi-reflection-sweeps-design.md §3). Bootstrap and "
-            "config validation work; forward/identify of [[reflections]] configs "
-            "land in the next arc."
+        # M3 plan 2 (B'): loop over [[reflections]], one standard identify
+        # master per reflection in reflection_NNN/ subdirs.
+        runs = config.reflections
+        results: list[dict[str, Any]] = []
+        # All-reflections visibility: collect unit q for every reflection so
+        # the sweep grid is IDENTICAL across all masters (spec §8).
+        all_vis_qs = [_q_unit(r.hkl) for r in runs]
+        for idx, run in enumerate(runs, start=1):
+            res_run = _resolution_for_run(config.reciprocal, config.geometry, run)
+            ctx_run = _context_for_run(res_run, run)
+            sub_dir = output_dir / f"reflection_{idx:03d}"
+            results.append(
+                _dispatch_identification(
+                    config,
+                    sub_dir,
+                    ctx_run,
+                    reflection=run,
+                    reflection_index=idx,
+                    n_reflections=len(runs),
+                    visibility_qs=all_vis_qs,
+                )
+            )
+        write_multi_reflection_master(
+            output_dir,
+            runs,
+            master_name="dfxm_identify.h5",
+            mount=config.geometry.mount,
+            keV=config.reciprocal.keV,
         )
+        return {"n_reflections": len(runs), "reflections": results}
+
     res = _load_resolution(config.reciprocal, config.geometry)
 
     # S3 (#16): CM call site retired. build_forward_context uses run_theta(config)
@@ -2465,11 +2629,7 @@ def run_identification(
         res,
         config.reciprocal.hkl,
     )
-    if config.mode == "single":
-        return _run_identification_single(config, output_dir, ctx)
-    if config.mode == "multi":
-        return _run_identification_multi(config, output_dir, ctx)
-    return _run_identification_zscan(config, output_dir, ctx)
+    return _dispatch_identification(config, output_dir, ctx)
 
 
 def cli_main_identify(argv: list[str] | None = None) -> int:

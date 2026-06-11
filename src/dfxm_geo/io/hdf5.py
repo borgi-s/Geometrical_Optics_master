@@ -585,6 +585,7 @@ def write_identification_h5(
     max_workers: int | None = None,
     write_strain_provenance: bool = True,
     ctx: _fm.ForwardContext,
+    reflection_attrs: dict[str, object] | None = None,
 ) -> int:
     """Drive an identification run: consume ScanSpecs, write master + per-scan dirs.
 
@@ -656,6 +657,13 @@ def write_identification_h5(
             dfxm_geo_meta = spec.dfxm_geo
             if not write_strain_provenance and "Hg" in dfxm_geo_meta:
                 dfxm_geo_meta = {k: v for k, v in dfxm_geo_meta.items() if k != "Hg"}
+            # Multi-reflection per-scan provenance (Task 4, M3 plan 2).
+            # reflection_attrs carries: reflection_index, n_reflections, omega,
+            # hkl_reflection.  None for single-reflection runs → spec.attrs
+            # unchanged (byte-identical path).
+            per_scan_attrs = spec.attrs
+            if reflection_attrs is not None:
+                per_scan_attrs = {**spec.attrs, **reflection_attrs}
             master.add_scan(
                 scan_id=scan_id,
                 title=spec.title,
@@ -665,7 +673,7 @@ def write_identification_h5(
                 positioners=spec.positioners,
                 detector_links=detector_links,
                 dfxm_geo=dfxm_geo_meta,
-                attrs=spec.attrs,
+                attrs=per_scan_attrs,
             )
             n_scans += 1
     return n_scans

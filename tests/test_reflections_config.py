@@ -194,12 +194,57 @@ def test_identification_loader_parses_reflections(tmp_path):
     assert len(cfg.reflections) == 2
 
 
-def test_run_identification_refuses_multi_reflection(tmp_path):
-    cfg = load_identification_config(_write(tmp_path, _IDENTIFY_MULTI_REFLECTION_TOML))
+def test_run_identification_multi_reflection_writes_subdirs(tmp_path):
+    """Task 4 (M3 plan 2): multi-reflection identify configs write per-reflection
+    subdirs and a super-master (mirrors the forward smoke in Task 3)."""
     from dfxm_geo.pipeline import run_identification
 
-    with pytest.raises(NotImplementedError, match="multi-reflection"):
-        run_identification(cfg, tmp_path)
+    _analytic_identify_toml = """
+mode = "single"
+
+[reciprocal]
+keV = 19.1
+backend = "analytic"
+beamstop = false
+
+[geometry]
+mode = "oblique"
+
+[crystal]
+lattice = "cubic"
+a       = 4.0493e-10
+mount_x = [1, 0, 0]
+mount_y = [0, 1, 0]
+mount_z = [0, 0, 1]
+angle_start_deg   = 0.0
+angle_stop_deg    = 0.0
+angle_step_deg    = 10.0
+b_vector_indices  = [0]
+sweep_all_slip_planes = false
+exclude_invisibility  = false
+
+[noise]
+poisson_noise = false
+
+[scan]
+[scan.phi]
+value = 0.0
+range = 1.25e-4
+steps = 2
+
+[[reflections]]
+hkl = [1, 1, 3]
+[[reflections]]
+hkl = [-1, -1, 3]
+eta = 0.3531
+"""
+    cfg = load_identification_config(_write(tmp_path, _analytic_identify_toml))
+    out = tmp_path / "out"
+    result = run_identification(cfg, out)
+    assert result["n_reflections"] == 2
+    assert (out / "reflection_001" / "dfxm_identify.h5").is_file()
+    assert (out / "reflection_002" / "dfxm_identify.h5").is_file()
+    assert (out / "dfxm_identify_multi.h5").is_file()
 
 
 def test_toml_round_trip_serializer_omits_placeholder_eta(tmp_path):

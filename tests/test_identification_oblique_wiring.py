@@ -148,7 +148,7 @@ def test_run_identification_threads_geometry(
         captured["geometry"] = geometry
         return stub_resolution
 
-    def fake_single(config, output_dir, ctx):
+    def fake_single(config, output_dir, ctx, **kwargs):
         captured["ran"] = True
         captured["ctx_theta"] = ctx.geometry.theta_0
         return {"n_images": 0, "output_dir": output_dir}
