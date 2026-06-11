@@ -221,32 +221,58 @@ one-master-per-call (`write_simulation_h5`/`write_identification_h5`), and
 option 2 preserves every existing tool contract for free. Single-reflection
 configs remain byte-identical to v2.5.1 either way.
 
-### Per-reflection provenance
+### Per-reflection provenance (as-built)
 
-Each reflection's master gains `hkl`, `omega`, `eta`, `theta`,
-`reflection_index`, `n_reflections`, `multi_master` attrs alongside the
-existing geometry attrs. The super-master records the full resolved table.
+Each reflection's master `/N.1` group gains the following attrs alongside
+the existing geometry attrs (`geometry_mode`, `eta`, `theta`, `scan_mode`,
+`crystal_mode`, `scanned_axes`):
 
-## 8. g·b visibility labels
+- `hkl_reflection` — int64 array [h, k, l] for this reflection
+- `omega` — float, azimuthal rotation (radians)
+- `reflection_index` — int, 1-based index within the multi-reflection run
+- `n_reflections` — int, total number of reflections
 
-- Factor the inline criterion (`pipeline._passes_invisibility`,
-  `pipeline.py:1575`) into a public helper
-  `crystal/burgers.py: gb_visibility(q_hkl, b) -> float` (the normalized
-  |cos∠(G,b)|) + threshold wrapper; the existing call sites delegate
-  (bit-identical refactor).
-- Identify HDF5, multi-reflection runs: write per-scan
-  `gb_cos` (float) and `gb_visible` (bool, against
-  `invisibility_threshold_deg`) per dislocation per reflection — the
-  cross-reflection visibility pattern is the scientific payload (and the
-  Goal-5 tutorial figure).
-- `exclude_invisibility` semantics in multi-reflection runs (new feature,
-  no back-compat constraint): a sweep config is excluded only if invisible
-  in **all** reflections; otherwise it is kept and labeled. Single-
-  reflection behavior unchanged.
-- Physics regression test: an edge dislocation with b ⊥ g for one
-  reflection of the list and b·g ≠ 0 for another must show contrast ratio
-  ≫ 1 between the two reflection images (the classic invisibility
-  criterion, asserted at smoke scale).
+The `theta` and `eta` attrs are already written by the existing oblique
+provenance path and carry the per-reflection values.
+
+The super-master files are named `dfxm_geo_multi.h5` (forward) and
+`dfxm_identify_multi.h5` (identify); both carry ExternalLinks
+`/reflection_NNN → reflection_NNN/<master>.h5::/` and a `reflections`
+compound dataset (hkl, omega, eta, theta per row) plus the root attr
+`n_reflections`.
+
+Note: the original `multi_master` attr mentioned in the draft was superseded
+by the ExternalLink layout (option 2); per-scan files can be opened directly
+as standard single-reflection masters without any `multi_master` pointer.
+
+## 8. g·b visibility labels (as-built)
+
+- `crystal/burgers.py` exports `gb_cos(q, b) -> float` (normalized
+  |cos∠(G,b)|) and `gb_visible(q, b, threshold_deg) -> bool`; the inline
+  criterion in `pipeline._passes_invisibility` delegates to these.
+- Identify HDF5 label names written to `/N.1/dfxm_geo/`:
+  - **single mode**: `gb_cos` (float scalar), `gb_visible` (int8 scalar,
+    0 or 1 against `invisibility_threshold_deg`) for the single Burgers
+    vector.
+  - **multi mode**: `gb_cos` (float64 array length 2 for the two random
+    dislocations), `gb_visible` (int8 array length 2).
+  - **z-scan mode**: `gb_cos` (float scalar, primary dislocation),
+    `gb_visible` (int scalar, primary); `gb_cos_secondary` and
+    `gb_visible_secondary` (same types) written when
+    `zscan.include_secondary=True`.
+- `exclude_invisibility` semantics in multi-reflection runs: a sweep config
+  is excluded only if invisible in **all** reflections; otherwise it is kept
+  and labeled with per-reflection g·b values. Single-reflection behavior
+  unchanged.
+- **RNG policy**: the dislocation parameter stream is seeded with
+  `config.noise.rng_seed` UNCHANGED for every reflection so all reflections
+  image the SAME crystal realization. Poisson noise is seeded independently
+  per reflection via `np.random.default_rng([rng_seed, reflection_index])`
+  so detector noise is not correlated across reflections.
+- Physics regression test (`tests/test_gb_invisibility_physics.py`): an
+  edge dislocation with b ⊥ g for one reflection and b·g ≠ 0 for another
+  must show contrast ratio ≥ 3× (measured 3.55×, analytic backend,
+  deterministic).
 
 ## 9. CLI + sweep tooling
 

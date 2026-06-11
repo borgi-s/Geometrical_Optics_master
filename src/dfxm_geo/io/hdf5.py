@@ -723,6 +723,9 @@ def write_simulation_h5(
     `eta`: azimuthal tilt in radians (0.0 for simplified).
     `mount`: crystal mount orientation; defaults to Al (1,0,0)/(0,1,0)/(0,0,1)
         when None.
+    `reflection_attrs`: when given (multi-reflection runs), written as attrs on
+        BOTH /1.1 (dislocations) and /2.1 (perfect crystal) since both scans share
+        the same reflection geometry. None for single-reflection runs (byte-identical).
     """
 
     # The run's ForwardContext, shared read-only across all frames and scans

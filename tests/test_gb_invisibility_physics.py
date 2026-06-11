@@ -6,7 +6,7 @@ exercises the multi-reflection forward orchestrator as the physics gate:
 
     b = [-1, 1, 0]    n = [1, 1, 1]    t = n x b = [-1, -1, 2]
         g.b for g=[1,1,1]: (-1+1+0)/sqrt(3) = 0   -> INVISIBLE
-        g.b for g=[2,0,0]: (-2+0+0)/sqrt(2) != 0  -> VISIBLE
+        g.b for g=[2,0,0]: g·b = -2 ≠ 0 (gb_cos = 1/√2 ≈ 0.707)  -> VISIBLE
 
 Both reflections are Laue-reachable at 19.1 keV with the standard cubic Al
 mount.  The contrast metric is
@@ -157,7 +157,9 @@ class TestGbInvisibilityPhysics:
         assert gb_cos(g_111, b) == pytest.approx(0.0, abs=1e-12), (
             "g=[1,1,1] should be invisible (g.b=0)"
         )
-        assert gb_cos(g_200, b) > 0.5, "g=[2,0,0] should be strongly visible (g.b=-2)"
+        assert gb_cos(g_200, b) == pytest.approx(1 / np.sqrt(2), abs=1e-10), (
+            "g=[2,0,0] should give gb_cos = 1/sqrt(2) (g.b = -2, |g|=2, |b|=sqrt(2))"
+        )
 
     def test_t_is_n_cross_b(self):
         """The t vector in the TOML is exactly n x b (CenteredCrystalConfig validator)."""

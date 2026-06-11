@@ -66,6 +66,12 @@ def multi_cfg(tmp_path):
     return SimulationConfig.from_toml(p)
 
 
+_EXPECTED_HKLS = {
+    1: (1, 1, 3),
+    2: (-1, -1, 3),
+}
+
+
 def test_two_reflection_forward_writes_per_reflection_masters(multi_cfg, tmp_path):
     out = tmp_path / "out"
     result = run_simulation(multi_cfg, out)
@@ -79,6 +85,12 @@ def test_two_reflection_forward_writes_per_reflection_masters(multi_cfg, tmp_pat
             assert attrs["reflection_index"] == idx
             assert attrs["n_reflections"] == 2
             assert "omega" in attrs
+            # hkl_reflection attr must match the expected per-reflection hkl
+            assert "hkl_reflection" in attrs, f"missing hkl_reflection attr in reflection_{idx:03d}"
+            stored_hkl = tuple(int(x) for x in attrs["hkl_reflection"])
+            assert stored_hkl == _EXPECTED_HKLS[idx], (
+                f"reflection_{idx:03d}: hkl_reflection={stored_hkl}, expected {_EXPECTED_HKLS[idx]}"
+            )
 
 
 def test_super_master_links_and_table(multi_cfg, tmp_path):

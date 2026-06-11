@@ -73,8 +73,8 @@ def _resolve_entry(
                 return hkl, float(eta_i), float(theta_i), float(omega_i)
         raise ValueError(
             f"eta={eta_requested:.6f} rad does not match either solution for hkl={hkl} "
-            f"(η₁={geom.eta_1:.6f}, η₂={geom.eta_2:.6f}). No auto-correct; use "
-            "'dfxm-find-reflections' to list valid (η, ω) pairs."
+            f"(eta1={geom.eta_1:.6f}, eta2={geom.eta_2:.6f}). No auto-correct; use "
+            "'dfxm-find-reflections' to list valid (eta, omega) pairs."
         )
 
     sol = int(entry.get("omega_solution", 1))

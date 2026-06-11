@@ -7,6 +7,7 @@ Smoke scale: angle_stop_deg=0 -> 1 angle point; b_vector_indices=[0,1] -> 2 b-ve
 from __future__ import annotations
 
 import h5py
+import numpy as np
 import pytest
 
 from dfxm_geo.pipeline import load_identification_config, run_identification
@@ -58,6 +59,12 @@ eta = 0.3531
 # Same TOML but with exclude_invisibility=true
 _MULTI_IDENTIFY_EXCL_TOML = _MULTI_IDENTIFY_TOML.replace(
     "exclude_invisibility  = false", "exclude_invisibility  = true"
+)
+
+# Same TOML but with Poisson noise enabled (fixed seed for determinism).
+_MULTI_IDENTIFY_NOISY_TOML = _MULTI_IDENTIFY_TOML.replace(
+    "poisson_noise = false",
+    "poisson_noise = true\nrng_seed = 42",
 )
 
 
@@ -191,7 +198,70 @@ def test_exclude_invisibility_same_scan_count_across_reflections(tmp_path):
         with h5py.File(out / f"reflection_{idx:03d}" / "dfxm_identify.h5", "r") as fh:
             scans = [k for k in fh if k[0].isdigit()]
             scan_counts.append(len(scans))
+    assert scan_counts[0] > 0, "all configs excluded - gate may be over-aggressive"
     assert scan_counts[0] == scan_counts[1], (
         f"All-reflections invisibility gate produced mismatched grids: "
         f"reflection_001={scan_counts[0]}, reflection_002={scan_counts[1]}"
+    )
+
+
+def test_poisson_noise_independence_across_reflections(tmp_path):
+    """Poisson noise draws are independent per reflection.
+
+    Runs the 2-reflection identify config in two modes:
+      - noise-off (poisson_noise=false): clean reference images.
+      - noise-on  (poisson_noise=true, rng_seed=42): noisy images.
+
+    Assertions:
+      1. For EACH reflection, noisy != clean (noise was actually applied).
+      2. The per-reflection noise residuals (noisy - clean) DIFFER between
+         reflection_001 and reflection_002 — the two reflections draw from
+         independent RNG streams keyed by reflection_index (via
+         default_rng([seed, reflection_index])), so even though they share
+         the same crystal / Burgers realization they receive different
+         Poisson draws. This is the per-reflection noise independence
+         property that ensures multi-reflection ML datasets have decorrelated
+         detector noise.
+
+    Note: this does not assert that the clean images differ across reflections
+    (that is already covered by test_per_reflection_images_differ in
+    test_forward_multi_reflection_e2e.py).  Here the focus is solely on the
+    noise stream.
+    """
+    # --- noise-off run ---
+    cfg_clean = load_identification_config(_write(tmp_path, _MULTI_IDENTIFY_TOML))
+    out_clean = tmp_path / "out_clean"
+    run_identification(cfg_clean, out_clean)
+
+    # --- noise-on run ---
+    noisy_dir = tmp_path / "noisy_config.toml"
+    noisy_dir.write_text(_MULTI_IDENTIFY_NOISY_TOML, encoding="utf-8")
+    cfg_noisy = load_identification_config(noisy_dir)
+    out_noisy = tmp_path / "out_noisy"
+    run_identification(cfg_noisy, out_noisy)
+
+    det_path = "scan0001/dfxm_sim_detector_0000.h5"
+    det_internal = "/entry_0000/dfxm_sim_detector/image"
+
+    residuals: list[np.ndarray] = []
+    for idx in (1, 2):
+        refl = f"reflection_{idx:03d}"
+
+        with h5py.File(out_noisy / refl / det_path, "r") as fh:
+            noisy_img = fh[det_internal][...].astype(float)
+        with h5py.File(out_clean / refl / det_path, "r") as fh:
+            clean_img = fh[det_internal][...].astype(float)
+
+        residual = noisy_img - clean_img
+        # 1. Noise was applied: at least one pixel differs.
+        assert not np.allclose(noisy_img, clean_img), (
+            f"{refl}: noisy image equals clean image — Poisson noise was not applied"
+        )
+        residuals.append(residual)
+
+    # 2. Per-reflection noise residuals are not identical (independent RNG streams).
+    assert not np.array_equal(residuals[0], residuals[1]), (
+        "Noise residuals are identical for reflection_001 and reflection_002 — "
+        "per-reflection noise independence is broken (expected independent "
+        "default_rng([seed, reflection_index]) streams)"
     )

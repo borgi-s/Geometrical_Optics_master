@@ -66,8 +66,8 @@ def test_eta_target_filters(paper_config, capsys):
     # is the literal string 'hkl', not a Miller index).
     lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("#")]
     for line in lines:
-        # The hkl field is the first 10 chars (right-aligned), strip it.
-        hkl_part = line[:10].strip()
+        # The hkl field is the first 12 chars (right-aligned), strip it.
+        hkl_part = line[:12].strip()
         # Skip the column-header line — its first column is 'hkl', not a Miller index.
         if hkl_part == "hkl":
             continue

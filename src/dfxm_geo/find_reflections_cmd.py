@@ -86,7 +86,7 @@ def cli_main(argv: list[str] | None = None) -> int:
         f"# mount: x={mount.mount_x} y={mount.mount_y} z={mount.mount_z}  a={mount.a:g} m  keV={keV:g}"
     )
     print(
-        f"{'hkl':>10} {'theta_deg':>10} {'eta1_deg':>10} {'omega1_deg':>11} {'eta2_deg':>10} {'omega2_deg':>11} {'group':>6}"
+        f"{'hkl':>12} {'theta_deg':>10} {'eta1_deg':>10} {'omega1_deg':>11} {'eta2_deg':>10} {'omega2_deg':>11} {'group':>6}"
     )
     print(
         "# group: kernel-sharing by solution-1 (theta, eta); +/- eta branches may consolidate when branches are chosen explicitly"
@@ -105,7 +105,7 @@ def cli_main(argv: list[str] | None = None) -> int:
             gid = len(reps) - 1
         hkl_str = " ".join(str(c) for c in g.hkl)
         print(
-            f"{hkl_str:>10} {np.degrees(theta):>10.3f} "
+            f"{hkl_str:>12} {np.degrees(theta):>10.3f} "
             f"{np.degrees(g.eta_1):>10.3f} {np.degrees(g.omega_1):>11.3f} "
             f"{np.degrees(g.eta_2):>10.3f} {np.degrees(g.omega_2):>11.3f} {gid:>6}"
         )

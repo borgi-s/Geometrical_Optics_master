@@ -1021,10 +1021,20 @@ def _context_for_run(
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
     """Execute a DFXM forward-simulation run from a config object.
 
-    Writes one `<output_dir>/dfxm_geo.h5` containing BLISS scan `/1.1`
-    (dislocations) and, if `io.include_perfect_crystal=True`, `/2.1`
-    (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
-    a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
+    Single-reflection (no ``[[reflections]]``): writes one
+    ``<output_dir>/dfxm_geo.h5`` containing BLISS scan ``/1.1``
+    (dislocations) and, if ``io.include_perfect_crystal=True``, ``/2.1``
+    (Hg=0 reference). Returns ``{"h5_path", "Hg", "q_hkl",
+    "include_perfect_crystal"}``.
+
+    Multi-reflection (``[[reflections]]`` present): loops over the resolved
+    ``ReflectionRun`` list, writes one standard ``dfxm_geo.h5`` per
+    reflection into ``output_dir/reflection_NNN/``, then writes a thin
+    super-master ``dfxm_geo_multi.h5`` in ``output_dir`` with ExternalLinks.
+    Returns ``{"n_reflections": int, "reflections": list[dict]}``.
+
+    For ``crystal.mode='random_dislocations'``, also writes a
+    ``<output_dir>/dfxm_geo_random_dislocations.json`` sidecar.
     """
     if config.reflections:
         # M3 plan 2 (B'): loop over [[reflections]], one standard forward master
@@ -1961,7 +1971,7 @@ def _iter_identification_single(
                     # gb_cos normalises both inputs, so any non-zero multiple of b works.
                     _b_vec_single = b_table[b_idx]
                     _gb_cos_val = _gb_cos(q_hkl, _b_vec_single)
-                    _gb_vis_val = int(
+                    _gb_vis_val = np.int8(
                         _gb_visible(q_hkl, _b_vec_single, crystal_cfg.invisibility_threshold_deg)
                     )
                     yield ScanSpec(
@@ -1997,7 +2007,6 @@ def _run_identification_single(
     ctx: fm.ForwardContext,
     *,
     reflection_index: int = 0,
-    n_reflections: int = 0,
     visibility_qs: list[np.ndarray] | None = None,
     reflection_attrs: dict[str, object] | None = None,
 ) -> dict[str, Any]:
@@ -2007,7 +2016,7 @@ def _run_identification_single(
     allowed: the orchestrator writes an empty master with `n_images=0`.
     Mirrors the old behavior which also emitted an empty manifest.
 
-    reflection_index, n_reflections, visibility_qs, reflection_attrs:
+    reflection_index, visibility_qs, reflection_attrs:
     forwarded from _dispatch_identification; defaults preserve the
     single-reflection byte-identical path.
     """
@@ -2398,11 +2407,11 @@ def _iter_identification_zscan(
 
             # Resolve visibility query vectors: None -> [ctx.q_hkl] (single-reflection);
             # provided list -> all-reflections gate (keep if visible to any).
-            _vis_qs_z: list[np.ndarray] = visibility_qs if visibility_qs is not None else [q_hkl]
+            _vis_qs: list[np.ndarray] = visibility_qs if visibility_qs is not None else [q_hkl]
             for j, b_idx in enumerate(b_indices):
                 if crystal_cfg.exclude_invisibility and not any(
                     _passes_invisibility(q, b_table[b_idx], crystal_cfg.invisibility_threshold_deg)
-                    for q in _vis_qs_z
+                    for q in _vis_qs
                 ):
                     continue
                 for i, alpha in enumerate(angles_deg):
@@ -2492,14 +2501,14 @@ def _iter_identification_zscan(
                         "psize": float(psize_),
                         "zl_rms": float(zl_rms_),
                         "gb_cos": _gb_cos(q_hkl, _b_primary),
-                        "gb_visible": int(_gb_visible(q_hkl, _b_primary, _thr_z)),
+                        "gb_visible": np.int8(_gb_visible(q_hkl, _b_primary, _thr_z)),
                     }
                     if zscan.include_secondary and "secondary" in sample:
                         # `sec` is the dict from _draw_dislocation; b_vec is the
                         # physical Burgers direction (before integer rounding).
                         _b_sec = sec["b_vec"]
                         _zscan_dfxm_geo["gb_cos_secondary"] = _gb_cos(q_hkl, _b_sec)
-                        _zscan_dfxm_geo["gb_visible_secondary"] = int(
+                        _zscan_dfxm_geo["gb_visible_secondary"] = np.int8(
                             _gb_visible(q_hkl, _b_sec, _thr_z)
                         )
                     yield ScanSpec(
@@ -2571,7 +2580,8 @@ def _dispatch_identification(
       → identical byte output to pre-M3 code)
     - the multi-reflection loop (reflection given, reflection_index > 0, etc.)
 
-    reflection_attrs: assembled from `reflection` when given, else None.
+    reflection_attrs is assembled locally from `reflection` when given, else None.
+    Note: multi mode drops visibility_qs — no deterministic sweep grid to gate.
     """
     reflection_attrs: dict[str, object] | None = None
     if reflection is not None:
@@ -2587,7 +2597,6 @@ def _dispatch_identification(
             output_dir,
             ctx,
             reflection_index=reflection_index,
-            n_reflections=n_reflections,
             visibility_qs=visibility_qs,
             reflection_attrs=reflection_attrs,
         )
@@ -2615,10 +2624,18 @@ def run_identification(
 ) -> dict[str, Any]:
     """Dispatch to single / multi / z-scan runner based on config.mode.
 
-    Multi-reflection configs (``[[reflections]]``): loops over the resolved
-    ReflectionRun list, one standard dfxm_identify.h5 master per
-    reflection in ``output_dir/reflection_NNN/``, then writes a thin
-    super-master ``dfxm_identify_multi.h5`` with ExternalLinks.
+    Single-reflection (no ``[[reflections]]``): writes one standard
+    ``dfxm_identify.h5`` master in ``output_dir``.  Return value depends
+    on mode: ``{"n_images", "output_dir", "master_path"}`` for single,
+    ``{"n_samples", ...}`` for multi, ``{"n_configurations", ...}`` for
+    z-scan.
+
+    Multi-reflection (``[[reflections]]`` present): loops over the resolved
+    ``ReflectionRun`` list, writes one standard ``dfxm_identify.h5`` per
+    reflection into ``output_dir/reflection_NNN/``, then writes a thin
+    super-master ``dfxm_identify_multi.h5`` in ``output_dir`` with
+    ExternalLinks.  Returns ``{"n_reflections": int, "reflections":
+    list[dict]}``.
 
     RNG policy (M3 plan 2): the dislocation parameter stream uses
     ``config.noise.rng_seed`` UNCHANGED for every reflection — all
