@@ -199,7 +199,7 @@ def test_toml_serializer_cubic_output_unchanged():
             )
 
 
-def test_toml_serializer_noncubic_round_trips_cell(tmp_path):
+def test_toml_serializer_noncubic_round_trips_cell():
     """The serialized non-cubic [crystal] block round-trips through the Task 7 TOML parser.
 
     We can't go all the way through SimulationConfig.from_toml (Stage 4.3 guard
