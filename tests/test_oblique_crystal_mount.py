@@ -65,12 +65,94 @@ def test_non_integer_mount_raises():
         )
 
 
-def test_non_cubic_lattice_raises():
-    with pytest.raises(ValueError, match="cubic"):
+def test_unknown_lattice_raises():
+    # v3.0.0: non-cubic lattices are accepted; unknown lattice strings are rejected.
+    with pytest.raises((ValueError, TypeError)):
         CrystalMount(
-            lattice="hexagonal",
+            lattice="fcc",  # not a valid lattice system
             a=4.0e-10,
             mount_x=(1, 0, 0),
             mount_y=(0, 1, 0),
             mount_z=(0, 0, 1),
         )
+
+
+class TestNonCubicMount:
+    """M4 Stage 4.1 — CrystalMount beyond cubic.
+
+    Hexagonal standard setting: a* = (2pi/a)(1, 1/sqrt(3), 0),
+    b* = (2pi/a)(0, 2/sqrt(3), 0), c* = (2pi/c)(0, 0, 1). So the plane-normal
+    triple (2,-1,0)/(0,1,0)/(0,0,1) maps to Cartesian x/y/z — a valid
+    orthogonal mount — while (1,0,0)/(0,1,0)/(0,0,1) does NOT (a* not
+    orthogonal to b*). For cubic these two triples are equivalent, so this
+    is a direct test that the metric is in play.
+    """
+
+    MG_A = 3.2094e-10
+    MG_C = 5.2108e-10
+
+    def _hex_mount(self):
+        return CrystalMount(
+            lattice="hexagonal",
+            a=self.MG_A,
+            c=self.MG_C,
+            mount_x=(2, -1, 0),
+            mount_y=(0, 1, 0),
+            mount_z=(0, 0, 1),
+        )
+
+    def test_hexagonal_orthogonal_triple_accepted(self):
+        m = self._hex_mount()
+        U = m.U_mount
+        assert pytest.approx(np.eye(3), abs=1e-12) == U @ U.T
+        # This particular triple maps exactly onto the lab axes.
+        assert pytest.approx(np.eye(3), abs=1e-12) == U
+
+    def test_hexagonal_C_s_is_cell_A(self):
+        m = self._hex_mount()
+        assert np.array_equal(m.C_s, m.cell.A)
+
+    def test_hexagonal_non_orthogonal_triple_rejected(self):
+        with pytest.raises(ValueError, match="orthogonal"):
+            CrystalMount(
+                lattice="hexagonal",
+                a=self.MG_A,
+                c=self.MG_C,
+                mount_x=(1, 0, 0),
+                mount_y=(0, 1, 0),
+                mount_z=(0, 0, 1),
+            )
+
+    def test_cubic_C_s_bit_identical(self):
+        m = CrystalMount(
+            lattice="cubic",
+            a=4.0495e-10,
+            mount_x=(1, 0, 0),
+            mount_y=(0, 1, 0),
+            mount_z=(0, 0, 1),
+        )
+        assert np.array_equal(m.C_s, 4.0495e-10 * np.eye(3))
+
+    def test_cubic_U_mount_bit_identical_to_legacy_normalization(self):
+        m = CrystalMount(
+            lattice="cubic",
+            a=4.0495e-10,
+            mount_x=(1, 1, 0),
+            mount_y=(-1, 1, 0),
+            mount_z=(0, 0, 1),
+        )
+        cols = []
+        for mil in ((1, 1, 0), (-1, 1, 0), (0, 0, 1)):
+            v = np.array(mil, dtype=float)
+            cols.append(v / np.linalg.norm(v))
+        assert np.array_equal(m.U_mount, np.column_stack(cols))
+
+    def test_missing_c_for_hexagonal_raises(self):
+        with pytest.raises(ValueError, match="requires c"):
+            CrystalMount(
+                lattice="hexagonal",
+                a=self.MG_A,
+                mount_x=(2, -1, 0),
+                mount_y=(0, 1, 0),
+                mount_z=(0, 0, 1),
+            )

@@ -11,27 +11,52 @@ from typing import Literal
 
 import numpy as np
 
+from dfxm_geo.crystal.cell import _LATTICE_SYSTEMS, UnitCell
+
 
 @dataclass(frozen=True, kw_only=True)
 class CrystalMount:
-    """Crystal lattice + mounting orientation. v2.3.0 supports cubic only.
+    """Crystal lattice + mounting orientation.
 
-    `mount_x/y/z` are Miller indices of the crystal planes aligned with the
-    lab x̂/ŷ/ẑ axes. Default for Al per paper §6.1: (1,0,0)/(0,1,0)/(0,0,1).
+    v3.0.0 (M4 Stage 4.1): any crystal system via the six cell parameters;
+    constrained parameters are filled per ``UnitCell.from_lattice`` (e.g.
+    ``lattice="hexagonal"`` needs only ``a`` and ``c``). Cell angles are
+    degrees (CIF convention). The cubic path is bit-identical to v2.x.
+
+    ``mount_x/y/z`` are Miller indices of the crystal *plane normals* aligned
+    with the lab x/y/z axes; their crystal-Cartesian directions are
+    ``B @ m`` (for cubic, ``B`` is proportional to the identity, so this
+    reduces to the historical "Miller indices as directions" reading).
+    The three directions must be mutually orthogonal in Cartesian space.
+    Default for Al per paper §6.1: (1,0,0)/(0,1,0)/(0,0,1).
     """
 
-    lattice: Literal["cubic"]
+    lattice: Literal[
+        "cubic",
+        "tetragonal",
+        "orthorhombic",
+        "hexagonal",
+        "trigonal",
+        "monoclinic",
+        "triclinic",
+    ]
     a: float
+    b: float | None = None
+    c: float | None = None
+    alpha_deg: float | None = None
+    beta_deg: float | None = None
+    gamma_deg: float | None = None
     mount_x: tuple[int, int, int]
     mount_y: tuple[int, int, int]
     mount_z: tuple[int, int, int]
 
     def __post_init__(self) -> None:
-        if self.lattice != "cubic":
+        if self.lattice not in _LATTICE_SYSTEMS:
             raise ValueError(
-                f"v2.3.0 supports lattice='cubic' only; got {self.lattice!r}. "
-                "See [[followups-cif-crystal-structures]]; .cif/non-cubic ships in v3.0.0."
+                f"[crystal] lattice must be one of {_LATTICE_SYSTEMS}; got {self.lattice!r}."
             )
+        # Build the cell now so invalid parameters fail at construction time.
+        cell = self.cell
         for name, m in (
             ("mount_x", self.mount_x),
             ("mount_y", self.mount_y),
@@ -39,40 +64,89 @@ class CrystalMount:
         ):
             if len(m) != 3:
                 raise ValueError(f"{name} must have 3 components, got {m!r}.")
-            if not all(isinstance(c, int) and not isinstance(c, bool) for c in m):
+            if not all(isinstance(comp, int) and not isinstance(comp, bool) for comp in m):
                 raise ValueError(f"{name} components must be integers (Miller indices), got {m!r}.")
-        # Orthogonality of the (normalised) vectors (cubic-only constraint).
-        vx = np.array(self.mount_x, dtype=float)
-        vy = np.array(self.mount_y, dtype=float)
-        vz = np.array(self.mount_z, dtype=float)
-        for n1, v1, n2, v2 in (
-            ("mount_x", vx, "mount_y", vy),
-            ("mount_x", vx, "mount_z", vz),
-            ("mount_y", vy, "mount_z", vz),
-        ):
-            dot = float(v1 @ v2)
-            if abs(dot) > 1e-12:
-                raise ValueError(
-                    f"crystal mount vectors must be mutually orthogonal: "
-                    f"{n1}={v1.tolist()}, {n2}={v2.tolist()} have dot product = {dot}."
-                )
+        if cell.is_cubic:
+            # Legacy v2.x check, kept verbatim: raw Miller vectors, tol 1e-12.
+            vx = np.array(self.mount_x, dtype=float)
+            vy = np.array(self.mount_y, dtype=float)
+            vz = np.array(self.mount_z, dtype=float)
+            for n1, v1, n2, v2 in (
+                ("mount_x", vx, "mount_y", vy),
+                ("mount_x", vx, "mount_z", vz),
+                ("mount_y", vy, "mount_z", vz),
+            ):
+                dot = float(v1 @ v2)
+                if abs(dot) > 1e-12:
+                    raise ValueError(
+                        f"crystal mount vectors must be mutually orthogonal: "
+                        f"{n1}={v1.tolist()}, {n2}={v2.tolist()} have dot product = {dot}."
+                    )
+        else:
+            # General cells: orthogonality of the Cartesian plane-normal
+            # directions B @ m (normalized), tol 1e-9.
+            B = cell.B
+            units: dict[str, np.ndarray] = {}
+            for name, m in (
+                ("mount_x", self.mount_x),
+                ("mount_y", self.mount_y),
+                ("mount_z", self.mount_z),
+            ):
+                u = B @ np.array(m, dtype=float)
+                units[name] = u / np.linalg.norm(u)
+            for n1, n2 in (("mount_x", "mount_y"), ("mount_x", "mount_z"), ("mount_y", "mount_z")):
+                dot = float(units[n1] @ units[n2])
+                if abs(dot) > 1e-9:
+                    angle_deg = float(np.degrees(np.arccos(np.clip(dot, -1.0, 1.0))))
+                    raise ValueError(
+                        f"crystal mount plane normals must be mutually orthogonal in "
+                        f"Cartesian space: {n1}={list(getattr(self, n1))} and "
+                        f"{n2}={list(getattr(self, n2))} subtend {angle_deg:.4f} deg "
+                        f"(lattice={self.lattice!r}). Pick Miller indices whose "
+                        f"reciprocal vectors B@m are orthogonal."
+                    )
+
+    @cached_property
+    def cell(self) -> UnitCell:
+        """The six-parameter unit cell (constrained params filled per lattice)."""
+        return UnitCell.from_lattice(
+            self.lattice,
+            a=self.a,
+            b=self.b,
+            c=self.c,
+            alpha_deg=self.alpha_deg,
+            beta_deg=self.beta_deg,
+            gamma_deg=self.gamma_deg,
+        )
 
     @cached_property
     def C_s(self) -> np.ndarray:
-        """Cubic cell matrix C_s = a · I.  (2π) C_s^{-T} G_hkl = Q_s^{(0)}, paper eq 24."""
-        return self.a * np.eye(3)
+        """Real-space cell matrix.  (2π) C_s^{-T} G_hkl = Q_s^{(0)}, paper eq 24.
+
+        Cubic: exactly ``a * eye(3)`` (bit-identical to v2.x).
+        """
+        return self.cell.A
 
     @cached_property
     def U_mount(self) -> np.ndarray:
-        """Crystal → lab rotation matrix from normalized mount Miller indices.
+        """Crystal → lab rotation matrix from the mount plane normals.
 
-        Columns are the unit vectors (mount_x, mount_y, mount_z) in lab frame.
+        Columns are the unit Cartesian directions of (mount_x, mount_y,
+        mount_z). Cubic keeps the legacy raw-Miller normalization verbatim
+        (bit-identical); general cells route through B @ m.
         For the paper Al setup this is the identity.
         """
+        if self.cell.is_cubic:
+            cols = []
+            for m in (self.mount_x, self.mount_y, self.mount_z):
+                v = np.array(m, dtype=float)
+                cols.append(v / np.linalg.norm(v))
+            return np.column_stack(cols)
+        B = self.cell.B
         cols = []
         for m in (self.mount_x, self.mount_y, self.mount_z):
-            v = np.array(m, dtype=float)
-            cols.append(v / np.linalg.norm(v))
+            u = B @ np.array(m, dtype=float)
+            cols.append(u / np.linalg.norm(u))
         return np.column_stack(cols)
 
 
