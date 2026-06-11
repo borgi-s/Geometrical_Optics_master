@@ -137,4 +137,4 @@ def test_hexagonal_config_enumerates(tmp_path, capsys):
     rc = cli_main(["--config", str(p), "--hkl-max", "2"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "2 -1 0" in out
+    assert any(line.strip().startswith("2 -1 0") for line in out.splitlines())

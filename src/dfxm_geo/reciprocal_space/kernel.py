@@ -754,18 +754,10 @@ def cli_main(argv: list[str] | None = None) -> int:
     # forward layout) works, while still requiring an explicit [geometry] mode
     # when a genuine mount is supplied (the spec-§6 explicitness guard, now
     # correctly scoped so it no longer over-fires on a forward layout).
-    _MOUNT_KEYS = (
-        "lattice",
-        "a",
-        "b",
-        "c",
-        "alpha_deg",
-        "beta_deg",
-        "gamma_deg",
-        "mount_x",
-        "mount_y",
-        "mount_z",
-    )
+    _MOUNT_KEYS = ("lattice", "a", "mount_x", "mount_y", "mount_z")
+    # The five required mount fields suffice for detection; optional cell
+    # params (b/c/alpha_deg/...) are deliberately excluded — generic keys
+    # like `b` would misfire on forward-layout [crystal] blocks.
     is_mount_block = mount_block is not None and any(k in mount_block for k in _MOUNT_KEYS)
     if is_mount_block and geometry_block is None:
         print(
