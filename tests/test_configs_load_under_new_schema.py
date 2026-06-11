@@ -140,9 +140,9 @@ def _make_cubic_mount():
     )
 
 
-def _make_noncubic_sim_config(mount):
+def _make_oblique_sim_config(mount):
     """Build a SimulationConfig directly (bypassing the Task 8 Stage 4.3 guard)
-    with the given non-cubic or cubic mount in oblique geometry."""
+    wrapping the given mount (any crystal system) in oblique geometry."""
     from dfxm_geo.config import GeometryConfig
     from dfxm_geo.pipeline import SimulationConfig
 
@@ -161,7 +161,7 @@ def test_toml_serializer_emits_cell_params_for_noncubic():
     from dfxm_geo.pipeline import _dataclass_to_toml_str
 
     mount = _make_hex_mount()
-    cfg = _make_noncubic_sim_config(mount)
+    cfg = _make_oblique_sim_config(mount)
     toml_str = _dataclass_to_toml_str(cfg)
 
     assert 'lattice = "hexagonal"' in toml_str
@@ -179,24 +179,22 @@ def test_toml_serializer_cubic_output_unchanged():
     from dfxm_geo.pipeline import _dataclass_to_toml_str
 
     mount = _make_cubic_mount()
-    cfg = _make_noncubic_sim_config(mount)
+    cfg = _make_oblique_sim_config(mount)
     toml_str = _dataclass_to_toml_str(cfg)
 
     assert "alpha_deg" not in toml_str
     assert "beta_deg" not in toml_str
     assert "gamma_deg" not in toml_str
-    # The only 'b =' or 'c =' lines allowed are inside [crystal.<mode>] sub-blocks,
-    # not in the mount section.  The wall sub-block uses 'dis'/'ndis', the
-    # random_dislocations sub-block uses 'ndis', and the default centered block
-    # uses 'b = [...]' for the Burgers vector.  Check no bare scalar b/c appear.
-    # The centered sub-block emits 'b = [...]' (list), not 'b = <float>'.
-    for line in toml_str.splitlines():
+    # No scalar cell 'b ='/'c =' lines may appear in the [crystal] mount section
+    # (the text between "[crystal]" and the "[crystal.<mode>]" sub-table). The
+    # 'b = [...]' Burgers vector inside [crystal.centered] is unrelated and out
+    # of scope of this scan.
+    mount_section = toml_str.split("[crystal]", 1)[1].split("[crystal.", 1)[0]
+    for line in mount_section.splitlines():
         stripped = line.strip()
-        if stripped.startswith("b =") or stripped.startswith("c ="):
-            # Any b/c line must be a vector (list bracket) — NOT a bare float.
-            assert stripped.endswith("]"), (
-                f"Unexpected bare scalar b/c line in cubic TOML output: {line!r}"
-            )
+        assert not stripped.startswith(("b =", "c =")), (
+            f"Unexpected cell-parameter line in cubic [crystal] mount section: {line!r}"
+        )
 
 
 def test_toml_serializer_noncubic_round_trips_cell():
@@ -212,7 +210,7 @@ def test_toml_serializer_noncubic_round_trips_cell():
     from dfxm_geo.reciprocal_space.kernel import _crystal_mount_from_toml
 
     mount = _make_hex_mount()
-    cfg = _make_noncubic_sim_config(mount)
+    cfg = _make_oblique_sim_config(mount)
     toml_str = _dataclass_to_toml_str(cfg)
 
     # Parse the full serialized TOML to get the [crystal] section.
@@ -251,8 +249,50 @@ def test_identification_toml_serializer_emits_cell_params_for_noncubic():
     toml_str = _identification_config_to_toml_str(cfg)
 
     assert 'lattice = "hexagonal"' in toml_str
+    assert f"b = {mount.cell.b}" in toml_str
     assert f"c = {mount.cell.c}" in toml_str
+    assert f"alpha_deg = {mount.cell.alpha_deg}" in toml_str
+    assert f"beta_deg = {mount.cell.beta_deg}" in toml_str
     assert f"gamma_deg = {mount.cell.gamma_deg}" in toml_str
+
+
+def test_identification_toml_serializer_noncubic_round_trips_cell():
+    """The identification serializer's [crystal] block re-parses through the Task 7 parser.
+
+    The identification TOML render is documented best-effort, but the crystal
+    mount block specifically must round-trip (oblique identify provenance).
+    """
+    import tomllib
+
+    from dfxm_geo.config import (
+        GeometryConfig,
+        IdentificationConfig,
+        _identification_config_to_toml_str,
+    )
+    from dfxm_geo.reciprocal_space.kernel import _crystal_mount_from_toml
+
+    mount = _make_hex_mount()
+    geo = GeometryConfig(
+        mode="oblique",
+        eta=0.0,
+        theta_validated=0.1,
+        omega=0.0,
+        mount=mount,
+    )
+    cfg = IdentificationConfig(geometry=geo)
+    toml_str = _identification_config_to_toml_str(cfg)
+
+    parsed = tomllib.loads(toml_str)
+    assert "crystal" in parsed
+    reparsed_mount = _crystal_mount_from_toml(parsed["crystal"])
+
+    assert reparsed_mount.lattice == mount.lattice
+    assert reparsed_mount.cell.a == pytest.approx(mount.cell.a, rel=1e-12)
+    assert reparsed_mount.cell.b == pytest.approx(mount.cell.b, rel=1e-12)
+    assert reparsed_mount.cell.c == pytest.approx(mount.cell.c, rel=1e-12)
+    assert reparsed_mount.cell.alpha_deg == pytest.approx(mount.cell.alpha_deg, rel=1e-12)
+    assert reparsed_mount.cell.beta_deg == pytest.approx(mount.cell.beta_deg, rel=1e-12)
+    assert reparsed_mount.cell.gamma_deg == pytest.approx(mount.cell.gamma_deg, rel=1e-12)
 
 
 def test_identification_toml_serializer_cubic_output_unchanged():
