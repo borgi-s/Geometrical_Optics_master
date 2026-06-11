@@ -57,6 +57,26 @@ def burgers_vectors(slip_plane_normal: tuple[int, int, int]) -> np.ndarray:
     return np.vstack([basis, -basis]) / np.sqrt(2)
 
 
+def gb_cos(q_hkl: np.ndarray, b_vec: np.ndarray) -> float:
+    """Normalized |cos∠(G, b)| = |G·b| / (|G||b|) — the g·b visibility scalar.
+
+    0.0 means G ⊥ b (classic invisibility criterion g·b = 0 for screw
+    dislocations); 1.0 means G ∥ b (maximum contrast).
+    """
+    q = np.asarray(q_hkl, dtype=float)
+    b = np.asarray(b_vec, dtype=float)
+    return float(abs(np.dot(q, b)) / (np.linalg.norm(q) * np.linalg.norm(b)))
+
+
+def gb_visible(q_hkl: np.ndarray, b_vec: np.ndarray, threshold_deg: float) -> bool:
+    """True when the dislocation is NOT within `threshold_deg` of invisibility.
+
+    Bit-identical to the historical inline criterion in
+    ``pipeline._passes_invisibility``: visible ⇔ cos∠(G,b) ≥ cos(90° − threshold).
+    """
+    return bool(gb_cos(q_hkl, b_vec) >= np.cos(np.deg2rad(90.0 - threshold_deg)))
+
+
 def rotated_t_vectors(
     slip_plane_normal: np.ndarray,
     burgers: np.ndarray,

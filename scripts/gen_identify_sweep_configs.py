@@ -25,6 +25,26 @@ import argparse
 from pathlib import Path
 
 
+def _parse_hkl_list(spec: str) -> list[tuple[int, int, int]]:
+    """'1,1,1;2,0,0' → [(1,1,1), (2,0,0)]."""
+    out = []
+    for token in spec.split(";"):
+        try:
+            parts = [int(x) for x in token.split(",")]
+        except ValueError:
+            raise SystemExit(f"--hkl-list entry must be integers, got {token!r}") from None
+        if len(parts) != 3:
+            raise SystemExit(f"--hkl-list entry must have 3 indices, got {token!r}")
+        h, k, l = parts
+        out.append((h, k, l))
+    return out
+
+
+def _hkl_token(hkl: tuple[int, int, int]) -> str:
+    """(-1,1,-1) → 'hkl_m1_1_m1' (m = minus; underscore-separated, collision-free)."""
+    return "hkl_" + "_".join(f"m{abs(c)}" if c < 0 else str(c) for c in hkl)
+
+
 def _phi_block(value: float, phi_range: float, steps: int) -> str:
     """[scan.phi] TOML block.
 
@@ -48,6 +68,8 @@ def config_text(
     phi_value: float,
     phi_range: float,
     phi_steps: int,
+    hkl: tuple[int, int, int] = (-1, 1, -1),
+    keV: float = 17.0,
 ) -> str:
     """Return a TOML string for one identify-sweep config."""
     rdp = "true" if render_per_dislocation else "false"
@@ -55,8 +77,8 @@ def config_text(
 mode = "multi"
 
 [reciprocal]
-hkl = [-1, 1, -1]
-keV = 17.0
+hkl = [{hkl[0]}, {hkl[1]}, {hkl[2]}]
+keV = {keV}
 Nrays = {nrays}
 seed = 0
 
@@ -114,37 +136,76 @@ def main(argv: list[str] | None = None) -> int:
         default=11,
         help="[scan.phi] rocking steps (>1 = rocking scan; 1 = fixed phi).",
     )
+    ap.add_argument(
+        "--hkl-list",
+        default=None,
+        metavar="SPEC",
+        help=(
+            "Semicolon-separated reflections to sweep, e.g. '1,1,1;2,0,0' — "
+            "adds a reflection axis to the sweep (multiplies configs by the "
+            "number of reflections given). Without this flag, defaults to Al-111 "
+            "[-1,1,-1] with legacy filenames."
+        ),
+    )
+    ap.add_argument(
+        "--keV",
+        type=float,
+        default=17.0,
+        help="[reciprocal] X-ray energy in keV (default: 17.0).",
+    )
     args = ap.parse_args(argv)
 
     out_dir: Path = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for s in range(1, args.n_configs + 1):
-        fname = out_dir / f"multi_seed{s:05d}.toml"
-        text = config_text(
-            s,
-            n_samples=args.n_samples,
-            nrays=args.nrays,
-            render_per_dislocation=args.render_per_dislocation,
-            phi_value=args.phi_value,
-            phi_range=args.phi_range,
-            phi_steps=args.phi_steps,
-        )
-        # newline="\n": keep LF on Windows too, so regenerating doesn't dirty the tree.
-        fname.write_text(text, encoding="utf-8", newline="\n")
+    reflections: list[tuple[int, int, int]]
+    if args.hkl_list is not None:
+        reflections = _parse_hkl_list(args.hkl_list)
+        use_hkl_in_filename = True
+    else:
+        reflections = [(-1, 1, -1)]
+        use_hkl_in_filename = False
+
+    n_written = 0
+    for hkl in reflections:
+        for s in range(1, args.n_configs + 1):
+            if use_hkl_in_filename:
+                fname = out_dir / f"multi_{_hkl_token(hkl)}_seed{s:05d}.toml"
+            else:
+                fname = out_dir / f"multi_seed{s:05d}.toml"
+            text = config_text(
+                s,
+                n_samples=args.n_samples,
+                nrays=args.nrays,
+                render_per_dislocation=args.render_per_dislocation,
+                phi_value=args.phi_value,
+                phi_range=args.phi_range,
+                phi_steps=args.phi_steps,
+                hkl=hkl,
+                keV=args.keV,
+            )
+            # newline="\n": keep LF on Windows too, so regenerating doesn't dirty the tree.
+            fname.write_text(text, encoding="utf-8", newline="\n")
+            n_written += 1
 
     frames_per_scene = max(args.phi_steps, 1)
-    total_images = args.n_configs * args.n_samples * frames_per_scene
+    total_images = n_written * args.n_samples * frames_per_scene
     if args.phi_steps > 1:
         lo, hi = args.phi_value - args.phi_range, args.phi_value + args.phi_range
         phi_desc = f"phi rocking {lo * 1e6:.0f}->{hi * 1e6:.0f} urad x {args.phi_steps} steps"
     else:
         phi_desc = f"phi fixed at {args.phi_value * 1e6:.0f} urad"
+    if use_hkl_in_filename:
+        configs_desc = (
+            f"{n_written} configs ({args.n_configs} seeds x {len(reflections)} reflections)"
+        )
+    else:
+        configs_desc = f"{n_written} configs"
     print(
-        f"wrote {args.n_configs} configs to {out_dir}  "
+        f"wrote {configs_desc} to {out_dir}  "
         f"(n_samples={args.n_samples}, {phi_desc}, nrays={args.nrays}, "
         f"render_per_dislocation={args.render_per_dislocation})\n"
-        f"total images = {args.n_configs} configs x {args.n_samples} scenes "
+        f"total images = {n_written} configs x {args.n_samples} scenes "
         f"x {frames_per_scene} frames = {total_images:,}"
     )
     return 0

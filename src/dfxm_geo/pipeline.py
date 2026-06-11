@@ -27,7 +27,15 @@ import numpy as np
 
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.analysis.mosaicity import compute_com_maps
-from dfxm_geo.crystal.burgers import burgers_vectors as _burgers_vectors
+from dfxm_geo.crystal.burgers import (
+    burgers_vectors as _burgers_vectors,
+)
+from dfxm_geo.crystal.burgers import (
+    gb_cos as _gb_cos,
+)
+from dfxm_geo.crystal.burgers import (
+    gb_visible as _gb_visible,
+)
 from dfxm_geo.crystal.burgers import (
     rotated_t_vectors as _rotated_t_vectors,
 )
@@ -39,6 +47,15 @@ from dfxm_geo.crystal.dislocations import (
     find_hg_scene,
 )
 from dfxm_geo.crystal.oblique import CrystalMount
+from dfxm_geo.crystal.reflections import (
+    ReflectionRun as _ReflectionRun,
+)
+from dfxm_geo.crystal.reflections import (
+    resolve_reflections as _resolve_reflections,
+)
+from dfxm_geo.crystal.reflections import (
+    resolve_reflections_auto as _resolve_reflections_auto,
+)
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.io.hdf5 import (
     DETECTOR_FILE_FMT,
@@ -47,6 +64,7 @@ from dfxm_geo.io.hdf5 import (
     ScanSpec,
     load_h5_scan,
     write_identification_h5,
+    write_multi_reflection_master,
     write_simulation_h5,
 )
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
@@ -469,13 +487,26 @@ class GeometryConfig:
     mount: CrystalMount | None = None
 
 
-def _build_geometry_config(raw: dict, reciprocal: ReciprocalConfig) -> GeometryConfig:
+def _build_geometry_config(
+    raw: dict,
+    reciprocal: ReciprocalConfig,
+    multi_reflection: bool = False,
+) -> GeometryConfig:
     """Build a GeometryConfig from raw TOML tables (``[geometry]`` + ``[crystal]``).
 
     Mirrors ``reciprocal_space.kernel.cli_main``'s bootstrap-side parsing so the
     consumer (forward/identify) and the producer (dfxm-bootstrap) agree on the
     geometry. For oblique mode, validates ``eta`` against the reflection geometry
     and resolves the Bragg ``theta`` / azimuthal ``omega`` from the solver.
+
+    Args:
+        raw: parsed TOML dict.
+        reciprocal: already-built ReciprocalConfig (provides hkl + keV for
+            the single-reflection eta cross-check).
+        multi_reflection: when True (``[[reflections]]`` / ``[reflections_auto]``
+            present), parse mode + mount but skip single-eta validation — each
+            reflection carries its own eta/theta/omega resolved by
+            ``_parse_reflections_tables``.
 
     Raises:
         ValueError: on a malformed ``[geometry]`` block, a missing mount key, or
@@ -487,11 +518,18 @@ def _build_geometry_config(raw: dict, reciprocal: ReciprocalConfig) -> GeometryC
         _validate_eta_against_compute_omega_eta,
     )
 
-    mode, eta = _parse_geometry_block(raw.get("geometry"))
+    mode, eta = _parse_geometry_block(raw.get("geometry"), allow_missing_eta=multi_reflection)
     if mode == "simplified":
         return GeometryConfig(mode="simplified")
 
     mount = _crystal_mount_from_toml(raw.get("crystal"))
+
+    if multi_reflection:
+        # Per-entry angles resolved by _parse_reflections_tables; return a
+        # placeholder GeometryConfig with eta=0.0 — per-reflection angles live
+        # on the ReflectionRun list, not on this shared GeometryConfig.
+        return GeometryConfig(mode="oblique", eta=0.0, theta_validated=None, omega=0.0, mount=mount)
+
     theta_validated, omega = _validate_eta_against_compute_omega_eta(
         mount, reciprocal.hkl, reciprocal.keV, eta
     )
@@ -501,6 +539,55 @@ def _build_geometry_config(raw: dict, reciprocal: ReciprocalConfig) -> GeometryC
         theta_validated=theta_validated,
         omega=omega,
         mount=mount,
+    )
+
+
+def _parse_reflections_tables(
+    raw: dict,
+    geometry: GeometryConfig,
+    reciprocal: ReciprocalConfig,
+) -> list[_ReflectionRun]:
+    """Resolve ``[[reflections]]`` / ``[reflections_auto]`` from raw TOML.
+
+    Returns an empty list when neither block is present (single-reflection config).
+
+    Validation rules per spec §5: oblique-only, mutually exclusive with
+    ``[reciprocal] hkl`` and with each other.
+
+    Raises:
+        ValueError: on any of the three exclusivity or mode violations.
+    """
+    has_list = "reflections" in raw
+    has_auto = "reflections_auto" in raw
+    if not has_list and not has_auto:
+        return []
+    if has_list and has_auto:
+        raise ValueError("[[reflections]] and [reflections_auto] are mutually exclusive.")
+    if geometry.mode != "oblique":
+        raise ValueError(
+            "[[reflections]] / [reflections_auto] require [geometry] mode='oblique' "
+            "(sweep simplified-mode reflections by emitting one config per hkl via "
+            "the gen-sweep scripts instead)."
+        )
+    if "hkl" in raw.get("reciprocal", {}):
+        raise ValueError(
+            "[reciprocal] hkl and [[reflections]]/[reflections_auto] are mutually "
+            "exclusive: list every reflection in the reflections table."
+        )
+    mount = geometry.mount
+    if mount is None:
+        raise ValueError(
+            "[[reflections]] requires a [crystal] mount block (lattice/a/mount_x/y/z)."
+        )
+    keV = reciprocal.keV
+    if has_auto:
+        return _resolve_reflections_auto(raw["reflections_auto"], mount, keV)
+    default_eta = raw.get("geometry", {}).get("eta")
+    return _resolve_reflections(
+        raw["reflections"],
+        mount,
+        keV,
+        default_eta=float(default_eta) if default_eta is not None else None,
     )
 
 
@@ -515,6 +602,8 @@ class SimulationConfig:
     reciprocal: ReciprocalConfig = field(default_factory=ReciprocalConfig)
     # v2.3.0: diffraction geometry (simplified vs oblique-angle).
     geometry: GeometryConfig = field(default_factory=GeometryConfig)
+    # v2.6.0 (M3): resolved multi-reflection runs; empty = single-reflection config.
+    reflections: list[_ReflectionRun] = field(default_factory=list)
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -526,11 +615,13 @@ class SimulationConfig:
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
         reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
-        geometry = _build_geometry_config(raw, reciprocal)
+        multi = ("reflections" in raw) or ("reflections_auto" in raw)
+        geometry = _build_geometry_config(raw, reciprocal, multi_reflection=multi)
+        reflections = _parse_reflections_tables(raw, geometry, reciprocal)
         # The analytic backend reads eta off ReciprocalConfig (see
         # forward_model._load_analytic_resolution). The user supplies it in
-        # [geometry], so surface it there for oblique runs.
-        if geometry.mode == "oblique":
+        # [geometry], so surface it there for single oblique runs only.
+        if geometry.mode == "oblique" and not reflections:
             reciprocal.eta = geometry.eta
         return cls(
             crystal=crystal,
@@ -539,6 +630,7 @@ class SimulationConfig:
             postprocess=postprocess,
             reciprocal=reciprocal,
             geometry=geometry,
+            reflections=reflections,
         )
 
 
@@ -634,6 +726,8 @@ class IdentificationConfig:
     # SimulationConfig. Defaults to simplified so existing identify configs
     # are unchanged.
     geometry: GeometryConfig = field(default_factory=GeometryConfig)
+    # v2.6.0 (M3): resolved multi-reflection runs; empty = single-reflection config.
+    reflections: list[_ReflectionRun] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.mode not in ("single", "multi", "z-scan"):
@@ -713,10 +807,13 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     )
     zscan = IdentificationZScanConfig(**data["zscan"]) if data.get("zscan") is not None else None
     reciprocal = ReciprocalConfig.from_dict(data.get("reciprocal"))
-    geometry = _build_geometry_config(data, reciprocal)
+    multi_refl = ("reflections" in data) or ("reflections_auto" in data)
+    geometry = _build_geometry_config(data, reciprocal, multi_reflection=multi_refl)
+    reflections = _parse_reflections_tables(data, geometry, reciprocal)
     # Mirror SimulationConfig.from_toml: the analytic backend reads eta off
-    # ReciprocalConfig, so surface the validated oblique eta there.
-    if geometry.mode == "oblique":
+    # ReciprocalConfig, so surface the validated oblique eta there (single
+    # reflection only — multi-reflection runs carry per-entry angles).
+    if geometry.mode == "oblique" and not reflections:
         reciprocal.eta = geometry.eta
 
     return IdentificationConfig(
@@ -729,6 +826,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         zscan=zscan,
         reciprocal=reciprocal,
         geometry=geometry,
+        reflections=reflections,
     )
 
 
@@ -737,6 +835,7 @@ def _lookup_and_load_kernel(
     keV: float,
     *,
     geometry: GeometryConfig | None = None,
+    skip_hkl_check: bool = False,
 ) -> fm.ResolutionContext:
     """Pre-flight: look up the kernel npz for this geometry and load it.
 
@@ -760,6 +859,13 @@ def _lookup_and_load_kernel(
 
     Raises KeyError on lookup miss, ValueError on metadata mismatch,
     KeyError on pre-sub-project-D legacy npz lacking metadata.
+
+    Args:
+        skip_hkl_check: Pass True for multi-reflection group members whose
+            kernel was bootstrapped for the group REPRESENTATIVE's hkl (the
+            LUT covers the group, not one hkl — spec §6). Single-reflection
+            callers always leave this False so the sub-project-D metadata guard
+            remains active.
 
     Returns:
         ResolutionContext snapshotting the newly (or previously) loaded kernel.
@@ -787,7 +893,7 @@ def _lookup_and_load_kernel(
         return cached
     res = fm._load_default_kernel(
         str(target),
-        expected_hkl=hkl,
+        expected_hkl=None if skip_hkl_check else hkl,
         expected_keV=keV,
     )
     _KERNEL_CTX_CACHE[target] = res
@@ -816,7 +922,10 @@ def run_theta(config: SimulationConfig | IdentificationConfig) -> float:
 
 
 def _load_resolution(
-    config: ReciprocalConfig, geometry: GeometryConfig | None = None
+    config: ReciprocalConfig,
+    geometry: GeometryConfig | None = None,
+    *,
+    skip_hkl_check: bool = False,
 ) -> fm.ResolutionContext:
     """Select and load the resolution backend per config (spec sec. 5.4).
 
@@ -828,6 +937,10 @@ def _load_resolution(
     ``geometry.mode == 'oblique'``; the analytic backend reads ``eta`` straight
     off ``config`` (already propagated from [geometry] by
     SimulationConfig.from_toml). Defaults to simplified when omitted.
+
+    ``skip_hkl_check`` is forwarded to ``_lookup_and_load_kernel`` for
+    multi-reflection group members whose kernel was bootstrapped for the group
+    representative's hkl (spec §6). Single-reflection callers leave this False.
 
     Returns:
         ResolutionContext snapshotting the loaded/cached backend. Threaded into
@@ -847,17 +960,108 @@ def _load_resolution(
     # so forward() reads ctx.resolution — no module-global toggling needed.
     if use_analytic:
         return fm._load_analytic_resolution(config)
-    return _lookup_and_load_kernel(config.hkl, config.keV, geometry=geometry)
+    return _lookup_and_load_kernel(
+        config.hkl, config.keV, geometry=geometry, skip_hkl_check=skip_hkl_check
+    )
+
+
+def _resolution_for_run(
+    reciprocal: ReciprocalConfig,
+    geometry: GeometryConfig,
+    run: _ReflectionRun,
+) -> fm.ResolutionContext:
+    """Per-reflection resolution: build a run-specific (ReciprocalConfig,
+    GeometryConfig) pair and delegate to ``_load_resolution``.
+
+    Constructs ``recip_run`` (hkl and eta overridden to the run's values) and
+    ``geom_run`` (oblique mode pinned to run.theta/run.eta/run.omega), then
+    calls ``_load_resolution(recip_run, geom_run, skip_hkl_check=True)``.
+
+    Full backend dispatch — including the ``backend='analytic' + beamstop=True``
+    ValueError guard — is inherited from ``_load_resolution``.  No dispatch logic
+    is duplicated here.
+
+    For the analytic backend the per-run hkl drives the Bragg-angle derivation
+    (via ``_load_analytic_resolution``), and the per-run eta feeds the analytic
+    resolution function.  For the MC backend the group kernel is looked up by
+    (run.theta, run.eta, keV) — the kernel's bundled hkl metadata is the
+    bootstrap group REPRESENTATIVE's hkl, which may differ from run.hkl for
+    group members; the hkl metadata check is therefore relaxed with
+    ``skip_hkl_check=True`` (the (theta, eta, keV) match is the contract, spec §6).
+    Single-reflection callers go through ``_load_resolution`` directly and keep
+    the sub-project-D hkl guard active.
+    """
+    recip_run = replace(reciprocal, hkl=run.hkl, eta=run.eta)
+    geom_run = GeometryConfig(
+        mode="oblique",
+        eta=run.eta,
+        theta_validated=run.theta,
+        omega=run.omega,
+        mount=geometry.mount,
+    )
+    # For the MC path the group kernel's bundled hkl is the representative's,
+    # not necessarily run.hkl — bypass the per-hkl metadata check (spec §6).
+    # All other dispatch (including the analytic+beamstop guard) is handled by
+    # _load_resolution — no duplicate logic here.
+    return _load_resolution(recip_run, geom_run, skip_hkl_check=True)
+
+
+def _context_for_run(
+    res: fm.ResolutionContext,
+    run: _ReflectionRun,
+) -> fm.ForwardContext:
+    """Build a ``ForwardContext`` for a single ``ReflectionRun``.
+
+    Wraps ``fm.build_forward_context`` with the run's Bragg angle, hkl, and
+    omega so the orchestrator loop has a single call-site.
+    """
+    return fm.build_forward_context(run.theta, res, run.hkl, omega=run.omega)
 
 
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
     """Execute a DFXM forward-simulation run from a config object.
 
-    Writes one `<output_dir>/dfxm_geo.h5` containing BLISS scan `/1.1`
-    (dislocations) and, if `io.include_perfect_crystal=True`, `/2.1`
-    (Hg=0 reference). For `crystal.mode='random_dislocations'`, also writes
-    a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
+    Single-reflection (no ``[[reflections]]``): writes one
+    ``<output_dir>/dfxm_geo.h5`` containing BLISS scan ``/1.1``
+    (dislocations) and, if ``io.include_perfect_crystal=True``, ``/2.1``
+    (Hg=0 reference). Returns ``{"h5_path", "Hg", "q_hkl",
+    "include_perfect_crystal"}``.
+
+    Multi-reflection (``[[reflections]]`` present): loops over the resolved
+    ``ReflectionRun`` list, writes one standard ``dfxm_geo.h5`` per
+    reflection into ``output_dir/reflection_NNN/``, then writes a thin
+    super-master ``dfxm_geo_multi.h5`` in ``output_dir`` with ExternalLinks.
+    Returns ``{"n_reflections": int, "reflections": list[dict]}``.
+
+    For ``crystal.mode='random_dislocations'``, also writes a
+    ``<output_dir>/dfxm_geo_random_dislocations.json`` sidecar.
     """
+    if config.reflections:
+        # M3 plan 2 (B'): loop over [[reflections]], one standard forward master
+        # per reflection in reflection_NNN/ subdirs, plus a thin super-master.
+        runs = config.reflections
+        results: list[dict[str, Any]] = []
+        for idx, run in enumerate(runs, start=1):
+            res_run = _resolution_for_run(config.reciprocal, config.geometry, run)
+            sub_dir = output_dir / f"reflection_{idx:03d}"
+            results.append(
+                _run_simulation_inner(
+                    config,
+                    sub_dir,
+                    res_run,
+                    reflection=run,
+                    reflection_index=idx,
+                    n_reflections=len(runs),
+                )
+            )
+        write_multi_reflection_master(
+            output_dir,
+            runs,
+            master_name="dfxm_geo.h5",
+            mount=config.geometry.mount,
+            keV=config.reciprocal.keV,
+        )
+        return {"n_reflections": len(runs), "reflections": results}
     res = _load_resolution(config.reciprocal, config.geometry)
     # #16: geometry is built from run_theta(config) inside build_forward_context
     # (called in _run_simulation_inner); Z_shift callers pass
@@ -869,6 +1073,10 @@ def _run_simulation_inner(
     config: SimulationConfig,
     output_dir: Path,
     res: fm.ResolutionContext,
+    *,
+    reflection: _ReflectionRun | None = None,
+    reflection_index: int = 0,
+    n_reflections: int = 0,
 ) -> dict[str, Any]:
     """Body of ``run_simulation``.
 
@@ -876,6 +1084,12 @@ def _run_simulation_inner(
     ``build_forward_context(run_theta(config), ...)`` (oblique-safe: geometry
     is derived from the correct Bragg angle rather than module globals), then
     runs the scan frames and writes the HDF5 output.
+
+    For multi-reflection runs (M3 plan 2, B'), ``reflection`` carries the
+    per-run hkl/omega/eta/theta; ``reflection_index`` (1-based) and
+    ``n_reflections`` are written as per-scan attrs in the master.  All three
+    default to the single-reflection no-op values so the existing call path
+    is byte-identical when ``reflection is None``.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -910,11 +1124,17 @@ def _run_simulation_inner(
     # build_geometry_context(run_theta(config), ...) which computes Theta/rl/prob_z
     # from the correct Bragg angle (oblique or simplified) — no module globals needed.
     # S2a+S3 (#16): CM call site removed; ctx is the sole geometry source.
-    ctx = fm.build_forward_context(
-        run_theta(config),
-        res,
-        config.reciprocal.hkl,
-    )
+    # M3 plan 2 (B'): per-reflection runs use _context_for_run which threads the
+    # run's hkl and omega into the ForwardContext; single-reflection uses the
+    # config-level hkl with omega=0 (the original code path).
+    if reflection is not None:
+        ctx = _context_for_run(res, reflection)
+    else:
+        ctx = fm.build_forward_context(
+            run_theta(config),
+            res,
+            config.reciprocal.hkl,
+        )
 
     # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
     # Centered + random_dislocations use Find_Hg_from_population.
@@ -974,6 +1194,21 @@ def _run_simulation_inner(
     h5_path = output_dir / "dfxm_geo.h5"
     frames = _build_scan_frames(config.scan)
     positioners = _positioners_for_scan_frames(frames, config.scan)
+    # Per-run eta: use the reflection's eta for multi-reflection runs; fall back
+    # to config.geometry.eta for single-reflection (preserves existing behaviour).
+    _eta = reflection.eta if reflection is not None else config.geometry.eta
+    # Multi-reflection per-scan attrs (M3 plan 2). None for single-reflection →
+    # attrs dict is unchanged (byte-identical existing path).
+    _reflection_attrs: dict[str, object] | None = (
+        {
+            "hkl_reflection": np.asarray(reflection.hkl, dtype=np.int64),
+            "omega": float(reflection.omega),
+            "reflection_index": reflection_index,
+            "n_reflections": n_reflections,
+        }
+        if reflection is not None
+        else None
+    )
     write_simulation_h5(
         h5_path,
         Hg=Hg_base,
@@ -993,9 +1228,10 @@ def _run_simulation_inner(
         Hg_provider=Hg_provider,
         write_strain_provenance=config.io.write_strain_provenance,
         geometry_mode=config.geometry.mode,
-        eta=config.geometry.eta,
+        eta=_eta,
         mount=config.geometry.mount,
         ctx=ctx,
+        reflection_attrs=_reflection_attrs,
     )
     return {
         "h5_path": h5_path,
@@ -1093,7 +1329,14 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
     if config.geometry.mode == "oblique":
         lines.append("[geometry]")
         lines.append('mode = "oblique"')
-        lines.append(f"eta = {config.geometry.eta}")
+        if not config.reflections:
+            # Single-reflection: emit the validated eta so the config round-trips.
+            lines.append(f"eta = {config.geometry.eta}")
+        else:
+            # Multi-reflection: eta=0.0 on GeometryConfig is a placeholder;
+            # per-reflection angles live on the ReflectionRun list.
+            # TODO(M3 plan 2): emit [[reflections]] here
+            pass
         lines.append("")
 
     # [io] - render every field (default-skipping is brittle here since users
@@ -1305,7 +1548,19 @@ def cli_main(argv: list[str] | None = None) -> int:
     else:
         run_simulation(config, args.output)
         if config.postprocess.enabled and not args.no_postprocess:
-            run_postprocess(args.output, config)
+            if config.reflections:
+                # run_postprocess requires config.reciprocal.hkl (not set for
+                # multi-reflection configs) and calls _load_resolution / build_forward_context
+                # using the top-level config rather than per-run geometry.  Looping it
+                # per-subdir would produce wrong geometry for every reflection.
+                # Per-reflection figures are a Task 7 / polish item (M3 plan 2).
+                print(
+                    "postprocess: skipped for multi-reflection runs "
+                    "(per-reflection figures land with plan-2 polish)",
+                    file=sys.stderr,
+                )
+            else:
+                run_postprocess(args.output, config)
     return 0
 
 
@@ -1567,9 +1822,22 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
             "",
             "[geometry]",
             'mode = "oblique"',
-            f"eta = {cfg.geometry.eta}",
         ]
+        if not cfg.reflections:
+            # Single-reflection: emit the validated eta so the config round-trips.
+            lines.append(f"eta = {cfg.geometry.eta}")
+        else:
+            # Multi-reflection: eta=0.0 on GeometryConfig is a placeholder;
+            # per-reflection angles live on the ReflectionRun list.
+            # TODO(M3 plan 2): emit [[reflections]] here
+            pass
     return "\n".join(lines) + "\n"
+
+
+def _q_unit(hkl: tuple[int, int, int] | list[int]) -> np.ndarray:
+    """Return the unit diffraction vector for hkl (float64, length 1)."""
+    q = np.asarray(hkl, dtype=float)
+    return q / np.linalg.norm(q)
 
 
 def _passes_invisibility(
@@ -1583,13 +1851,14 @@ def _passes_invisibility(
     vector is within `threshold_deg` degrees of perpendicular to G.
     cos(90° - 10°) = cos(80°) ≈ 0.174.
     """
-    cos_angle = abs(np.dot(q_hkl, b_vec)) / (np.linalg.norm(q_hkl) * np.linalg.norm(b_vec))
-    return bool(cos_angle >= np.cos(np.deg2rad(90.0 - threshold_deg)))
+    return _gb_visible(q_hkl, b_vec, threshold_deg)
 
 
 def _iter_identification_single(
     config: IdentificationConfig,
     ctx: fm.ForwardContext,
+    *,
+    visibility_qs: list[np.ndarray] | None = None,
 ) -> Iterator[ScanSpec]:
     """Yield one ScanSpec per (z, plane, b_idx, alpha) configuration.
 
@@ -1606,6 +1875,12 @@ def _iter_identification_single(
     build_forward_context(run_theta(config), ...) and passed in. Geometry globals
     (Theta/rl/Us/psize/zl_rms/theta_0) are NOT read here — all geometry is
     sourced from ``ctx`` (S2a+S3 of #16).
+
+    visibility_qs: when None, the exclude_invisibility gate uses ctx.q_hkl
+    (single-reflection, today's behaviour). When provided (multi-reflection
+    orchestrator), a config is kept if it is visible to AT LEAST ONE reflection
+    q — so the sweep grid is IDENTICAL across all reflection masters, and ML
+    labels align by scan index (spec §8, M3 plan 2).
     """
     crystal_cfg = config.crystal
     # Noiseless frames are emitted here; intensity scaling and optional
@@ -1661,9 +1936,13 @@ def _iter_identification_single(
             rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
             Ud_all = _ud_matrices(n_arr, rotated)
 
+            # Resolve visibility query vectors: None -> [ctx.q_hkl] (single-reflection);
+            # provided list -> all-reflections gate (keep if visible to any).
+            _vis_qs: list[np.ndarray] = visibility_qs if visibility_qs is not None else [q_hkl]
             for j, b_idx in enumerate(b_indices):
-                if crystal_cfg.exclude_invisibility and not _passes_invisibility(
-                    q_hkl, b_table[b_idx], crystal_cfg.invisibility_threshold_deg
+                if crystal_cfg.exclude_invisibility and not any(
+                    _passes_invisibility(q, b_table[b_idx], crystal_cfg.invisibility_threshold_deg)
+                    for q in _vis_qs
                 ):
                     continue
                 for i, alpha in enumerate(angles_deg):
@@ -1687,6 +1966,14 @@ def _iter_identification_single(
                         int(round(b_table[b_idx, 1] * np.sqrt(2))),
                         int(round(b_table[b_idx, 2] * np.sqrt(2))),
                     )
+                    # g·b labels (Task 5, M3 plan 2): per-scan visibility scalars
+                    # computed from this run's q_hkl and the scan's Burgers vector.
+                    # gb_cos normalises both inputs, so any non-zero multiple of b works.
+                    _b_vec_single = b_table[b_idx]
+                    _gb_cos_val = _gb_cos(q_hkl, _b_vec_single)
+                    _gb_vis_val = np.int8(
+                        _gb_visible(q_hkl, _b_vec_single, crystal_cfg.invisibility_threshold_deg)
+                    )
                     yield ScanSpec(
                         title=_identify_title(scan_mode, frames_at_z.n_frames, config.scan),
                         sample={
@@ -1702,6 +1989,8 @@ def _iter_identification_single(
                             "theta": float(theta_0_),
                             "psize": float(psize_),
                             "zl_rms": float(zl_rms_),
+                            "gb_cos": _gb_cos_val,
+                            "gb_visible": _gb_vis_val,
                         },
                         detectors={"dfxm_sim_detector": args_list},
                         attrs={
@@ -1716,25 +2005,34 @@ def _run_identification_single(
     config: IdentificationConfig,
     output_dir: Path,
     ctx: fm.ForwardContext,
+    *,
+    reflection_index: int = 0,
+    visibility_qs: list[np.ndarray] | None = None,
+    reflection_attrs: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Dispatcher: feed `_iter_identification_single` into write_identification_h5.
 
     Empty sweep (e.g. exclude_invisibility filters out everything) is
     allowed: the orchestrator writes an empty master with `n_images=0`.
     Mirrors the old behavior which also emitted an empty manifest.
+
+    reflection_index, visibility_qs, reflection_attrs:
+    forwarded from _dispatch_identification; defaults preserve the
+    single-reflection byte-identical path.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     config_toml = _identification_config_to_toml_str(config)
     n_scans = write_identification_h5(
         output_dir,
-        scan_iter=_iter_identification_single(config, ctx),
+        scan_iter=_iter_identification_single(config, ctx, visibility_qs=visibility_qs),
         cli=" ".join(sys.argv),
         config_toml=config_toml,
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
         ctx=ctx,
+        reflection_attrs=reflection_attrs,
     )
-    _maybe_apply_poisson_noise(config, output_dir, n_scans)
+    _maybe_apply_poisson_noise(config, output_dir, n_scans, reflection_index=reflection_index)
     return {
         "n_images": n_scans,
         "output_dir": output_dir,
@@ -1908,6 +2206,15 @@ def _iter_identification_multi(
                 },
             }
 
+            # g·b labels (Task 5, M3 plan 2): per-dislocation arrays (length = 2).
+            # Order matches the specs list (d1 at index 0, d2 at index 1),
+            # which matches per-dislocation file naming (_dis0, _dis1).
+            _thr_multi = config.crystal.invisibility_threshold_deg
+            _gb_cos_multi = np.array([_gb_cos(q_hkl, d["b_vec"]) for d in (d1, d2)])
+            _gb_vis_multi = np.array(
+                [int(_gb_visible(q_hkl, d["b_vec"], _thr_multi)) for d in (d1, d2)],
+                dtype=np.int8,
+            )
             yield ScanSpec(
                 title=_identify_title(scan_mode, frames_at_z.n_frames, config.scan),
                 sample=sample,
@@ -1918,6 +2225,8 @@ def _iter_identification_multi(
                     "theta": float(theta_0_),
                     "psize": float(psize_),
                     "zl_rms": float(zl_rms_),
+                    "gb_cos": _gb_cos_multi,
+                    "gb_visible": _gb_vis_multi,
                 },
                 detectors=detectors,
                 attrs={
@@ -1932,12 +2241,19 @@ def _run_identification_multi(
     config: IdentificationConfig,
     output_dir: Path,
     ctx: fm.ForwardContext,
+    *,
+    reflection_index: int = 0,
+    reflection_attrs: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Dispatcher: feed `_iter_identification_multi` into write_identification_h5.
 
     After the master + per-scan detector files are written, applies a
     post-write Poisson noise pass (and intensity scaling) to combined
     detector files only — per-dislocation files stay noiseless.
+
+    reflection_index, reflection_attrs: forwarded from _dispatch_identification;
+    defaults preserve the single-reflection byte-identical path.
+    Multi mode has no deterministic visibility gate — visibility_qs unused.
     """
     assert config.multi is not None  # validated in __post_init__
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1949,8 +2265,9 @@ def _run_identification_multi(
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
         ctx=ctx,
+        reflection_attrs=reflection_attrs,
     )
-    _maybe_apply_poisson_noise(config, output_dir, n_scans)
+    _maybe_apply_poisson_noise(config, output_dir, n_scans, reflection_index=reflection_index)
     return {
         "n_samples": config.multi.n_samples,
         "output_dir": output_dir,
@@ -1959,7 +2276,7 @@ def _run_identification_multi(
 
 
 def _maybe_apply_poisson_noise(
-    config: IdentificationConfig, output_dir: Path, n_scans: int
+    config: IdentificationConfig, output_dir: Path, n_scans: int, *, reflection_index: int = 0
 ) -> None:
     """Apply intensity scaling (always) and Poisson noise (if enabled) to
     combined-detector files post-write.
@@ -1968,16 +2285,33 @@ def _maybe_apply_poisson_noise(
     detector files (`*_dis0_0000.h5`, `*_dis1_0000.h5`) are intentionally
     left untouched so they remain deterministic ground-truth labels.
 
-    Determinism contract: two runs at the same `noise.rng_seed` produce
-    identical combined detector files. The noise stream is the second
-    spawn of `np.random.default_rng(rng_seed).spawn(2)` — the same split
-    used by `_iter_identification_*` for parameter draws (first stream).
+    Determinism contract (RNG policy, M3 plan 2):
+    - reflection_index == 0 (single-reflection / default): noise stream is
+      the second spawn of `np.random.default_rng(rng_seed).spawn(2)` — the
+      same split used by `_iter_identification_*` for parameter draws.
+      Bit-compatible with all v2.5.x releases.
+    - reflection_index > 0 (multi-reflection loop): noise seeded from
+      `np.random.default_rng([rng_seed, reflection_index])` so every
+      reflection gets an INDEPENDENT noise draw (multi-reflection data must
+      have independent detector noise even though all reflections share the
+      same crystal/dislocation realization).
     """
     noise_cfg = config.noise
     scale = noise_cfg.intensity_scale
     if scale == 1.0 and not noise_cfg.poisson_noise:
         return  # nothing to do; skip the per-scan file open
-    rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)[1] if noise_cfg.poisson_noise else None
+    if noise_cfg.poisson_noise:
+        if reflection_index > 0:
+            # Multi-reflection: per-reflection independent noise stream
+            # (same crystal / dislocation params, independent detector noise).
+            rng: np.random.Generator | None = np.random.default_rng(
+                [noise_cfg.rng_seed, reflection_index]
+            )
+        else:
+            # Single-reflection: bit-compatible stream (v2.5.x behaviour).
+            rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)[1]
+    else:
+        rng = None
     for k in range(1, n_scans + 1):
         det_file = (
             output_dir / SCAN_DIR_FMT.format(k) / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
@@ -1995,6 +2329,8 @@ def _maybe_apply_poisson_noise(
 def _iter_identification_zscan(
     config: IdentificationConfig,
     ctx: fm.ForwardContext,
+    *,
+    visibility_qs: list[np.ndarray] | None = None,
 ) -> Iterator[ScanSpec]:
     """Yield one ScanSpec per (z_offset, plane, b_idx, alpha) configuration.
 
@@ -2011,6 +2347,11 @@ def _iter_identification_zscan(
     build_forward_context(run_theta(config), ...) and passed in. Geometry globals
     (Theta/rl/Us/psize/zl_rms/theta_0) are NOT read here — all geometry is
     sourced from ``ctx`` (S2a+S3 of #16).
+
+    visibility_qs: when None, the exclude_invisibility gate uses ctx.q_hkl
+    (single-reflection, today's behaviour). When provided (multi-reflection
+    orchestrator), a config is kept if it is visible to AT LEAST ONE reflection
+    q — identical grid semantics to _iter_identification_single (spec §8).
     """
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
@@ -2064,9 +2405,13 @@ def _iter_identification_zscan(
             rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
             Ud_all = _ud_matrices(n_arr, rotated)
 
+            # Resolve visibility query vectors: None -> [ctx.q_hkl] (single-reflection);
+            # provided list -> all-reflections gate (keep if visible to any).
+            _vis_qs: list[np.ndarray] = visibility_qs if visibility_qs is not None else [q_hkl]
             for j, b_idx in enumerate(b_indices):
-                if crystal_cfg.exclude_invisibility and not _passes_invisibility(
-                    q_hkl, b_table[b_idx], crystal_cfg.invisibility_threshold_deg
+                if crystal_cfg.exclude_invisibility and not any(
+                    _passes_invisibility(q, b_table[b_idx], crystal_cfg.invisibility_threshold_deg)
+                    for q in _vis_qs
                 ):
                     continue
                 for i, alpha in enumerate(angles_deg):
@@ -2143,17 +2488,34 @@ def _iter_identification_zscan(
                     args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan, ctx)
                     detectors["dfxm_sim_detector"] = args_list
 
+                    # g·b labels (Task 5, M3 plan 2): primary dislocation scalars.
+                    # Label the PRIMARY (deterministic sweep b) with gb_cos/gb_visible.
+                    # If a secondary is present and its b is distinct, also write
+                    # gb_cos_secondary / gb_visible_secondary for completeness.
+                    _thr_z = crystal_cfg.invisibility_threshold_deg
+                    _b_primary = b_table[b_idx]
+                    _zscan_dfxm_geo: dict[str, Any] = {
+                        "Hg": Hg,
+                        "q_hkl": q_hkl,
+                        "theta": float(theta_0_),
+                        "psize": float(psize_),
+                        "zl_rms": float(zl_rms_),
+                        "gb_cos": _gb_cos(q_hkl, _b_primary),
+                        "gb_visible": np.int8(_gb_visible(q_hkl, _b_primary, _thr_z)),
+                    }
+                    if zscan.include_secondary and "secondary" in sample:
+                        # `sec` is the dict from _draw_dislocation; b_vec is the
+                        # physical Burgers direction (before integer rounding).
+                        _b_sec = sec["b_vec"]
+                        _zscan_dfxm_geo["gb_cos_secondary"] = _gb_cos(q_hkl, _b_sec)
+                        _zscan_dfxm_geo["gb_visible_secondary"] = np.int8(
+                            _gb_visible(q_hkl, _b_sec, _thr_z)
+                        )
                     yield ScanSpec(
                         title=_identify_title(scan_mode, n_frames, config.scan),
                         sample=sample,
                         positioners=positioners,
-                        dfxm_geo={
-                            "Hg": Hg,
-                            "q_hkl": q_hkl,
-                            "theta": float(theta_0_),
-                            "psize": float(psize_),
-                            "zl_rms": float(zl_rms_),
-                        },
+                        dfxm_geo=_zscan_dfxm_geo,
                         detectors=detectors,
                         attrs={
                             "scan_mode": scan_mode,
@@ -2167,25 +2529,33 @@ def _run_identification_zscan(
     config: IdentificationConfig,
     output_dir: Path,
     ctx: fm.ForwardContext,
+    *,
+    reflection_index: int = 0,
+    visibility_qs: list[np.ndarray] | None = None,
+    reflection_attrs: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Dispatcher: feed ``_iter_identification_zscan`` into write_identification_h5.
 
     After the master + per-scan detector files are written, applies the
     post-write Poisson / intensity-scale pass to the combined detector only;
     any per-dislocation files (`render_per_dislocation=True`) stay noiseless.
+
+    reflection_index, visibility_qs, reflection_attrs: forwarded from
+    _dispatch_identification; defaults preserve the single-reflection path.
     """
     assert config.zscan is not None  # validated in __post_init__
     output_dir.mkdir(parents=True, exist_ok=True)
     n_scans = write_identification_h5(
         output_dir,
-        scan_iter=_iter_identification_zscan(config, ctx),
+        scan_iter=_iter_identification_zscan(config, ctx, visibility_qs=visibility_qs),
         cli=" ".join(sys.argv),
         config_toml=_identification_config_to_toml_str(config),
         max_workers=config.io.max_workers,
         write_strain_provenance=config.io.write_strain_provenance,
         ctx=ctx,
+        reflection_attrs=reflection_attrs,
     )
-    _maybe_apply_poisson_noise(config, output_dir, n_scans)
+    _maybe_apply_poisson_noise(config, output_dir, n_scans, reflection_index=reflection_index)
     return {
         "n_configurations": n_scans,
         "output_dir": output_dir,
@@ -2193,11 +2563,119 @@ def _run_identification_zscan(
     }
 
 
+def _dispatch_identification(
+    config: IdentificationConfig,
+    output_dir: Path,
+    ctx: fm.ForwardContext,
+    *,
+    reflection: _ReflectionRun | None = None,
+    reflection_index: int = 0,
+    n_reflections: int = 0,
+    visibility_qs: list[np.ndarray] | None = None,
+) -> dict[str, Any]:
+    """Route to the appropriate mode runner, threading multi-reflection params.
+
+    This factors the 3-way mode dispatch so it is shared between:
+    - single-reflection run_identification (reflection=None, all other params 0/None
+      → identical byte output to pre-M3 code)
+    - the multi-reflection loop (reflection given, reflection_index > 0, etc.)
+
+    reflection_attrs is assembled locally from `reflection` when given, else None.
+    Note: multi mode drops visibility_qs — no deterministic sweep grid to gate.
+    """
+    reflection_attrs: dict[str, object] | None = None
+    if reflection is not None:
+        reflection_attrs = {
+            "hkl_reflection": np.asarray(reflection.hkl, dtype=np.int64),
+            "omega": float(reflection.omega),
+            "reflection_index": reflection_index,
+            "n_reflections": n_reflections,
+        }
+    if config.mode == "single":
+        return _run_identification_single(
+            config,
+            output_dir,
+            ctx,
+            reflection_index=reflection_index,
+            visibility_qs=visibility_qs,
+            reflection_attrs=reflection_attrs,
+        )
+    if config.mode == "multi":
+        return _run_identification_multi(
+            config,
+            output_dir,
+            ctx,
+            reflection_index=reflection_index,
+            reflection_attrs=reflection_attrs,
+        )
+    return _run_identification_zscan(
+        config,
+        output_dir,
+        ctx,
+        reflection_index=reflection_index,
+        visibility_qs=visibility_qs,
+        reflection_attrs=reflection_attrs,
+    )
+
+
 def run_identification(
     config: IdentificationConfig,
     output_dir: Path,
 ) -> dict[str, Any]:
-    """Dispatch to single / multi / z-scan runner based on config.mode."""
+    """Dispatch to single / multi / z-scan runner based on config.mode.
+
+    Single-reflection (no ``[[reflections]]``): writes one standard
+    ``dfxm_identify.h5`` master in ``output_dir``.  Return value depends
+    on mode: ``{"n_images", "output_dir", "master_path"}`` for single,
+    ``{"n_samples", ...}`` for multi, ``{"n_configurations", ...}`` for
+    z-scan.
+
+    Multi-reflection (``[[reflections]]`` present): loops over the resolved
+    ``ReflectionRun`` list, writes one standard ``dfxm_identify.h5`` per
+    reflection into ``output_dir/reflection_NNN/``, then writes a thin
+    super-master ``dfxm_identify_multi.h5`` in ``output_dir`` with
+    ExternalLinks.  Returns ``{"n_reflections": int, "reflections":
+    list[dict]}``.
+
+    RNG policy (M3 plan 2): the dislocation parameter stream uses
+    ``config.noise.rng_seed`` UNCHANGED for every reflection — all
+    reflections image the SAME crystal realization (the scientific
+    requirement for multi-reflection data). Poisson noise is seeded
+    independently per reflection via ``[rng_seed, reflection_index]``
+    so detector noise is not correlated across reflections.
+    """
+    if config.reflections:
+        # M3 plan 2 (B'): loop over [[reflections]], one standard identify
+        # master per reflection in reflection_NNN/ subdirs.
+        runs = config.reflections
+        results: list[dict[str, Any]] = []
+        # All-reflections visibility: collect unit q for every reflection so
+        # the sweep grid is IDENTICAL across all masters (spec §8).
+        all_vis_qs = [_q_unit(r.hkl) for r in runs]
+        for idx, run in enumerate(runs, start=1):
+            res_run = _resolution_for_run(config.reciprocal, config.geometry, run)
+            ctx_run = _context_for_run(res_run, run)
+            sub_dir = output_dir / f"reflection_{idx:03d}"
+            results.append(
+                _dispatch_identification(
+                    config,
+                    sub_dir,
+                    ctx_run,
+                    reflection=run,
+                    reflection_index=idx,
+                    n_reflections=len(runs),
+                    visibility_qs=all_vis_qs,
+                )
+            )
+        write_multi_reflection_master(
+            output_dir,
+            runs,
+            master_name="dfxm_identify.h5",
+            mount=config.geometry.mount,
+            keV=config.reciprocal.keV,
+        )
+        return {"n_reflections": len(runs), "reflections": results}
+
     res = _load_resolution(config.reciprocal, config.geometry)
 
     # S3 (#16): CM call site retired. build_forward_context uses run_theta(config)
@@ -2209,11 +2687,7 @@ def run_identification(
         res,
         config.reciprocal.hkl,
     )
-    if config.mode == "single":
-        return _run_identification_single(config, output_dir, ctx)
-    if config.mode == "multi":
-        return _run_identification_multi(config, output_dir, ctx)
-    return _run_identification_zscan(config, output_dir, ctx)
+    return _dispatch_identification(config, output_dir, ctx)
 
 
 def cli_main_identify(argv: list[str] | None = None) -> int:

@@ -13,6 +13,7 @@ Run as a script::
     python -m dfxm_geo.reciprocal_space.kernel
 """
 
+import argparse
 import math
 import sys
 from datetime import datetime
@@ -48,8 +49,20 @@ def _crystal_mount_from_toml(data: dict | None) -> CrystalMount:
         raise ValueError(f"[crystal] block missing key: {exc.args[0]}") from None
 
 
-def _parse_geometry_block(data: dict | None) -> tuple[str, float]:
-    """Parse [geometry] block. Returns (mode, eta_rad)."""
+def _parse_geometry_block(
+    data: dict | None,
+    *,
+    allow_missing_eta: bool = False,
+) -> tuple[str, float]:
+    """Parse [geometry] block. Returns (mode, eta_rad).
+
+    Args:
+        data: raw ``[geometry]`` TOML table, or None.
+        allow_missing_eta: when True and mode='oblique' lacks ``eta``, return
+            ``("oblique", float("nan"))`` instead of raising.  Used by the
+            multi-reflection path where per-entry η values are resolved
+            separately from ``[[reflections]]`` entries.
+    """
     if data is None:
         return "simplified", 0.0
     mode = data.get("mode", "simplified")
@@ -64,6 +77,8 @@ def _parse_geometry_block(data: dict | None) -> tuple[str, float]:
         return "simplified", 0.0
     # oblique
     if "eta" not in data:
+        if allow_missing_eta:
+            return "oblique", float("nan")
         raise ValueError("[geometry] mode='oblique' requires [geometry] eta (radians).")
     eta = float(data["eta"])
     if not math.isfinite(eta):
@@ -204,6 +219,212 @@ def _build_kernel_filename(
     if mode == "oblique":
         return f"Resq_i_theta{theta:.4f}rad_eta{eta:.4f}rad_{keV:g}keV_{date}.npz"
     raise ValueError(f"unknown geometry mode: {mode!r}")
+
+
+def _kernel_glob_pattern(theta: float, eta: float, keV: float) -> str:
+    """Glob pattern matching any existing oblique kernel for a (theta, eta, keV) group.
+
+    Uses 4-decimal-place formatting consistent with ``_build_kernel_filename``.
+    Two geometries within 5e-5 rad of each other share the same pattern; in
+    practice no realistic multi-reflection set collides at this granularity.
+    """
+    return f"Resq_i_theta{theta:.4f}rad_eta{eta:.4f}rad_{keV:g}keV_*.npz"
+
+
+def _bootstrap_multi_reflection(
+    *,
+    args: argparse.Namespace,
+    data: dict,
+    mount: CrystalMount,
+    mode: str,
+    config_eta: float,
+    raw_keV: float | None,
+    reciprocal_kwargs: dict,
+    pkl_fpath: str,
+) -> int:
+    """Implement the multi-reflection bootstrap loop extracted from ``cli_main``.
+
+    Called when the TOML carries ``[[reflections]]`` or ``[reflections_auto]``.
+    Returns an integer exit code (0 = success, 1 = error).
+    """
+    from dfxm_geo.crystal.reflections import (
+        resolve_reflections,
+        resolve_reflections_auto,
+    )
+
+    # Guard: [reciprocal] hkl is mutually exclusive with multi-reflection mode.
+    # The reflections list IS the hkl source; a bare hkl key would be ambiguous.
+    if "hkl" in data.get("reciprocal", {}):
+        print(
+            "error: [reciprocal] hkl is mutually exclusive with "
+            "[[reflections]] / [reflections_auto]; "
+            "remove hkl from [reciprocal] and specify it per-reflection instead.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if mode != "oblique":
+        print(
+            "error: [[reflections]] / [reflections_auto] require [geometry] mode='oblique'.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if raw_keV is None:
+        print(
+            "warning: no [reciprocal] keV; defaulting to 17.0 keV.",
+            file=sys.stderr,
+        )
+    keV_multi = float(raw_keV) if raw_keV is not None else 17.0
+
+    # [geometry] eta (if present) is forwarded to the resolver as the
+    # default branch-selector; nan (missing) means per-entry or solution-1.
+    default_eta_multi: float | None = None if math.isnan(config_eta) else config_eta
+
+    try:
+        if "reflections_auto" in data:
+            runs = resolve_reflections_auto(data["reflections_auto"], mount, keV_multi)
+        else:
+            runs = resolve_reflections(
+                data["reflections"],
+                mount,
+                keV_multi,
+                default_eta=default_eta_multi,
+            )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    # Resolve output directory.
+    if args.output is not None:
+        if args.output.exists() and args.output.is_file():
+            print(
+                f"error: --output {args.output} is a file; "
+                "multi-reflection mode needs a directory.",
+                file=sys.stderr,
+            )
+            return 1
+        out_dir = args.output
+    else:
+        out_dir = Path(pkl_fpath)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # One kernel per unique group; pick the first member as the group
+    # representative for filename + theta/eta/omega.
+    date_multi = datetime.now().strftime("%Y%m%d_%H%M")
+    groups_seen: dict[int, dict] = {}  # group id → manifest entry
+    for run in runs:
+        if run.group in groups_seen:
+            # Already scheduled / built; just add this reflection to the entry.
+            groups_seen[run.group]["reflections"].append(run.hkl)
+            groups_seen[run.group]["omegas"].append(run.omega)
+            continue
+
+        # First member of this group → representative.
+        # --if-missing: scan for any existing kernel matching the (theta, eta, keV)
+        # pattern rather than an exact filename.  A fresh run stamps a new datetime
+        # in the name, so an exact-path check would never match a previous run's file.
+        pattern = _kernel_glob_pattern(run.theta, run.eta, run.keV)
+        existing = sorted(out_dir.glob(pattern), key=lambda p: p.stat().st_mtime)
+
+        if existing:
+            if args.if_missing:
+                # Reuse the newest matching file; record its name in the manifest.
+                newest = existing[-1]
+                print(f"kernel already present at {newest}; skipping.")
+                groups_seen[run.group] = {
+                    "group": run.group,
+                    "theta": run.theta,
+                    "eta": run.eta,
+                    "keV": run.keV,
+                    "filename": newest.name,
+                    "reflections": [run.hkl],
+                    "omegas": [run.omega],
+                }
+                continue
+            if not args.force:
+                print(
+                    f"refusing to overwrite existing kernel npz matching {pattern}; "
+                    "pass --force to regenerate or --if-missing to reuse.",
+                    file=sys.stderr,
+                )
+                return 1
+            # --force: fall through and generate under a new timestamped name.
+
+        filename = _build_kernel_filename(
+            "oblique",
+            run.hkl,
+            run.keV,
+            theta=run.theta,
+            eta=run.eta,
+            date=date_multi,
+        )
+        kernel_path = out_dir / filename
+
+        # Build generate_kernel kwargs: instrument params from [reciprocal]
+        # plus the per-group geometry.
+        gk_kwargs = dict(reciprocal_kwargs)
+        gk_kwargs["theta"] = run.theta
+        gk_kwargs["hkl"] = run.hkl
+        gk_kwargs["keV"] = run.keV
+        if args.seed is not None:
+            gk_kwargs["seed"] = args.seed
+
+        theta_deg = float(np.degrees(run.theta))
+        print(
+            f"reflection: hkl={run.hkl}, keV={run.keV:g} -> theta = {theta_deg:.4f} deg "
+            f"(group {run.group}, eta={run.eta:.4f} rad)"
+        )
+        written = generate_kernel(
+            output_path=kernel_path,
+            mode="oblique",
+            eta=run.eta,
+            mount=mount,
+            omega=run.omega,
+            **gk_kwargs,
+        )
+        print(f"wrote {written}")
+
+        groups_seen[run.group] = {
+            "group": run.group,
+            "theta": run.theta,
+            "eta": run.eta,
+            "keV": run.keV,
+            "filename": filename,
+            "reflections": [run.hkl],
+            "omegas": [run.omega],
+        }
+
+    # Write manifest alongside the kernels.
+    manifest_entries = list(groups_seen.values())
+    _write_kernel_manifest(out_dir / "kernel_manifest.toml", manifest_entries)
+    return 0
+
+
+def _write_kernel_manifest(path: Path, entries: list[dict]) -> None:
+    """Render kernel_manifest.toml (no tomli-w dependency; hand-rendered).
+
+    Each entry must have keys: group, theta, eta, keV, filename,
+    reflections (list of hkl tuples), omegas (list of floats).
+    """
+    lines = [
+        "# generated by dfxm-bootstrap — one row per unique (theta, eta, keV) kernel group",
+        "",
+    ]
+    for e in entries:
+        lines += [
+            "[[kernels]]",
+            f"group = {e['group']}",
+            f"theta = {e['theta']!r}",
+            f"eta = {e['eta']!r}",
+            f"keV = {e['keV']!r}",
+            f'filename = "{e["filename"]}"',
+            "reflections = [" + ", ".join(str(list(h)) for h in e["reflections"]) + "]",
+            "omegas = [" + ", ".join(repr(o) for o in e["omegas"]) + "]",
+            "",
+        ]
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def generate_kernel(
@@ -382,8 +603,6 @@ def cli_main(argv: list[str] | None = None) -> int:
     npz to `<fm.pkl_fpath>/Resq_i_h{h}_k{k}_l{l}_{keV}keV_<date>.npz`,
     or to `--output <path>` if given.
     """
-    import argparse
-    import sys
     import tomllib
 
     import dfxm_geo.direct_space.forward_model as fm
@@ -488,19 +707,26 @@ def cli_main(argv: list[str] | None = None) -> int:
     raw_hkl = reciprocal_kwargs.pop("hkl", None)
     raw_keV = reciprocal_kwargs.pop("keV", None)
 
-    if (raw_hkl is None) != (raw_keV is None):
-        print(
-            "error: must provide both `hkl` and `keV`, or neither.",
-            file=sys.stderr,
-        )
-        return 1
+    # Detect multi-reflection mode: [[reflections]] or [reflections_auto] present.
+    # In this case [reciprocal] carries only instrument params (no hkl); hkl comes
+    # from each [[reflections]] entry instead. Skip the single-reflection hkl/keV
+    # parity check — the multi branch handles geometry resolution itself.
+    multi = ("reflections" in data) or ("reflections_auto" in data)
 
-    if (raw_hkl is not None or raw_keV is not None) and "theta" in reciprocal_kwargs:
-        print(
-            "error: cannot specify both `theta` and `hkl`+`keV`; pick one.",
-            file=sys.stderr,
-        )
-        return 1
+    if not multi:
+        if (raw_hkl is None) != (raw_keV is None):
+            print(
+                "error: must provide both `hkl` and `keV`, or neither.",
+                file=sys.stderr,
+            )
+            return 1
+
+        if (raw_hkl is not None or raw_keV is not None) and "theta" in reciprocal_kwargs:
+            print(
+                "error: cannot specify both `theta` and `hkl`+`keV`; pick one.",
+                file=sys.stderr,
+            )
+            return 1
 
     # Parse [crystal] and [geometry] blocks.
     mount_block = data.get("crystal")
@@ -526,13 +752,31 @@ def cli_main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        mode, config_eta = _parse_geometry_block(geometry_block)
+        # Multi-reflection path: eta may be absent (resolver picks it per-entry)
+        # or present as a default for the resolver. Pass allow_missing_eta=True
+        # so a missing eta returns ("oblique", nan) rather than raising.
+        mode, config_eta = _parse_geometry_block(geometry_block, allow_missing_eta=multi)
         # Ignore a forward-layout [crystal] (use the default Al mount); only a
         # genuine mount block feeds the lattice parameter / orientation.
         mount = _crystal_mount_from_toml(mount_block if is_mount_block else None)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+    # -------------------------------------------------------------------------
+    # Multi-reflection branch: [[reflections]] / [reflections_auto]
+    # -------------------------------------------------------------------------
+    if multi:
+        return _bootstrap_multi_reflection(
+            args=args,
+            data=data,
+            mount=mount,
+            mode=mode,
+            config_eta=config_eta,
+            raw_keV=raw_keV,
+            reciprocal_kwargs=reciprocal_kwargs,
+            pkl_fpath=fm.pkl_fpath,
+        )
 
     a_lattice = mount.a
     if raw_hkl is not None and raw_keV is not None:
