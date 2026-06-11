@@ -64,6 +64,7 @@ class GeometryContext:
     xl_range: float
     rl: np.ndarray  # (3, N) metres
     prob_z: np.ndarray  # (N,) beam profile weight
+    omega: float = 0.0  # B' goniometer omega (rad); consumed ONLY by precompute_forward_static
 
 
 @_dataclass(frozen=True)
@@ -621,7 +622,9 @@ def build_instrument_context() -> InstrumentContext:
     )
 
 
-def build_geometry_context(theta_0_: float, instrument: InstrumentContext) -> GeometryContext:
+def build_geometry_context(
+    theta_0_: float, instrument: InstrumentContext, omega: float = 0.0
+) -> GeometryContext:
     """Build a ``GeometryContext`` for the given Bragg angle.
 
     The single source of truth for the theta-dependent geometry (Theta, the
@@ -633,6 +636,8 @@ def build_geometry_context(theta_0_: float, instrument: InstrumentContext) -> Ge
     Args:
         theta_0_: Bragg angle in radians.
         instrument: ``InstrumentContext`` that provides the detector/grid dims.
+        omega: B' goniometer omega in radians (default 0.0); forwarded to
+            ``GeometryContext`` and consumed ONLY by ``precompute_forward_static``.
     """
     th = float(theta_0_)
     Theta_ = np.array([[np.cos(th), 0, np.sin(th)], [0, 1, 0], [-np.sin(th), 0, np.cos(th)]])
@@ -653,6 +658,7 @@ def build_geometry_context(theta_0_: float, instrument: InstrumentContext) -> Ge
         xl_range=xl_range_,
         rl=rl_,
         prob_z=prob_z_,
+        omega=float(omega),
     )
 
 
@@ -661,6 +667,7 @@ def build_forward_context(
     resolution: "ResolutionContext",
     hkl: "tuple[int, int, int]",
     instrument: "InstrumentContext | None" = None,
+    omega: float = 0.0,
 ) -> "ForwardContext":
     """Compose a context for a run from explicit theta, resolution, and hkl.
 
@@ -671,9 +678,12 @@ def build_forward_context(
 
     ``instrument`` is optional; when omitted it is built from the current
     module globals (psize/Npixels/Nsub/…).
+
+    ``omega`` is the B' goniometer angle in radians (default 0.0); forwarded
+    to ``GeometryContext`` and consumed ONLY by ``precompute_forward_static``.
     """
     instr = instrument if instrument is not None else build_instrument_context()
-    geom = build_geometry_context(theta_run, instr)
+    geom = build_geometry_context(theta_run, instr, omega=omega)
     q = np.asarray(hkl, dtype=float)
     q_hkl_ = q / np.sqrt(float(q @ q))  # B_0=I form; bit-identical to Find_Hg (~line 385)
     return ForwardContext(instrument=instr, geometry=geom, resolution=resolution, q_hkl=q_hkl_)
@@ -685,7 +695,7 @@ def precompute_forward_static(
 ) -> np.ndarray:
     """Compute the phi/chi/2theta-independent part of the forward model.
 
-    Returns ``base_qc = (Us @ Hg @ q_hkl).squeeze().T`` (shape ``(3, N)``),
+    Returns ``base_qc = (Us_eff @ Hg @ q_hkl).squeeze().T`` (shape ``(3, N)``),
     the single most expensive step in the forward model (~73% of a call) and
     the *only* part that depends solely on ``Hg``. Compute this once per scan
     and pass it to ``forward_from_static`` for every frame. The result is
@@ -693,8 +703,24 @@ def precompute_forward_static(
     mutates it).
 
     ``ctx`` is required (#16 Slice 5): ``Us`` and ``q_hkl`` are sourced from it.
+
+    B' (spec §3, decided 2026-06-11): the diffraction vector and projection
+    rotate with goniometer omega about lab ẑ: ``base_qc = (R_z(ω) @ Us) @ Hg @
+    q_hkl``. The ray grid ``rl``, beam profile, and Hg field stay shared (same
+    probed volume — the B' approximation). Goniometer scan offsets (φ, χ, 2θ)
+    remain lab-frame and are added to the rotated ``base_qc`` (the goniometer is
+    lab-mounted). Full-ω (rotating ``rl`` itself) is the documented upgrade path,
+    isolated behind this one seam.
     """
-    qs = ctx.instrument.Us @ Hg @ ctx.q_hkl
+    Us = ctx.instrument.Us
+    if ctx.geometry.omega != 0.0:
+        # B' (spec §3, decided 2026-06-11): the diffraction vector and projection
+        # rotate with goniometer omega about lab z; rl/Hg stay shared (same
+        # probed volume). Guarded so omega=0 keeps v2.5.1 float ops bit-identical.
+        from dfxm_geo.crystal.oblique import _R_z
+
+        Us = _R_z(ctx.geometry.omega) @ Us
+    qs = Us @ Hg @ ctx.q_hkl
     return qs.squeeze().T
 
 
