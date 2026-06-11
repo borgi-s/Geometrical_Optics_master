@@ -11,6 +11,7 @@ import numpy as np
 
 from dfxm_geo.crystal.oblique import CrystalMount
 from dfxm_geo.io.hdf5 import geometry_provenance_attrs
+from dfxm_geo.reciprocal_space.kernel import _DEFAULT_AL_CRYSTAL
 
 
 def test_default_mount_is_al_identity() -> None:
@@ -20,12 +21,14 @@ def test_default_mount_is_al_identity() -> None:
     assert attrs["geometry_mode"] == "simplified"
     assert attrs["eta"] == 0.0
     assert attrs["theta"] == 0.1567
-    assert attrs["lattice"] == "cubic"
-    assert np.isclose(attrs["a"], 4.0493e-10, rtol=1e-3)  # Al default
+    assert attrs["lattice"] == _DEFAULT_AL_CRYSTAL.lattice
+    assert attrs["a"] == _DEFAULT_AL_CRYSTAL.a
     np.testing.assert_array_equal(attrs["mount_x"], [1, 0, 0])
     np.testing.assert_array_equal(attrs["mount_y"], [0, 1, 0])
     np.testing.assert_array_equal(attrs["mount_z"], [0, 0, 1])
     assert attrs["mount_x"].dtype == np.int64
+    assert attrs["mount_y"].dtype == np.int64
+    assert attrs["mount_z"].dtype == np.int64
 
 
 def test_oblique_mount_passthrough() -> None:
