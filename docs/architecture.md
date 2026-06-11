@@ -29,7 +29,10 @@ src/dfxm_geo/
 │   └── mosaicity.py         compute_com_maps (Phase 9.2)
 ├── viz/
 │   └── mosaicity.py         plot_mosaicity_maps, plot_qi_cross_section (Phase 9.2)
-└── pipeline.py              Config dataclasses, run_simulation, run_postprocess, CLI
+├── pipeline.py              Stable public facade — re-exports config + orchestrator + cli
+├── config.py                Config dataclasses + TOML loaders (no imports from the other two)
+├── orchestrator.py          run_simulation / run_identification + helpers + _KERNEL_CTX_CACHE
+└── cli.py                   argparse entry points; resolves names lazily through the facade
 ```
 
 The top-level files `functions.py`, `image_processor.py`, `init_forward.py`,
@@ -38,11 +41,29 @@ generate_Resq_i, exposure_time}.py` are kept as **deprecation shims** that
 re-export from the new package. They will be removed once all known
 consumers have migrated; see the cleanup plan for the schedule.
 
-`pipeline.py` is the authoritative config-driven orchestrator. It exports the
-dataclasses `CrystalConfig`, `ScanConfig`, `IOConfig`, `PostprocessConfig`, and
-`SimulationConfig`, and the functions `run_simulation` and `run_postprocess`.
-The CLI entry point `dfxm-forward` (configured in `pyproject.toml`) calls
-`pipeline.cli_main`.
+### Four-module layout (refactor gate, 2026-06-11)
+
+`dfxm_geo.pipeline` is the **stable public facade**: the import surface used
+by external scripts and notebooks, and the target for all `pyproject.toml`
+entry points. It re-exports everything from `config`, `orchestrator`, and
+`cli`. **Never add logic here** — its sole job is the re-export table.
+
+`dfxm_geo.config` owns all config dataclasses (`SimulationConfig`,
+`IdentificationConfig`, `GeometryConfig`, `ScanConfig`, …) and the TOML
+loaders (`load_config`, `load_identification_config`). It imports nothing from
+`orchestrator` or `cli`; this keeps the dependency graph acyclic.
+
+`dfxm_geo.orchestrator` is where the work happens: `run_simulation`,
+`run_identification`, `run_postprocess`, all their helpers, and
+`_KERNEL_CTX_CACHE`. Tests that monkeypatch orchestration internals
+(`_load_resolution`, `find_hg_scene`, `_run_identification_*`,
+`write_simulation_h5`, `_KERNEL_CTX_CACHE`) target **this module** — the
+facade binding does not reach the bare-name call sites here.
+
+`dfxm_geo.cli` holds the argparse dispatchers. It calls into the pipeline
+facade (`dfxm_geo.pipeline.*`) rather than importing `orchestrator` or
+`config` directly, so CLI-level tests that monkeypatch behaviour patch
+`dfxm_geo.pipeline.*`.
 
 ## Data flow for a simulation run
 
@@ -184,13 +205,17 @@ io.strain_cache  -------------+
 direct_space.forward_model ---+
    ^
    |
-io.images        ---  used by --> pipeline.run_simulation
-analysis.moments                  pipeline.run_postprocess
-analysis.colormaps                     ^             ^
-analysis.mosaicity ────────────────────┤             │
-viz.mosaicity      ────────────────────┘             │
-                                                     │
-                                             pipeline.cli_main
+io.images        ---  used by --> orchestrator.run_simulation
+analysis.moments                  orchestrator.run_postprocess
+analysis.colormaps                orchestrator.run_identification
+analysis.mosaicity ──────────────────────────┤
+viz.mosaicity      ──────────────────────────┘
+                                             ^
+                                             │
+                                        pipeline  (facade re-export)
+                                             ^
+                                             │
+                                           cli  (argparse; patches → pipeline.*)
 ```
 
 `reciprocal_space.{resolution, kernel, exposure}` interact with
@@ -203,8 +228,8 @@ imports from `direct_space` or `io`. `viz.mosaicity` depends only on
 
 ## CLI entry point
 
-`pipeline.cli_main` is registered as the `dfxm-forward` console script in
-`pyproject.toml`. It accepts:
+`cli.cli_main` (surfaced via the `dfxm_geo.pipeline` facade) is registered as
+the `dfxm-forward` console script in `pyproject.toml`. It accepts:
 
 | Flag | Effect |
 |---|---|
