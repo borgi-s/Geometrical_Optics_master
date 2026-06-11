@@ -69,3 +69,21 @@ def test_no_eta_target_returns_full_table_sorted() -> None:
     etas = [g.eta_1 for g in matches if not np.isnan(g.eta_1)]
     assert etas == sorted(etas)
     assert len(matches) > 0
+
+
+class TestNonCubicFindReflections:
+    def test_hexagonal_enumeration_contains_2m10(self):
+        mount = CrystalMount(
+            lattice="hexagonal",
+            a=3.2094e-10,
+            c=5.2108e-10,
+            mount_x=(2, -1, 0),
+            mount_y=(0, 1, 0),
+            mount_z=(0, 0, 1),
+        )
+        geoms = find_reflections(mount, 17.0, hkl_max=2)
+        assert any(g.hkl == (2, -1, 0) for g in geoms)
+        # Every returned theta must be inside the default theta-range filter.
+        for g in geoms:
+            theta = g.theta_1 if not np.isnan(g.theta_1) else g.theta_2
+            assert 0.0 <= theta <= float(np.deg2rad(16.25))

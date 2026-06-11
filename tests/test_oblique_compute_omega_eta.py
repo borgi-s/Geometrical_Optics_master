@@ -72,3 +72,36 @@ def test_unreachable_reflection_returns_nan(al_paper_mount: CrystalMount) -> Non
     geom = compute_omega_eta(al_paper_mount, hkl=(20, 20, 20), keV=19.1)
     assert np.isnan(geom.omega_1) and np.isnan(geom.omega_2)
     assert np.isnan(geom.eta_1) and np.isnan(geom.eta_2)
+
+
+class TestNonCubicSolver:
+    """M4 Stage 4.1: the Appendix-A solver is metric-general via C_s/U_mount."""
+
+    MG_A = 3.2094e-10
+    MG_C = 5.2108e-10
+
+    def _hex_mount(self):
+        return CrystalMount(
+            lattice="hexagonal",
+            a=self.MG_A,
+            c=self.MG_C,
+            mount_x=(2, -1, 0),
+            mount_y=(0, 1, 0),
+            mount_z=(0, 0, 1),
+        )
+
+    def test_hexagonal_theta_matches_textbook_d_spacing(self):
+        import math
+
+        # For hexagonal (2,-1,0): 1/d^2 = (4/3)(4 - 2 + 1)/a^2 = 4/a^2, d = a/2.
+        geom = compute_omega_eta(self._hex_mount(), (2, -1, 0), 17.0)
+        lam = 1.239841984e-9 / 17.0
+        expected_theta = math.asin(lam / (2.0 * (self.MG_A / 2.0)))
+        theta = geom.theta_1 if not np.isnan(geom.theta_1) else geom.theta_2
+        assert theta == pytest.approx(expected_theta, rel=1e-10)
+
+    def test_hexagonal_00l_unreachable_with_z_rotation_axis(self):
+        # (0,0,2) is parallel to the rotation axis: rotating cannot bring it
+        # onto the Ewald sphere -> both omega solutions NaN.
+        geom = compute_omega_eta(self._hex_mount(), (0, 0, 2), 17.0)
+        assert np.isnan(geom.omega_1) and np.isnan(geom.omega_2)
