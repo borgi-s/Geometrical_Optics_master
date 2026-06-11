@@ -888,6 +888,12 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
     if mount is not None:
         lines.append(f'lattice = "{mount.lattice}"')
         lines.append(f"a = {mount.a}")
+        if not mount.cell.is_cubic:
+            lines.append(f"b = {mount.cell.b}")
+            lines.append(f"c = {mount.cell.c}")
+            lines.append(f"alpha_deg = {mount.cell.alpha_deg}")
+            lines.append(f"beta_deg = {mount.cell.beta_deg}")
+            lines.append(f"gamma_deg = {mount.cell.gamma_deg}")
         lines.append(f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]")
         lines.append(f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]")
         lines.append(f"mount_z = [{mount.mount_z[0]}, {mount.mount_z[1]}, {mount.mount_z[2]}]")
@@ -991,6 +997,16 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
         lines += [
             f'lattice = "{mount.lattice}"',
             f"a = {mount.a}",
+        ]
+        if not mount.cell.is_cubic:
+            lines += [
+                f"b = {mount.cell.b}",
+                f"c = {mount.cell.c}",
+                f"alpha_deg = {mount.cell.alpha_deg}",
+                f"beta_deg = {mount.cell.beta_deg}",
+                f"gamma_deg = {mount.cell.gamma_deg}",
+            ]
+        lines += [
             f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]",
             f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]",
             f"mount_z = [{mount.mount_z[0]}, {mount.mount_z[1]}, {mount.mount_z[2]}]",
