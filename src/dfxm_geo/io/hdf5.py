@@ -15,7 +15,7 @@ import hashlib as _hashlib
 import socket as _socket
 import subprocess as _subprocess
 import sys as _sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib.metadata import version as _pkg_version
@@ -27,6 +27,7 @@ from dfxm_geo.crystal.oblique import CrystalMount
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from dfxm_geo.crystal.reflections import ReflectionRun
     from dfxm_geo.pipeline import ScanFrames
 
 import h5py
@@ -694,6 +695,7 @@ def write_simulation_h5(
     eta: float = 0.0,
     mount: CrystalMount | None = None,
     ctx: _fm.ForwardContext,
+    reflection_attrs: dict[str, object] | None = None,
 ) -> None:
     """One-call entry point for forward mode, v1.2.0 layout.
 
@@ -770,6 +772,13 @@ def write_simulation_h5(
         attrs_1_1["scanned_axes"] = list(scanned_axes)
     if crystal_mode is not None:
         attrs_1_1["crystal_mode"] = crystal_mode
+
+    # Multi-reflection per-scan provenance (Task 3, M3 plan 2).
+    # reflection_attrs carries: reflection_index, n_reflections, omega, hkl_reflection.
+    # Written only when run_simulation loops over [[reflections]]; None for single-
+    # reflection runs → zero change to the attrs dict (byte-identical path).
+    if reflection_attrs is not None:
+        attrs_1_1.update(reflection_attrs)
 
     # Oblique-angle provenance (v2.3.0+). eta=0 / simplified for v2.2.0 configs.
     _resolved_mount: CrystalMount
@@ -885,3 +894,48 @@ def write_simulation_h5(
                 dfxm_geo=dfxm_geo_meta,
                 attrs=attrs_1_1,
             )
+
+
+def write_multi_reflection_master(
+    output_dir: Path,
+    runs: Sequence[ReflectionRun],
+    *,
+    master_name: str,
+    mount: CrystalMount | None,
+    keV: float,
+) -> Path:
+    """Thin super-master: ExternalLinks to each reflection's standard master +
+    the resolved reflection table (spec §7 option 2, M3 plan 2).
+
+    Each per-reflection master is a fully standard single-reflection file written
+    by run_simulation into ``output_dir/reflection_NNN/``; this file adds zero
+    constraints on them. The super-master contains:
+
+    - ``/reflections`` — dataset group with hkl (N×3), omega, eta, theta, group
+    - ``/reflection_NNN`` — ExternalLink to ``reflection_NNN/<master_name>`` root
+    - root attrs: n_reflections, keV, lattice/a/mount_x/y/z (if mount given)
+
+    Relative ExternalLink paths are resolved relative to the super-master's
+    own directory (``output_dir``), which is the parent of each per-reflection
+    subdir.  That matches how the per-scan detector ExternalLinks work.
+    """
+    path = output_dir / (Path(master_name).stem + "_multi.h5")
+    with h5py.File(path, "w") as fh:
+        fh.attrs["n_reflections"] = len(runs)
+        fh.attrs["keV"] = float(keV)
+        if mount is not None:
+            fh.attrs["lattice"] = mount.lattice
+            fh.attrs["a"] = float(mount.a)
+            for _name in ("mount_x", "mount_y", "mount_z"):
+                fh.attrs[_name] = np.asarray(getattr(mount, _name), dtype=np.int64)
+        grp = fh.create_group("reflections")
+        grp.create_dataset("hkl", data=np.asarray([r.hkl for r in runs], dtype=np.int64))
+        grp.create_dataset("omega", data=np.asarray([r.omega for r in runs]))
+        grp.create_dataset("eta", data=np.asarray([r.eta for r in runs]))
+        grp.create_dataset("theta", data=np.asarray([r.theta for r in runs]))
+        grp.create_dataset("group", data=np.asarray([r.group for r in runs], dtype=np.int64))
+        for idx in range(1, len(runs) + 1):
+            fh[f"reflection_{idx:03d}"] = h5py.ExternalLink(
+                f"reflection_{idx:03d}/{master_name}", "/"
+            )
+    return path

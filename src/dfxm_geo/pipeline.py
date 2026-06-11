@@ -61,6 +61,7 @@ from dfxm_geo.io.hdf5 import (
     ScanSpec,
     load_h5_scan,
     write_identification_h5,
+    write_multi_reflection_master,
     write_simulation_h5,
 )
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
@@ -1009,13 +1010,31 @@ def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]
     a `<output_dir>/dfxm_geo_random_dislocations.json` sidecar.
     """
     if config.reflections:
-        raise NotImplementedError(
-            "multi-reflection orchestration is not wired yet (M3 plan 2, pending "
-            "the omega-handling decision in docs/superpowers/specs/"
-            "2026-06-10-m3-multi-reflection-sweeps-design.md §3). Bootstrap and "
-            "config validation work; forward/identify of [[reflections]] configs "
-            "land in the next arc."
+        # M3 plan 2 (B'): loop over [[reflections]], one standard forward master
+        # per reflection in reflection_NNN/ subdirs, plus a thin super-master.
+        runs = config.reflections
+        results: list[dict[str, Any]] = []
+        for idx, run in enumerate(runs, start=1):
+            res_run = _resolution_for_run(config.reciprocal, config.geometry, run)
+            sub_dir = output_dir / f"reflection_{idx:03d}"
+            results.append(
+                _run_simulation_inner(
+                    config,
+                    sub_dir,
+                    res_run,
+                    reflection=run,
+                    reflection_index=idx,
+                    n_reflections=len(runs),
+                )
+            )
+        write_multi_reflection_master(
+            output_dir,
+            runs,
+            master_name="dfxm_geo.h5",
+            mount=config.geometry.mount,
+            keV=config.reciprocal.keV,
         )
+        return {"n_reflections": len(runs), "reflections": results}
     res = _load_resolution(config.reciprocal, config.geometry)
     # #16: geometry is built from run_theta(config) inside build_forward_context
     # (called in _run_simulation_inner); Z_shift callers pass
@@ -1027,6 +1046,10 @@ def _run_simulation_inner(
     config: SimulationConfig,
     output_dir: Path,
     res: fm.ResolutionContext,
+    *,
+    reflection: _ReflectionRun | None = None,
+    reflection_index: int = 0,
+    n_reflections: int = 0,
 ) -> dict[str, Any]:
     """Body of ``run_simulation``.
 
@@ -1034,6 +1057,12 @@ def _run_simulation_inner(
     ``build_forward_context(run_theta(config), ...)`` (oblique-safe: geometry
     is derived from the correct Bragg angle rather than module globals), then
     runs the scan frames and writes the HDF5 output.
+
+    For multi-reflection runs (M3 plan 2, B'), ``reflection`` carries the
+    per-run hkl/omega/eta/theta; ``reflection_index`` (1-based) and
+    ``n_reflections`` are written as per-scan attrs in the master.  All three
+    default to the single-reflection no-op values so the existing call path
+    is byte-identical when ``reflection is None``.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1068,11 +1097,17 @@ def _run_simulation_inner(
     # build_geometry_context(run_theta(config), ...) which computes Theta/rl/prob_z
     # from the correct Bragg angle (oblique or simplified) — no module globals needed.
     # S2a+S3 (#16): CM call site removed; ctx is the sole geometry source.
-    ctx = fm.build_forward_context(
-        run_theta(config),
-        res,
-        config.reciprocal.hkl,
-    )
+    # M3 plan 2 (B'): per-reflection runs use _context_for_run which threads the
+    # run's hkl and omega into the ForwardContext; single-reflection uses the
+    # config-level hkl with omega=0 (the original code path).
+    if reflection is not None:
+        ctx = _context_for_run(res, reflection)
+    else:
+        ctx = fm.build_forward_context(
+            run_theta(config),
+            res,
+            config.reciprocal.hkl,
+        )
 
     # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
     # Centered + random_dislocations use Find_Hg_from_population.
@@ -1132,6 +1167,21 @@ def _run_simulation_inner(
     h5_path = output_dir / "dfxm_geo.h5"
     frames = _build_scan_frames(config.scan)
     positioners = _positioners_for_scan_frames(frames, config.scan)
+    # Per-run eta: use the reflection's eta for multi-reflection runs; fall back
+    # to config.geometry.eta for single-reflection (preserves existing behaviour).
+    _eta = reflection.eta if reflection is not None else config.geometry.eta
+    # Multi-reflection per-scan attrs (M3 plan 2). None for single-reflection →
+    # attrs dict is unchanged (byte-identical existing path).
+    _reflection_attrs: dict[str, object] | None = (
+        {
+            "hkl_reflection": np.asarray(reflection.hkl, dtype=np.int64),
+            "omega": float(reflection.omega),
+            "reflection_index": reflection_index,
+            "n_reflections": n_reflections,
+        }
+        if reflection is not None
+        else None
+    )
     write_simulation_h5(
         h5_path,
         Hg=Hg_base,
@@ -1151,9 +1201,10 @@ def _run_simulation_inner(
         Hg_provider=Hg_provider,
         write_strain_provenance=config.io.write_strain_provenance,
         geometry_mode=config.geometry.mode,
-        eta=config.geometry.eta,
+        eta=_eta,
         mount=config.geometry.mount,
         ctx=ctx,
+        reflection_attrs=_reflection_attrs,
     )
     return {
         "h5_path": h5_path,
@@ -1470,7 +1521,19 @@ def cli_main(argv: list[str] | None = None) -> int:
     else:
         run_simulation(config, args.output)
         if config.postprocess.enabled and not args.no_postprocess:
-            run_postprocess(args.output, config)
+            if config.reflections:
+                # run_postprocess requires config.reciprocal.hkl (not set for
+                # multi-reflection configs) and calls _load_resolution / build_forward_context
+                # using the top-level config rather than per-run geometry.  Looping it
+                # per-subdir would produce wrong geometry for every reflection.
+                # Per-reflection figures are a Task 7 / polish item (M3 plan 2).
+                print(
+                    "postprocess: skipped for multi-reflection runs "
+                    "(per-reflection figures land with plan-2 polish)",
+                    file=sys.stderr,
+                )
+            else:
+                run_postprocess(args.output, config)
     return 0
 
 

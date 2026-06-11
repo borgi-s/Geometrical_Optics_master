@@ -106,12 +106,59 @@ def test_geometry_eta_acts_as_default(tmp_path):
         assert r.eta == pytest.approx(0.3531, abs=1e-3)
 
 
-def test_run_simulation_refuses_multi_reflection(tmp_path):
-    cfg = SimulationConfig.from_toml(_write(tmp_path, _multi_toml()))
+def _multi_analytic_toml() -> str:
+    """Analytic-backend multi-reflection TOML for the forward smoke test."""
+    return """
+[reciprocal]
+keV = 19.1
+backend = "analytic"
+beamstop = false
+
+[geometry]
+mode = "oblique"
+
+[crystal]
+lattice = "cubic"
+a       = 4.0493e-10
+mount_x = [1, 0, 0]
+mount_y = [0, 1, 0]
+mount_z = [0, 0, 1]
+mode    = "centered"
+
+[crystal.centered]
+b = [1, -1, 0]
+n = [1,  1, -1]
+t = [1,  1,  2]
+
+[io]
+include_perfect_crystal = false
+
+[postprocess]
+enabled = false
+
+[scan]
+[scan.phi]
+value = 0.0
+range = 1.25e-4
+steps = 3
+
+[[reflections]]
+hkl = [1, 1, 3]
+[[reflections]]
+hkl = [-1, -1, 3]
+"""
+
+
+def test_run_simulation_multi_reflection_writes_subdirs(tmp_path):
+    """Task 3 (M3 plan 2): multi-reflection configs write per-reflection subdirs."""
     from dfxm_geo.pipeline import run_simulation
 
-    with pytest.raises(NotImplementedError, match="multi-reflection"):
-        run_simulation(cfg, tmp_path)
+    cfg = SimulationConfig.from_toml(_write(tmp_path, _multi_analytic_toml()))
+    result = run_simulation(cfg, tmp_path / "out")
+    assert result["n_reflections"] == 2
+    assert (tmp_path / "out" / "reflection_001" / "dfxm_geo.h5").is_file()
+    assert (tmp_path / "out" / "reflection_002" / "dfxm_geo.h5").is_file()
+    assert (tmp_path / "out" / "dfxm_geo_multi.h5").is_file()
 
 
 _IDENTIFY_MULTI_REFLECTION_TOML = """
