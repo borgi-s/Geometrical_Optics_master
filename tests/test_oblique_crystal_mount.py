@@ -67,7 +67,7 @@ def test_non_integer_mount_raises():
 
 def test_unknown_lattice_raises():
     # v3.0.0: non-cubic lattices are accepted; unknown lattice strings are rejected.
-    with pytest.raises((ValueError, TypeError)):
+    with pytest.raises(ValueError, match="lattice must be one of"):
         CrystalMount(
             lattice="fcc",  # not a valid lattice system
             a=4.0e-10,
