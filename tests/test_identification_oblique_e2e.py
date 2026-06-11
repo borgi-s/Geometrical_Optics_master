@@ -9,6 +9,19 @@ seconds per frame); run with `pytest -m slow`.
 Each test asserts the M2 DoD: the run completes, the master + per-scan layout
 exists, and the oblique geometry round-trips through the per-scan /N.1 attrs
 (geometry_mode/eta/theta/mount — written by _identify_geometry_attrs since M2).
+
+Discriminating oblique from simplified fallback
+-----------------------------------------------
+The theta assertion (~15.417 deg) is a sanity check that ctx threading worked
+end-to-end (the value differs from the import-time default), NOT a fallback
+guard: run_theta returns ~15.417 deg for this reflection in BOTH oblique and
+simplified modes (same physics, different coordinate treatment).
+
+The actual oblique-vs-simplified discriminators are:
+  - ``geometry_mode == "oblique"`` in the /N.1 attrs
+  - ``eta == 0.353140`` (eta is 0.0 in simplified mode)
+
+Both are asserted by ``_assert_oblique_scan_attrs``.
 """
 
 from __future__ import annotations
@@ -73,16 +86,35 @@ _OBLIQUE_E2E_TOML_SINGLE = (
 def _assert_oblique_scan_attrs(master_path: Path) -> list[str]:
     """Shared DoD assertion: every /N.1 carries the oblique geometry attrs.
 
+    Checks three things:
+    1. ``geometry_mode == "oblique"`` — primary fallback guard; simplified
+       mode would write "simplified" here.
+    2. ``eta == 0.353140`` (atol=1e-6) — secondary fallback guard; simplified
+       mode uses eta=0.0. The tight tolerance confirms exact pass-through of
+       the config value with no lossy conversion.
+    3. ``theta ~= 15.417 deg`` — sanity check that ctx threading reached the
+       attr writer (theta differs from the import-time default); NOT a
+       fallback discriminator (simplified mode produces the same theta for
+       this reflection).
+    4. All three mount vectors and lattice/a — confirm crystal ctx threading.
+
     Returns the scan ids for further per-mode assertions."""
     with h5py.File(master_path, "r") as f:
         scan_ids = [k for k in f if k != "dfxm_geo"]
         assert scan_ids, "identify run produced no scans"
         for sid in scan_ids:
             attrs = f[sid].attrs
+            # --- primary oblique-vs-simplified discriminators ---
             assert attrs["geometry_mode"] == "oblique"
-            assert np.isclose(float(attrs["eta"]), _OBLIQUE_ETA, atol=1e-4)
+            assert np.isclose(float(attrs["eta"]), _OBLIQUE_ETA, atol=1e-6)
+            # --- ctx-threading sanity (same value in both modes for this hkl) ---
             assert np.isclose(float(attrs["theta"]), _OBLIQUE_THETA, atol=1e-3)
+            # --- crystal ctx threading: all mount vectors + lattice ---
             np.testing.assert_array_equal(attrs["mount_x"], [1, 0, 0])
+            np.testing.assert_array_equal(attrs["mount_y"], [0, 1, 0])
+            np.testing.assert_array_equal(attrs["mount_z"], [0, 0, 1])
+            assert attrs["lattice"] == "cubic"
+            assert np.isclose(float(attrs["a"]), 4.0493e-10)
     return scan_ids
 
 
@@ -112,6 +144,8 @@ def test_identify_single_oblique_e2e(tmp_path: Path) -> None:
         # detector frame actually computed (non-degenerate physics)
         img = f["/1.1/instrument/dfxm_sim_detector/data"][0].astype(np.float64)
         assert img.max() > 0.0
+        assert np.isfinite(img).all()
+        assert img.min() >= 0.0
         # embedded config TOML round-trips oblique (pre-M2 the ONLY provenance)
         toml_str = f["/dfxm_geo/config_toml"][()].decode()
     parsed = tomllib.loads(toml_str)
