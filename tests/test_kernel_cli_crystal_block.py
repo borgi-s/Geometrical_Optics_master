@@ -40,3 +40,39 @@ def test_invalid_crystal_block_propagates_ValueError() -> None:
     }
     with pytest.raises(ValueError, match="mutually orthogonal"):
         _crystal_mount_from_toml(bad)
+
+
+class TestNonCubicCrystalBlock:
+    def test_hexagonal_block_parses(self):
+        mount = _crystal_mount_from_toml(
+            {
+                "lattice": "hexagonal",
+                "a": 3.2094e-10,
+                "c": 5.2108e-10,
+                "mount_x": [2, -1, 0],
+                "mount_y": [0, 1, 0],
+                "mount_z": [0, 0, 1],
+            }
+        )
+        assert mount.lattice == "hexagonal"
+        assert mount.cell.c == 5.2108e-10
+        assert mount.cell.gamma_deg == 120.0
+
+    def test_triclinic_block_with_nonorthogonal_mount_rejected(self):
+        # (1,0,0)/(0,1,0)/(0,0,1) plane normals are NOT Cartesian-orthogonal
+        # in this triclinic cell -> CrystalMount must reject the triple.
+        with pytest.raises(ValueError, match="orthogonal"):
+            _crystal_mount_from_toml(
+                {
+                    "lattice": "triclinic",
+                    "a": 5.1e-10,
+                    "b": 6.2e-10,
+                    "c": 7.3e-10,
+                    "alpha_deg": 81.0,
+                    "beta_deg": 98.5,
+                    "gamma_deg": 105.2,
+                    "mount_x": [1, 0, 0],
+                    "mount_y": [0, 1, 0],
+                    "mount_z": [0, 0, 1],
+                }
+            )

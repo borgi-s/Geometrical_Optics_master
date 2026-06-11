@@ -35,13 +35,27 @@ _DEFAULT_AL_CRYSTAL = CrystalMount(
 
 
 def _crystal_mount_from_toml(data: dict | None) -> CrystalMount:
-    """Build a CrystalMount from a `[crystal]` TOML block (or None → default Al)."""
+    """Build a CrystalMount from a `[crystal]` TOML block (or None → default Al).
+
+    Optional cell parameters ``b``/``c`` (metres) and ``alpha_deg``/``beta_deg``/
+    ``gamma_deg`` (degrees) extend the mount beyond cubic; constrained values
+    are filled per crystal system (see ``UnitCell.from_lattice``).
+    """
     if data is None:
         return _DEFAULT_AL_CRYSTAL
+
+    def _opt(key: str) -> float | None:
+        return float(data[key]) if key in data else None
+
     try:
         return CrystalMount(
             lattice=data["lattice"],
             a=float(data["a"]),
+            b=_opt("b"),
+            c=_opt("c"),
+            alpha_deg=_opt("alpha_deg"),
+            beta_deg=_opt("beta_deg"),
+            gamma_deg=_opt("gamma_deg"),
             mount_x=tuple(int(x) for x in data["mount_x"]),  # type: ignore[arg-type]
             mount_y=tuple(int(x) for x in data["mount_y"]),  # type: ignore[arg-type]
             mount_z=tuple(int(x) for x in data["mount_z"]),  # type: ignore[arg-type]
@@ -740,7 +754,18 @@ def cli_main(argv: list[str] | None = None) -> int:
     # forward layout) works, while still requiring an explicit [geometry] mode
     # when a genuine mount is supplied (the spec-§6 explicitness guard, now
     # correctly scoped so it no longer over-fires on a forward layout).
-    _MOUNT_KEYS = ("lattice", "a", "mount_x", "mount_y", "mount_z")
+    _MOUNT_KEYS = (
+        "lattice",
+        "a",
+        "b",
+        "c",
+        "alpha_deg",
+        "beta_deg",
+        "gamma_deg",
+        "mount_x",
+        "mount_y",
+        "mount_z",
+    )
     is_mount_block = mount_block is not None and any(k in mount_block for k in _MOUNT_KEYS)
     if is_mount_block and geometry_block is None:
         print(
