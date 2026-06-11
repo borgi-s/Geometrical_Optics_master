@@ -2,12 +2,23 @@
 
 The S1-S4 remount matrices (crystal/remount.py) act in the CRYSTAL frame
 inside Find_Hg; the oblique machinery acts on the lab-frame Bragg geometry
-(theta/eta) via the ForwardContext. They are mechanically orthogonal, so the
-combination is allowed — but until M2 it was completely untested. This test
-pins: a wall-mode forward with a non-trivial remount under the paper oblique
-geometry runs end-to-end on the analytic backend and records BOTH the oblique
-attrs and the remount in provenance. Marked `slow` (one real analytic frame
-at the module-default grid, same budget as Gate C).
+(theta/eta) via the ForwardContext. They are mechanically decoupled at the
+input seam (different frames, different code paths), so the combination is
+allowed — but until M2 it was completely untested.
+
+The outputs DO interact: the oblique geometry projects the S-rotated strain
+field differently onto the detector, which is exactly why the S1-vs-S2
+image-difference assertion below works.
+
+This test pins BOTH:
+- that a wall-mode forward with a non-trivial remount under the paper oblique
+  geometry runs end-to-end on the analytic backend and records the oblique
+  attrs AND the remount in provenance; AND
+- that the sample_remount S-matrix is demonstrably applied (S2 ≠ S1 images),
+  not just recorded.
+
+Marked `slow` (two analytic frames: one S2 run + one S1 control, same
+per-frame budget as Gate C).
 """
 
 from __future__ import annotations
@@ -42,6 +53,30 @@ def _find_detector(grp: h5py.Group) -> h5py.Dataset | None:
     return None
 
 
+def _run_wall_oblique(tmp_path: Path, remount: str) -> tuple[Path, np.ndarray]:
+    """Run a single-frame wall+oblique forward with the given remount label.
+
+    Returns (master_h5_path, detector_frame_float64).
+    """
+    cfg = SimulationConfig.from_toml(configs_root() / "al_oblique_figure3.toml")
+    cfg = replace(
+        cfg,
+        crystal=CrystalConfig(
+            mode="wall",
+            wall=WallCrystalConfig(dis=4.0, ndis=11, sample_remount=remount),
+        ),
+        scan=ScanConfig(),  # rocking peak, single frame (Gate C pattern)
+        io=replace(cfg.io, write_strain_provenance=False, include_perfect_crystal=False),
+    )
+    run_simulation(cfg, tmp_path)
+    master = tmp_path / "dfxm_geo.h5"
+    with h5py.File(master, "r") as f:
+        img = _find_detector(f["/1.1"])
+        assert img is not None, "could not find detector dataset under /1.1"
+        frame = img[0].astype(np.float64)
+    return master, frame
+
+
 @pytest.mark.slow
 def test_wall_remount_oblique_forward_e2e(tmp_path: Path) -> None:
     """Wall-mode forward with S2 remount under oblique geometry runs e2e.
@@ -54,21 +89,20 @@ def test_wall_remount_oblique_forward_e2e(tmp_path: Path) -> None:
       _write_sample_dict)
     - the wall actually diffracts (detector frame is finite, non-negative,
       and has at least one non-zero pixel)
+    - the S-matrix is actually APPLIED, not just recorded: S2 and S1 renders
+      must differ (a silently-dropped S / identity behaviour would make them
+      identical)
     """
-    cfg = SimulationConfig.from_toml(configs_root() / "al_oblique_figure3.toml")
-    cfg = replace(
-        cfg,
-        crystal=CrystalConfig(
-            mode="wall",
-            wall=WallCrystalConfig(dis=4.0, ndis=11, sample_remount="S2"),
-        ),
-        scan=ScanConfig(),  # rocking peak, single frame (Gate C pattern)
-        io=replace(cfg.io, write_strain_provenance=False, include_perfect_crystal=False),
-    )
+    dir_s2 = tmp_path / "s2"
+    dir_s1 = tmp_path / "s1"
+    dir_s2.mkdir()
+    dir_s1.mkdir()
 
-    run_simulation(cfg, tmp_path)
+    master_s2, img_s2 = _run_wall_oblique(dir_s2, "S2")
+    _, img_s1 = _run_wall_oblique(dir_s1, "S1")
 
-    with h5py.File(tmp_path / "dfxm_geo.h5", "r") as f:
+    # --- existing assertions on the S2 run ---
+    with h5py.File(master_s2, "r") as f:
         attrs = f["/1.1"].attrs
         # oblique provenance intact under wall+remount
         assert attrs["geometry_mode"] == "oblique"
@@ -85,11 +119,16 @@ def test_wall_remount_oblique_forward_e2e(tmp_path: Path) -> None:
         )
         assert samp["sample_remount"][()].decode() == "S2"
 
-        # the wall actually diffracts (not an all-zero frame)
-        img = _find_detector(f["/1.1"])
-        assert img is not None, "could not find detector dataset under /1.1"
-        img_arr = img[0].astype(np.float64)
+    # the wall actually diffracts (not an all-zero frame)
+    assert np.isfinite(img_s2).all()
+    assert img_s2.min() >= 0.0
+    assert img_s2.max() > 0.0
 
-    assert np.isfinite(img_arr).all()
-    assert img_arr.min() >= 0.0
-    assert img_arr.max() > 0.0
+    # --- S1 control: the S-matrix must change the image ---
+    # A silently-dropped S (identity behaviour) would make S2 and S1
+    # renders identical.
+    assert img_s2.shape == img_s1.shape
+    assert not np.allclose(img_s2, img_s1), (
+        "S2 and S1 remounts produced identical images - the sample_remount "
+        "S-matrix is not being applied in the wall+oblique forward path"
+    )
