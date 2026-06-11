@@ -86,16 +86,18 @@ _OBLIQUE_E2E_TOML_SINGLE = (
 def _assert_oblique_scan_attrs(master_path: Path) -> list[str]:
     """Shared DoD assertion: every /N.1 carries the oblique geometry attrs.
 
-    Checks three things:
+    Checks four things:
     1. ``geometry_mode == "oblique"`` — primary fallback guard; simplified
        mode would write "simplified" here.
     2. ``eta == 0.353140`` (atol=1e-6) — secondary fallback guard; simplified
        mode uses eta=0.0. The tight tolerance confirms exact pass-through of
        the config value with no lossy conversion.
-    3. ``theta ~= 15.417 deg`` — sanity check that ctx threading reached the
-       attr writer (theta differs from the import-time default); NOT a
-       fallback discriminator (simplified mode produces the same theta for
-       this reflection).
+    3. ``theta ~= 15.417 deg`` — ctx-threading sanity check. In the TOML/single
+       test this value is solver-derived and differs from the import-time
+       default, confirming end-to-end threading. In the PROGRAMMATIC tests
+       (multi, z-scan) ``theta_validated`` is supplied directly by the test,
+       so the assertion only confirms the value reached the HDF5 attr writer
+       unchanged, not that it was independently derived.
     4. All three mount vectors and lattice/a — confirm crystal ctx threading.
 
     Returns the scan ids for further per-mode assertions."""
@@ -208,4 +210,73 @@ def test_identify_multi_oblique_e2e(tmp_path: Path) -> None:
     assert scan_ids == ["1.1"]
     with h5py.File(master, "r") as f:
         assert f["1.1"].attrs["identify_mode"] == "multi"
-        assert "dislocations" in f["1.1/sample"]
+        disl = f["1.1/sample/dislocations"]
+        assert disl.attrs["NX_class"] == "NXcollection"
+        assert sorted(disl) == ["0", "1"]
+
+
+@pytest.mark.slow
+def test_identify_zscan_oblique_e2e(tmp_path: Path) -> None:
+    """G1.2: z-scan + oblique combination runs end-to-end; the non-zero z
+    layer exercises Z_shift with the oblique ctx.geometry.xl_range, and the
+    /N.1 attrs carry oblique provenance."""
+    from dfxm_geo.crystal.oblique import CrystalMount
+    from dfxm_geo.pipeline import (
+        AxisScanConfig,
+        GeometryConfig,
+        IdentificationConfig,
+        IdentificationCrystalConfig,
+        IdentificationNoiseConfig,
+        IdentificationZScanConfig,
+        IOConfig,
+        ReciprocalConfig,
+        ScanConfig,
+    )
+
+    mount = CrystalMount(
+        lattice="cubic",
+        a=4.0493e-10,
+        mount_x=(1, 0, 0),
+        mount_y=(0, 1, 0),
+        mount_z=(0, 0, 1),
+    )
+    cfg = IdentificationConfig(
+        mode="z-scan",
+        crystal=IdentificationCrystalConfig(
+            slip_plane_normal=(1, 1, -1),
+            angle_start_deg=0.0,
+            angle_stop_deg=0.0,
+            angle_step_deg=10.0,
+            b_vector_indices=[0],
+            sweep_all_slip_planes=False,
+            exclude_invisibility=False,
+        ),
+        scan=ScanConfig(phi=AxisScanConfig(value=0.46e-3)),
+        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        io=IOConfig(),
+        zscan=IdentificationZScanConfig(z_offsets_um=[5.0], include_secondary=False),
+        geometry=GeometryConfig(
+            mode="oblique",
+            eta=_OBLIQUE_ETA,
+            theta_validated=float(_OBLIQUE_THETA),
+            mount=mount,
+        ),
+        reciprocal=ReciprocalConfig(
+            hkl=(-1, -1, 3),
+            keV=19.1,
+            lattice_a=4.0493e-10,
+            eta=_OBLIQUE_ETA,
+            beamstop=False,
+        ),
+    )
+
+    out = tmp_path / "out"
+    run_identification(cfg, out)
+
+    master = out / "dfxm_identify.h5"
+    assert master.is_file()
+    scan_ids = _assert_oblique_scan_attrs(master)
+    # 1 z-layer x 1 b x 1 angle = 1 scan
+    assert scan_ids == ["1.1"]
+    with h5py.File(master, "r") as f:
+        assert f["1.1"].attrs["identify_mode"] == "z-scan"
