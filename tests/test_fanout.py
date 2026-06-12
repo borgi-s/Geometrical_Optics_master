@@ -234,9 +234,13 @@ def test_fanout_end_to_end_runs_two_configs(tmp_path: Path) -> None:
 
     # Omit [crystal] entirely so it cascades to the default centered crystal
     # (b=(1,0,-1), n, t) — a partial [crystal.centered] would require b/n/t.
+    # model="ideal" keeps this an HDF5-plumbing test (asserts float32 output);
+    # the detector-noise model's uint16 output is exercised by the dedicated
+    # forward dtype tests (test_detector_dtype_float32.py).
     cfg_text = (
         "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n\n"
         "[scan.phi]\nrange = 0.001\nsteps = 2\n\n"
+        '[detector]\nmodel = "ideal"\n\n'
         "[io]\ninclude_perfect_crystal = false\n\n"
         "[postprocess]\nenabled = false\n"
     )
@@ -809,6 +813,7 @@ def test_fanout_pool_end_to_end_forward(tmp_path: Path) -> None:
     cfg_text = (
         "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n\n"
         "[scan.phi]\nrange = 0.001\nsteps = 2\n\n"
+        '[detector]\nmodel = "ideal"\n\n'
         "[io]\ninclude_perfect_crystal = false\n\n"
         "[postprocess]\nenabled = false\n"
     )

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pytest
 
@@ -18,6 +19,7 @@ from dfxm_geo.io.hdf5 import (
     DETECTOR_INTERNAL_PATH,
     MasterWriter,
     _write_detector_file,
+    replace_detector_image,
 )
 
 # Frame layout: phi inner (2 steps), chi outer (3 steps) -> 6 frames.
@@ -110,6 +112,26 @@ def test_reader_preserves_frame_motor_correspondence(tmp_path: Path) -> None:
             cell_motors = motors[:, i, j]
             assert np.any(np.isclose(cell_motors, phi_deg[k]))
             assert np.any(np.isclose(cell_motors, chi_deg[k]))
+
+
+def test_reader_casts_uint16_source_to_float32(tmp_path: Path) -> None:
+    """A uint16-source detector (post detector-model) still loads as float32.
+
+    The detector model writes uint16 ADU frames; DarlingReader's contract is
+    a float32 stack, so it must cast on load (else darling sees uint16).
+    """
+    master_path, _ = _build_master(tmp_path)
+    det_path = tmp_path / "scan0001" / "dfxm_sim_detector_0000.h5"
+    uint16_stack = np.arange(N_FRAMES * H * W, dtype=np.uint16).reshape(N_FRAMES, H, W)
+    with h5py.File(det_path, "a") as f:
+        replace_detector_image(f, uint16_stack)
+        assert f[DETECTOR_INTERNAL_PATH].dtype == np.uint16  # source is genuinely uint16
+
+    reader = DarlingReader(master_path)
+    data, motors = reader("1.1")
+    assert data.dtype == np.float32
+    assert data.shape[:2] == (H, W)
+    assert data.shape[2] * data.shape[3] == N_FRAMES
 
 
 def test_no_varying_motors_raises(tmp_path: Path) -> None:

@@ -465,6 +465,20 @@ def _run_simulation_inner(
         ctx=ctx,
         reflection_attrs=_reflection_attrs,
     )
+    # Apply the realistic detector model (uint16 ADU + noise) post-write to the
+    # combined per-scan detector files, exactly as the identification runners do.
+    # Forward writes scan0001 (dislocations) and, when include_perfect_crystal,
+    # scan0002 (perfect crystal) — both get the model. Multi-reflection runs
+    # (reflection is not None) get independent per-reflection noise via the
+    # 1-based reflection_index, matching the identify convention; single-reflection
+    # passes 0 (the spawn-child noise stream).
+    n_det_scans = 2 if config.io.include_perfect_crystal else 1
+    _apply_detector_model(
+        config.detector,
+        h5_path.parent,
+        n_det_scans,
+        reflection_index=reflection_index if reflection is not None else 0,
+    )
     return {
         "h5_path": h5_path,
         "Hg": Hg_base,
