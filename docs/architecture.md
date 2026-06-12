@@ -200,6 +200,25 @@ fast-paths. Non-cubic cells currently work in `dfxm-bootstrap` and
 until Stage 4.3 (slip systems + `q_hkl` generalization). Design record:
 `docs/superpowers/specs/2026-06-11-m4-stage41-general-cell-geometry.md`.
 
+### CIF ingestion and extinction rules (M4 Stage 4.2)
+
+`crystal/cif.py` is the only module that touches **gemmi** (lazy import; the
+`[cif]` optional extra — `pip install dfxm-geo[cif]`, or `conda install -c
+conda-forge gemmi` since conda recipes carry no optional deps). A
+`[crystal] cif = "path.cif"` key populates the six cell parameters (Å → m)
+and the space group; explicit TOML keys override CIF values per-key, and a
+plain `[crystal] space_group = "Fm-3m"` works without any CIF.
+`mount_x/y/z` remain TOML-only. Relative CIF paths resolve against the
+config file's directory.
+
+With a space group present, `find_reflections()` skips systematic absences
+(centering + glide/screw, via gemmi's symmetry operations) and every site
+that accepts an explicit hkl — config load, `[[reflections]]` entries,
+`dfxm-bootstrap` — hard-errors on a forbidden reflection. No space group →
+behavior identical to v2.x (opt-in by design). Provenance emits the
+*resolved* cell values plus `space_group`, never the cif path. Design
+record: `docs/superpowers/specs/2026-06-12-m4-stage42-cif-ingestion-design.md`.
+
 ## Dependencies between modules
 
 ```

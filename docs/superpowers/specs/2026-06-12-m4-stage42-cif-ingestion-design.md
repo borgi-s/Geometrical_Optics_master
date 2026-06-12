@@ -1,7 +1,6 @@
 # M4 Stage 4.2 — CIF ingestion + space-group extinction rules (design)
 
-**Status: approved by Sina 2026-06-12; implementation on
-`feature/m4-stage42-cif-ingestion`.**
+**Status: implemented on `feature/m4-stage42-cif-ingestion`, 2026-06-12.**
 
 Roadmap §5 Stage 4.2. Builds on Stage 4.1 (general cell geometry,
 `docs/superpowers/specs/2026-06-11-m4-stage41-general-cell-geometry.md`),
