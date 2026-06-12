@@ -31,6 +31,23 @@ def test_bootstrap_rejects_extinct_hkl(tmp_path: Path, capsys: pytest.CaptureFix
     assert "systematically absent" in capsys.readouterr().err
 
 
+def test_bootstrap_rejects_extinct_with_bare_space_group(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    # A bare [crystal] space_group (no lattice/a/mount/cif keys) is NOT a mount
+    # block, so the mount is the default Al and mount.space_group is None; the
+    # cli_main fallback recovers the symbol from mount_block. Exercises that
+    # fallback branch at the bootstrap-CLI level (no CIF file involved).
+    p = tmp_path / "config.toml"
+    p.write_text(
+        '[crystal]\nspace_group = "Fm-3m"\n[reciprocal]\nhkl = [1, 0, 0]\nkeV = 17.0\n',
+        encoding="utf-8",
+    )
+    rc = cli_main(["--config", str(p)])
+    assert rc == 1
+    assert "systematically absent" in capsys.readouterr().err
+
+
 def test_bootstrap_resolves_relative_cif_and_validates(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
