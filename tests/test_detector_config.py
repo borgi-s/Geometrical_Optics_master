@@ -51,3 +51,10 @@ def test_simulation_config_also_parses_detector(tmp_path):
     p.write_text('[detector]\nmodel = "ideal"\n')
     cfg = SimulationConfig.from_toml(p)
     assert cfg.detector.model == "ideal"
+
+
+def test_simulation_config_rejects_noise_block(tmp_path):
+    p = tmp_path / "cfg.toml"
+    p.write_text("[noise]\npoisson_noise = true\n")
+    with pytest.raises(ValueError, match=r"\[noise\] was removed.*\[detector\]"):
+        SimulationConfig.from_toml(p)

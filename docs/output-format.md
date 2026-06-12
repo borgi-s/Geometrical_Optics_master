@@ -280,15 +280,18 @@ extra hints.
 ## Multi-mode opt-in: `render_per_dislocation`
 
 By default, multi mode writes **one** detector file per scan dir — the
-combined detector image with both dislocations' contributions summed and
-Poisson noise applied. Setting `[multi].render_per_dislocation = true`
-opts in to a three-detector pattern instead:
+combined detector image with both dislocations' contributions summed,
+passed through the detector model (see
+[Detector model and image dtype](#detector-model-and-image-dtype) and
+`docs/detector-noise-model.md`). Setting
+`[multi].render_per_dislocation = true` opts in to a three-detector
+pattern instead:
 
 ```
 scan0001/
-  dfxm_sim_detector_0000.h5            ← both dislocations summed (canonical detector, with Poisson noise)
-  dfxm_sim_detector_dis0_0000.h5       ← first dislocation only (noiseless)
-  dfxm_sim_detector_dis1_0000.h5       ← second dislocation only (noiseless)
+  dfxm_sim_detector_0000.h5            ← both dislocations summed (canonical detector, uint16 ADU)
+  dfxm_sim_detector_dis0_0000.h5       ← first dislocation only (noiseless float32)
+  dfxm_sim_detector_dis1_0000.h5       ← second dislocation only (noiseless float32)
 ```
 
 In this mode, the master's `/N.1/instrument/` carries three `NXdetector`
@@ -299,13 +302,13 @@ same `(N_frames, H, W)` stack shape as the combined detector, and the
 master's `/N.1/measurement/` group acquires one SoftLink per detector for
 BLISS-compatible discovery.
 
-**Noise policy:** The combined detector receives the canonical Poisson
-noise stream (so it's a realistic detector image). Per-dislocation files
-are **noiseless** (`image_arr * intensity_scale` only) — they exist to
-give ML training pipelines deterministic per-instance ground truth, and
-adding independent Poisson draws to each would corrupt the signal/
-background balance vs. the combined detector. The per-dis files sum
-exactly to the noiseless underlying image of the combined detector.
+**Noise policy:** The combined detector file is processed by the
+configured detector model (uint16 ADU output; realistic gain, offset, and
+read-noise added). Per-dislocation label files (`*_dis0_*` / `*_dis1_*`)
+are **noiseless float32 normalized intensity** — they give ML training
+pipelines deterministic per-instance ground truth. The per-dis float32
+frames sum exactly to the noiseless underlying image of the combined
+detector before the detector model is applied.
 
 Total compute cost: N_samples × 3 forward() calls (3× the default).
 Real beamlines do exactly this pattern when scanning multiple detectors
