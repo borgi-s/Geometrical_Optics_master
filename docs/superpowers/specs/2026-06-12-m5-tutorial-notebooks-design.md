@@ -90,13 +90,13 @@ New standalone `.github/workflows/notebooks.yml` (never touches `ci.yml`):
 
 ## 6. Gates / definition of done (this arc)
 
-- [ ] `pytest --nbmake` green on 01–03 in the fresh worktree venv.
-- [ ] 04 and 05 execute end-to-end clean locally (same venv).
-- [ ] Full suite + mypy unchanged from the `2ccd9cf` baseline
-      (898 passed / mypy 0 — no production code edits).
-- [ ] Five preview figures committed; `examples/README.md` indexes the
+- [x] `pytest --nbmake` green on 01–03 in the fresh worktree venv.
+- [x] 04 and 05 execute end-to-end clean locally (same venv).
+- [x] Full suite + mypy unchanged from the `2ccd9cf` baseline
+      (898 passed / mypy 0 — no production code edits). (failure set empty: 895 passed / 4 skipped / 22 deselected / 1 xfailed / 0 failed; mypy 0/40)
+- [x] Five preview figures committed; `examples/README.md` indexes the
       series; every notebook links `docs/references.md`.
-- [ ] No diff in `pyproject.toml`, `.github/workflows/ci.yml`, `src/**`.
+- [x] No diff in `pyproject.toml`, `.github/workflows/ci.yml`, `src/**`.
 
 Roadmap §6's own DoD (six executed notebooks on a public site) closes in
 the second M5 arc, after M4 lands.
