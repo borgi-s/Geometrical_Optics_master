@@ -58,6 +58,22 @@ class DetectorModel:
         """Temporal (read + dark shot) noise sigma in ADU at the given exposure."""
         return float(np.sqrt(self.read_noise_var_base + self.read_noise_var_rate * exposure_time))
 
+    def make_sensor_map(self, shape: tuple[int, int], rng: np.random.Generator) -> SensorMap:
+        """Synthesize a fixed-pattern offset map by sampling the measured
+        distributions (spec §3.1): Gaussian core + exponential warm/hot tail
+        + elevated edge rows. Synthetic rather than the literal 2048^2
+        calibration map so it scales to any simulated detector size.
+        """
+        ny, nx = shape
+        fpn = rng.normal(0.0, self.fpn_sigma, size=shape)
+        tail = rng.random(shape) < self.tail_fraction
+        fpn[tail] += rng.exponential(self.tail_scale, size=int(tail.sum()))
+        rows = np.arange(ny, dtype=np.float64)
+        dist = np.minimum(rows, ny - 1 - rows)  # distance to nearest edge
+        boost = self.edge_peak * np.exp(-dist / self.edge_decay)
+        boost[dist >= self.edge_rows] = 0.0
+        return SensorMap(fpn_offset=fpn + boost[:, None])
+
 
 PCO_EDGE_4P2_ID03 = DetectorModel(
     name="pco_edge_4.2_id03",

@@ -30,3 +30,31 @@ def test_resolve_model_registry():
 
 def test_full_well_is_uint16_max():
     assert np.iinfo(np.uint16).max == FULL_WELL
+
+
+def test_sensor_map_statistics_match_dark_census():
+    rng = np.random.default_rng(7)
+    m = PCO_EDGE_4P2_ID03
+    sm = m.make_sensor_map((512, 512), rng)
+    fpn = sm.fpn_offset
+    assert fpn.shape == (512, 512)
+    interior = fpn[m.edge_rows : -m.edge_rows, :]
+    # Gaussian core sigma ~ fpn_sigma (robust estimate, tail excluded)
+    mad = np.median(np.abs(interior - np.median(interior)))
+    assert 1.4826 * mad == pytest.approx(m.fpn_sigma, rel=0.2)
+    # warm/hot census: ~0.57 % above +10 ADU, ~0.011 % above +50 ADU (spec §2)
+    frac10 = (interior > 10.0).mean()
+    frac50 = (interior > 50.0).mean()
+    assert 0.003 < frac10 < 0.012
+    assert 1e-5 < frac50 < 5e-4
+    # edge rows elevated relative to interior
+    assert fpn[0, :].mean() > interior.mean() + 0.5 * m.edge_peak
+
+
+def test_sensor_map_is_reproducible_and_seed_sensitive():
+    m = PCO_EDGE_4P2_ID03
+    a = m.make_sensor_map((64, 64), np.random.default_rng(3)).fpn_offset
+    b = m.make_sensor_map((64, 64), np.random.default_rng(3)).fpn_offset
+    c = m.make_sensor_map((64, 64), np.random.default_rng(4)).fpn_offset
+    assert np.array_equal(a, b)
+    assert not np.array_equal(a, c)
