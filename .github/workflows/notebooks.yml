@@ -27,7 +27,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: examples/kernel
-          key: tutorial-kernel-h-1k1l-1-17kev-nrays1e8-seed0-v1
+          key: tutorial-kernel-h-1k1l-1-17kev-nrays1e8-seed0-batch2e7-v2
 
       - name: Install package + nbmake
         run: python -m pip install -e ".[dev]" nbmake
