@@ -33,6 +33,27 @@ _DEFAULT_AL_CRYSTAL = CrystalMount(
     mount_z=(0, 0, 1),
 )
 
+# Free (independent) cell parameters per lattice system, beyond the always-free
+# `a`. UnitCell.from_lattice fills the constrained ones from `a`; carrying a
+# redundant CIF value for a constrained param would spuriously conflict when
+# TOML overrides `a` without also overriding b/c. Used by _crystal_mount_from_toml.
+#   cubic        — none (b=c=a, all angles 90)
+#   tetragonal   — c        (b=a, angles 90)
+#   orthorhombic — b, c     (angles 90)
+#   hexagonal    — c        (b=a, alpha=beta=90, gamma=120)
+#   trigonal     — alpha_deg (b=c=a, alpha=beta=gamma=alpha)
+#   monoclinic   — b, c, beta_deg  (alpha=gamma=90)
+#   triclinic    — all six
+_FREE_CELL_PARAMS: dict[str, frozenset[str]] = {
+    "cubic": frozenset(),
+    "tetragonal": frozenset({"c"}),
+    "orthorhombic": frozenset({"b", "c"}),
+    "hexagonal": frozenset({"c"}),
+    "trigonal": frozenset({"alpha_deg"}),
+    "monoclinic": frozenset({"b", "c", "beta_deg"}),
+    "triclinic": frozenset({"b", "c", "alpha_deg", "beta_deg", "gamma_deg"}),
+}
+
 
 def _crystal_mount_from_toml(data: dict | None, base_dir: Path | None = None) -> CrystalMount:
     """Build a CrystalMount from a `[crystal]` TOML block (or None → default Al).
@@ -54,35 +75,13 @@ def _crystal_mount_from_toml(data: dict | None, base_dir: Path | None = None) ->
         if not cif_path.is_absolute() and base_dir is not None:
             cif_path = base_dir / cif_path
         cc = load_cif(cif_path)
-        # Always carry lattice, a, space_group from the CIF.  For the constrained
-        # cell parameters (b, c, angles), only carry the ones that are *free*
-        # (independent) for this lattice system.  UnitCell.from_lattice fills the
-        # constrained ones from `a`; passing redundant CIF values here would cause
-        # a spurious mismatch if TOML overrides `a` without also overriding b/c.
-        _lattice_cif = cc.lattice
-        # Free params per lattice (beyond the always-free `a`):
-        #   cubic        — none (b=c=a, all angles 90)
-        #   tetragonal   — c        (b=a, angles 90)
-        #   orthorhombic — b, c     (angles 90)
-        #   hexagonal    — c        (b=a, alpha=beta=90, gamma=120)
-        #   trigonal     — alpha_deg (b=c=a, alpha=beta=gamma=alpha)
-        #   monoclinic   — b, c, beta_deg  (alpha=gamma=90)
-        #   triclinic    — all six
-        _FREE: dict[str, frozenset[str]] = {
-            "cubic": frozenset(),
-            "tetragonal": frozenset({"c"}),
-            "orthorhombic": frozenset({"b", "c"}),
-            "hexagonal": frozenset({"c"}),
-            "trigonal": frozenset({"alpha_deg"}),
-            "monoclinic": frozenset({"b", "c", "beta_deg"}),
-            "triclinic": frozenset({"b", "c", "alpha_deg", "beta_deg", "gamma_deg"}),
-        }
-        _free = _FREE.get(_lattice_cif, frozenset())
-        _cell_keys = {"b", "c", "alpha_deg", "beta_deg", "gamma_deg"}
+        # Always carry lattice, a, space_group from the CIF; carry only the
+        # *free* cell parameters for this lattice system (see _FREE_CELL_PARAMS
+        # for why constrained ones are dropped).
+        _free = _FREE_CELL_PARAMS.get(cc.lattice, frozenset())
         cif_vals = {"lattice": cc.lattice, "a": cc.a, "space_group": cc.space_group}
-        for _k in _cell_keys:
-            if _k in _free:
-                cif_vals[_k] = getattr(cc, _k)
+        for _k in _free:
+            cif_vals[_k] = getattr(cc, _k)
 
     def _opt(key: str) -> float | None:
         if key in data:
