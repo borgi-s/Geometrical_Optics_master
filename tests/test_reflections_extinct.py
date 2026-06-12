@@ -18,8 +18,10 @@ FCC = CrystalMount(
 
 
 def test_extinct_entry_rejected() -> None:
+    # (1,0,0) is mixed-parity -> systematically absent in FCC. The guard fires
+    # before eta/omega resolution, so no eta key is needed to trigger it.
     with pytest.raises(ValueError, match="systematically absent"):
-        resolve_reflections([{"hkl": [1, 0, 0], "eta": 0.0}], FCC, 17.0)
+        resolve_reflections([{"hkl": [1, 0, 0]}], FCC, 17.0)
 
 
 def test_allowed_entry_passes() -> None:
