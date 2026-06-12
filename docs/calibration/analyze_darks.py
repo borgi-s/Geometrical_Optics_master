@@ -42,8 +42,8 @@ import numpy as np
 DATA_ROOT = r"C:\Users\borgi\Documents\GM-reworked\experimental_data"
 
 SRC = DATA_ROOT + r"\bicrystal_111_layer_rocking_scans_darks\scan0001\pco_ff_0000.h5"
-# Output figure saved alongside this script.
-OUT = _os.path.dirname(_os.path.abspath(__file__))
+# write straight into docs/img/ where detector-noise-model.md embeds it
+OUT = _os.path.normpath(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "img"))
 # --------------------------------------------------------------------------
 
 with h5py.File(SRC, "r") as f:
