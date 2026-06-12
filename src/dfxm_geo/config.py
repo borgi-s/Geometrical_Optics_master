@@ -640,7 +640,7 @@ class DetectorConfig:
 
     model: str = "pco_edge_4.2_id03"
     exposure_time: float = 1.0
-    counts_scale: float = 1.0e4  # provisional; Task 12 pins the derived value
+    counts_scale: float = 1.0e4  # provisional anchor; data-anchored derivation NOT yet pinned (fails per-pixel sanity due to optic/pixel-pitch mismatch) — see docs/detector-noise-model.md and docs/calibration/derive_counts_scale.py
     rng_seed: int = 0
 
     def __post_init__(self) -> None:

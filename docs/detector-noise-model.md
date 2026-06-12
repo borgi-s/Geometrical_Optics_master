@@ -57,7 +57,7 @@ pending from the domain expert).
 
 ### Decision: NOT PINNED — left at the provisional `counts_scale = 1.0e4`
 
-**Guard A fails by ~1000×; Guard B passes.** That signature is diagnostic: the
+**Guard A fails by ~500–1000× (2–3 orders of magnitude); Guard B passes.** That signature is diagnostic: the
 absolute *photon budget* is right (Guard B), but the *per-pixel* scale is not — a
 **spatial-sampling / optics mismatch, not a units bug**.
 

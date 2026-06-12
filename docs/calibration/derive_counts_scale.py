@@ -51,8 +51,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import hdf5plugin  # noqa: F401  # REQUIRED before h5py.File for LIMA bitshuffle frames; isort: skip
 import h5py
-import hdf5plugin  # noqa: F401  # REQUIRED before h5py.File for LIMA bitshuffle frames
 import numpy as np
 from scipy.ndimage import label
 
@@ -154,7 +154,8 @@ def simulate_weak_beam() -> tuple[np.ndarray, float, float, float, int]:
     """
     import tempfile
 
-    out = Path(tempfile.mkdtemp(prefix="counts_scale_")) / "run"
+    from dfxm_geo.io.hdf5 import DETECTOR_INTERNAL_PATH
+
     cfg = SimulationConfig(
         crystal=CrystalConfig(mode="centered", centered=CenteredCrystalConfig()),
         scan=ScanConfig(phi=AxisScanConfig(value=WEAK_BEAM_PHI)),
@@ -162,14 +163,16 @@ def simulate_weak_beam() -> tuple[np.ndarray, float, float, float, int]:
         detector=DetectorConfig(model="ideal"),  # keep float normalized-intensity
         reciprocal=ReciprocalConfig(hkl=REFLECTION_HKL, keV=ENERGY_KEV, backend="mc"),
     )
-    run_simulation(cfg, out)
-    from dfxm_geo.io.hdf5 import DETECTOR_INTERNAL_PATH
-
-    det = out / "scan0001" / "dfxm_sim_detector_0000.h5"
-    with h5py.File(det, "r") as f:
-        img = f[DETECTOR_INTERNAL_PATH][0].astype(np.float64)  # (ny, nx)
-    integral, peak, npix = _largest_feature_integral(img, k=2.0)
-    fov_fraction = npix / img.size
+    with tempfile.TemporaryDirectory(prefix="counts_scale_") as tmp:
+        out = Path(tmp) / "run"
+        run_simulation(cfg, out)
+        # This filename must match run_simulation's single-scan forward output schema.
+        det = out / "scan0001" / "dfxm_sim_detector_0000.h5"
+        with h5py.File(det, "r") as f:
+            img = f[DETECTOR_INTERNAL_PATH][0].astype(np.float64)  # (ny, nx)
+        # Compute all derived values from in-memory arrays before the temp dir is removed.
+        integral, peak, npix = _largest_feature_integral(img, k=2.0)
+        fov_fraction = npix / img.size
     return img, integral, peak, fov_fraction, npix
 
 
@@ -214,6 +217,10 @@ def main() -> None:
 
     # --- Guard B: physics-first cross-check ----------------------------------
     _total, fraction_transmitted = run_exposure_simulation()
+    # fov_fraction is the SIMULATION's crystal-volume fraction (sim_feature_px /
+    # sim_total_px), NOT the data detector-pixel fraction.  Using the sim value is
+    # correct because the sim is sampling-normalized: the data fraction (~35× larger
+    # due to the 10× optics) would flip Guard B from PASS to FAIL by the same factor.
     expected_adu_per_s = (
         FLUX_ID03_PH_PER_S * fov_fraction * fraction_transmitted * PCO_EDGE_4P2_ID03.gain
     )
