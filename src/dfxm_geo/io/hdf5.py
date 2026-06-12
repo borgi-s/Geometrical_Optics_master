@@ -198,10 +198,16 @@ def replace_detector_image(
     recreated as uint16 ADU at the same internal path (softlinks resolve by
     name, so NXdata/measurement links survive). Original dataset attrs are
     preserved; ``extra_attrs`` adds [detector] provenance.
+
+    ``data`` must be a 3-D stack ``(N, H, W)``.
+
+    ``extra_attrs`` keys take precedence over original attrs on collision
+    (extra wins), so callers should use non-colliding provenance keys or
+    knowingly override.
     """
     old = f[DETECTOR_INTERNAL_PATH]
     attrs = dict(old.attrs)
-    n_frames, height, width = old.shape
+    _, height, width = old.shape
     del f[DETECTOR_INTERNAL_PATH]
     new_ds = f.create_dataset(
         DETECTOR_INTERNAL_PATH,

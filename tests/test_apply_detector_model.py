@@ -32,3 +32,6 @@ def test_replace_detector_image_swaps_dtype_and_keeps_attrs(tmp_path: Path) -> N
     # softlinks (NXdata/measurement) must still resolve through the new dataset
     with h5py.File(p, "r") as f:
         assert f[DETECTOR_INTERNAL_PATH].shape == (3, 8, 8)
+        # core design property: softlinks resolve through the replaced uint16 dataset
+        assert np.array_equal(f["entry_0000/plot/image"][...], new)
+        assert np.array_equal(f["entry_0000/measurement"][...], new)
