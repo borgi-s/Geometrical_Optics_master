@@ -10,14 +10,19 @@ docs/detector-noise-model.md, scripts in docs/calibration/, design in
 docs/superpowers/specs/2026-06-12-detector-noise-model-design.md.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import Final
 
 import numpy as np
 
-FULL_WELL = 65535  # uint16 saturation, matches the real LIMA frames
+FULL_WELL: Final[int] = 65535  # uint16 saturation, matches the real LIMA frames
 
 
-@dataclass(frozen=True)
+# eq=False: the fpn_offset ndarray field would make an auto-generated __eq__
+# raise on truth-value ambiguity; identity equality is what we want (constructed once per run).
+@dataclass(frozen=True, kw_only=True, eq=False)
 class SensorMap:
     """Per-pixel fixed-pattern state for one synthetic 'camera'.
 
@@ -72,7 +77,7 @@ PCO_EDGE_4P2_ID03 = DetectorModel(
 _MODELS = {PCO_EDGE_4P2_ID03.name: PCO_EDGE_4P2_ID03}
 
 
-def resolve_model(name: str) -> "DetectorModel | None":
+def resolve_model(name: str) -> DetectorModel | None:
     """Map a config model name to a DetectorModel; ``"ideal"`` → None."""
     if name == "ideal":
         return None
