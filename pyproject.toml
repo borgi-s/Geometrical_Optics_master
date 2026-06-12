@@ -144,6 +144,11 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers -m 'not bench and not slow'"
+# tmp_path housekeeping: keep only failed tests' dirs, and only the last run.
+# Killed runs leave .lock files that block pruning and accumulate ~GBs of
+# HDF5 test output under %TEMP%\pytest-of-<user> — this caps the growth.
+tmp_path_retention_count = 1
+tmp_path_retention_policy = "failed"
 markers = [
     "bench: performance benchmarks (run with `pytest -m bench`); skipped by default",
     "slow: slow integration tests >~1 min wall-clock (run with `pytest -m slow`); skipped by default",
