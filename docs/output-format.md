@@ -483,7 +483,9 @@ the TOML config.
 
 The realistic model converts the float32 photon-count image to uint16 ADU
 using fitted parameters (gain ≈ 2.14 ADU/photon, offset ≈ 102.5 + 7.5 t
-ADU, read-noise ≈ 2.5–3 ADU, where t is `exposure_time` in seconds).
+ADU, read-noise sigma(t) = sqrt(6.3 + 11.0·t) ADU (≈ 2.5 ADU readout
+floor as t→0, ≈ 4.2 ADU at the default t = 1 s), where t is
+`exposure_time` in seconds).
 Use `model = "ideal"` to recover the pre-v3 float32 output for direct
 physics comparisons.
 
@@ -499,11 +501,13 @@ When any model is active, the following attributes are written onto the
 | `counts_scale`     | float64 | `1.0e4`                   | Physics-to-photon scaling factor             |
 | `detector_gain`    | float64 | `2.14`                    | ADU per photon (fitted)                      |
 | `detector_offset`  | float64 | `110.0`                   | Baseline ADU offset at t = exposure_time (s) |
-| `detector_spec`    | str     | `"pco_edge_4.2@ID03 ..."`  | Free-text spec string from the model preset  |
+| `detector_spec`    | str     | `"2026-06-12-detector-noise-model-design"` | Provenance slug identifying the design-spec document that defines this detector model |
 
-For `model = "ideal"`, the attrs are still written (with `detector_model =
-"ideal"` and `counts_scale` as configured) so downstream readers can
-always rely on the attribute being present.
+For `model = "ideal"`, the detector dataset stays **float32** and **no**
+`detector_*` provenance attrs are written — the post-write pass is a no-op
+for ideal mode. Downstream readers should treat the presence of
+`detector_model` as the signal that a real noise model was applied (and its
+absence as ideal/raw float32).
 
 ### Per-dislocation label files are always float32
 
