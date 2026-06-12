@@ -190,6 +190,16 @@ model "the same defect remounted in a symmetry-equivalent orientation."
 Configure via `[crystal].sample_remount = "S1" | "S2" | "S3" | "S4"` in the
 `dfxm-forward` TOML.
 
+### Crystal cell and mount (M4 Stage 4.1)
+
+Since M4 Stage 4.1, `CrystalMount` supports all seven crystal systems via
+`dfxm_geo.crystal.cell.UnitCell` (six cell parameters, angles in degrees,
+metric-tensor d-spacing). Cubic paths are bit-identical to v2.x via exact
+fast-paths. Non-cubic cells currently work in `dfxm-bootstrap` and
+`dfxm-find-reflections` only; the forward/identify pipeline rejects them
+until Stage 4.3 (slip systems + `q_hkl` generalization). Design record:
+`docs/superpowers/specs/2026-06-11-m4-stage41-general-cell-geometry.md`.
+
 ## Dependencies between modules
 
 ```
