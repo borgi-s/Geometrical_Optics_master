@@ -6,6 +6,7 @@ import pytest
 from dfxm_geo.detector import (
     FULL_WELL,
     PCO_EDGE_4P2_ID03,
+    SensorMap,
     resolve_model,
 )
 
@@ -58,3 +59,47 @@ def test_sensor_map_is_reproducible_and_seed_sensitive():
     c = m.make_sensor_map((64, 64), np.random.default_rng(4)).fpn_offset
     assert np.array_equal(a, b)
     assert not np.array_equal(a, c)
+
+
+def test_apply_statistics_match_photon_transfer():
+    """Mean and variance must reproduce the measured model:
+    mean = s + offset(t), var = gain*s + noise_sigma(t)^2 (+ tiny rounding var)."""
+    m = PCO_EDGE_4P2_ID03
+    rng = np.random.default_rng(11)
+    flat = SensorMap(fpn_offset=np.zeros((200, 200)))
+    for t, s in [(1.0, 0.0), (1.0, 50.0), (1.0, 1000.0), (0.1, 300.0)]:
+        ideal = np.full((10, 200, 200), s)
+        out = m.apply(ideal, exposure_time=t, rng=rng, sensor=flat)
+        assert out.dtype == np.uint16
+        vals = out.astype(np.float64)
+        expected_mean = s + m.offset(t)
+        expected_var = m.gain * s + m.noise_sigma(t) ** 2 + 1.0 / 12.0
+        assert vals.mean() == pytest.approx(expected_mean, rel=0.01)
+        assert vals.var() == pytest.approx(expected_var, rel=0.05)
+
+
+def test_apply_clamps_at_full_well_and_zero():
+    m = PCO_EDGE_4P2_ID03
+    flat = SensorMap(fpn_offset=np.zeros((4, 4)))
+    rng = np.random.default_rng(0)
+    hot = m.apply(np.full((1, 4, 4), 1e9), 1.0, rng, flat)
+    assert (hot == FULL_WELL).all()
+    # negative ideal input (shouldn't happen, but) must not wrap below zero
+    cold = m.apply(np.full((1, 4, 4), -1e6), 1.0, rng, flat)
+    assert (cold <= 200).all()
+
+
+def test_apply_is_deterministic_for_fixed_rng():
+    m = PCO_EDGE_4P2_ID03
+    flat = SensorMap(fpn_offset=np.zeros((8, 8)))
+    ideal = np.full((2, 8, 8), 500.0)
+    a = m.apply(ideal, 1.0, np.random.default_rng(5), flat)
+    b = m.apply(ideal, 1.0, np.random.default_rng(5), flat)
+    assert np.array_equal(a, b)
+
+
+def test_apply_adds_sensor_map_offset():
+    m = PCO_EDGE_4P2_ID03
+    sm = SensorMap(fpn_offset=np.full((16, 16), 40.0))
+    out = m.apply(np.zeros((50, 16, 16)), 1.0, np.random.default_rng(1), sm)
+    assert out.astype(float).mean() == pytest.approx(m.offset(1.0) + 40.0, rel=0.02)

@@ -74,6 +74,32 @@ class DetectorModel:
         boost[dist >= self.edge_rows] = 0.0
         return SensorMap(fpn_offset=fpn + boost[:, None])
 
+    def apply(
+        self,
+        ideal_adu: np.ndarray,
+        exposure_time: float,
+        rng: np.random.Generator,
+        sensor: SensorMap,
+    ) -> np.ndarray:
+        """Ideal expected-signal ADU (above offset) → noisy uint16 frames.
+
+        Noise composition (spec §2): gain-scaled Poisson on the photon
+        count, plus the exposure-dependent offset, the fixed-pattern map,
+        and Gaussian read/dark-shot noise; rounded and clamped to uint16.
+        ``gain * Poisson(s / gain)`` reproduces the measured variance
+        ``gain * s`` exactly (scintillator excess noise is inside the
+        fitted gain by construction).
+        """
+        photons = np.clip(ideal_adu, 0.0, None) / self.gain
+        signal = self.gain * rng.poisson(photons).astype(np.float64)
+        noisy = (
+            signal
+            + self.offset(exposure_time)
+            + sensor.fpn_offset
+            + rng.normal(0.0, self.noise_sigma(exposure_time), size=ideal_adu.shape)
+        )
+        return np.clip(np.rint(noisy), 0, FULL_WELL).astype(np.uint16)
+
 
 PCO_EDGE_4P2_ID03 = DetectorModel(
     name="pco_edge_4.2_id03",
