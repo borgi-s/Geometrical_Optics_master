@@ -47,6 +47,9 @@ _OBLIQUE_THETA = np.deg2rad(15.417)
 _OBLIQUE_E2E_TOML_SINGLE = (
     'mode = "single"\n'
     "\n"
+    "[detector]\n"
+    'model = "ideal"\n'
+    "\n"
     "[crystal]\n"
     "slip_plane_normal = [1, 1, -1]\n"
     "angle_start_deg = 0.0\n"
