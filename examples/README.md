@@ -1,13 +1,29 @@
 # Examples
 
-Two complementary notebooks for the DFXM identification → ML workflow. To *run*
-either, clone this repo and install the package (`pip install -e ".[dev]"`) — the
-`.ipynb` alone is not enough. The notebooks are committed **output-stripped**
-(`nbstripout`); rendered HTML exports (figures included, for read-only viewing
-without running) are large and regenerable, so they are not committed — generate
-them yourself (below) or ask for a copy.
+## Tutorial series
 
-## `identification_ml_tutorial/` — start here
+Run each notebook from this `examples/` folder; notebooks are committed
+**output-stripped** (`nbstripout`). The table below shows each notebook's key
+figure (preview images included for read-only browsing without running). To
+*run* a notebook, clone this repo and install the package
+(`pip install -e ".[dev]"`) — the `.ipynb` alone is not enough. Rendered HTML
+exports are large and regenerable, so they are not committed — generate them
+yourself or ask for a copy.
+
+| Notebook | Shows | Preview |
+|---|---|---|
+| [01 · Quickstart](01_quickstart.ipynb) | empty TOML → first image; the two-stage model | ![](img/01_quickstart_preview.png) |
+| [02 · Reciprocal space](02_reciprocal_space.ipynb) | the resolution kernel; MC vs analytic backend | ![](img/02_reciprocal_space_preview.png) |
+| [03 · Dislocations & contrast](03_dislocations_and_contrast.ipynb) | character sweep, weak beam, COM ≈ −qi | ![](img/03_dislocations_preview.png) |
+| [04 · Oblique & reflections](04_oblique_and_reflections.ipynb) | mounts, reflection tables, g·b invisibility | ![](img/04_reflections_preview.png) |
+| [05 · Identification at scale](05_identification_at_scale.ipynb) | labelled ML datasets, fan-out throughput | ![](img/05_identification_preview.png) |
+
+Citations: [docs/references.md](../docs/references.md). CI executes
+notebooks 01–03 on every push (`.github/workflows/notebooks.yml`).
+
+## In-depth examples
+
+### `identification_ml_tutorial/` — ML workflow tutorial
 
 `dfxm_identify_ml_tutorial.ipynb` is a self-contained tutorial: it builds a
 resolution kernel, generates a tiny labeled dataset with `dfxm-identify`, shows
@@ -22,7 +38,7 @@ jupyter nbconvert --to html --execute \
   examples/identification_ml_tutorial/dfxm_identify_ml_tutorial.ipynb
 ```
 
-## `cluster_showcase/` — a real sweep
+### `cluster_showcase/` — cluster fan-out visualization
 
 `showcase.ipynb` visualizes the output of an actual cluster identify fan-out
 (`scripts/fanout.py --mode identify` / `lsf/identify_array.bsub`). It loads a
