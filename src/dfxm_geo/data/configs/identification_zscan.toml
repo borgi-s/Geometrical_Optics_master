@@ -50,7 +50,11 @@ range = 0.11459155902616465     # = 0.002 rad
 steps = 21
 
 [detector]
-model = "ideal"            # noise lives in the rocking-curve forward calls
+# Realistic ID03 pco_ff model (uint16 ADU). Set model = "ideal" for raw
+# float32 physics output. See docs/detector-noise-model.md.
+model = "pco_edge_4.2_id03"
+exposure_time = 1.0
+rng_seed = 0
 
 [zscan]
 z_offsets_um = [-2.0, -1.0, 0.0, 1.0, 2.0]   # 5 depth slices

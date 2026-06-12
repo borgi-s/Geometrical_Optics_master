@@ -753,8 +753,9 @@ class IdentificationZScanConfig:
 
     z_offsets_um: list[float]
     include_secondary: bool = True
-    # 0 = independent of the Poisson-noise stream (which uses
-    # `default_rng(seed).spawn(2)[1]` in `_maybe_apply_poisson_noise`).
+    # 0 = independent of the detector-noise stream (which uses
+    # `default_rng(seed).spawn(2)[1]` in `_apply_detector_model`; child[2]
+    # is reserved for the sensor fixed-pattern map).
     # Bump to a different value only if a future RNG split needs slot 0.
     secondary_rng_offset: int = 0
     # When True (requires include_secondary), each scan dir also writes
