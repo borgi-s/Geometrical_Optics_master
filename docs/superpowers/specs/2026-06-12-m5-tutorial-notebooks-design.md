@@ -61,7 +61,7 @@ Conventions (follow `examples/identification_ml_tutorial/`):
 |---|---|---|---|
 | 01 | `01_quickstart.ipynb` | empty-TOML → first image in ~5 lines; the two-stage model in one diagram (reuse `docs/img/`) | Borgi 2024 §2 |
 | 02 | `02_reciprocal_space.ipynb` | kernel point cloud; MC vs analytic backend comparison figure | Poulsen 2021; Borgi 2024 §3 |
-| 03 | `03_dislocations_and_contrast.ipynb` | edge/screw/mixed contrast; weak-beam; COM ≈ −qi reproduction (the README figure, now executable) | Borgi 2024 Figs. 3–5; Hirth & Lothe |
+| 03 | `03_dislocations_and_contrast.ipynb` | edge/screw/mixed contrast; weak-beam; COM ≈ −qi reproduction (the README figure, now executable); mixed character via the identification engine's α sweep (forward centered mode is edge-only by validation; α↔edge/screw endpoint naming deliberately left open — pending decision) | Borgi 2024 Figs. 3–5; Hirth & Lothe |
 | 04 | `04_oblique_and_reflections.ipynb` | oblique mount; `dfxm-find-reflections` table; g·b invisibility across a reflection sweep | Borgi 2024 App. A |
 | 05 | `05_identification_at_scale.ipynb` | slim re-cut of the ML tutorial; fan-out throughput plot built from the committed numbers in `docs/cluster-profiling.md` (no live cluster run) | Borgi 2025 |
 
@@ -70,9 +70,10 @@ Conventions (follow `examples/identification_ml_tutorial/`):
 `docs/references.md`: full BibTeX + one-line role for each of —
 Borgi 2024 (IUCrJ, forward model), Borgi 2025 (identification),
 Poulsen 2021 (original MATLAB GO model), Poulsen 2017 (DFXM optics),
-Hirth & Lothe (dislocation displacement fields), and the darkmod
-comparison source (Carlsen et al.). Stable anchors per entry so notebooks
-can deep-link.
+Hirth & Lothe (dislocation displacement fields),
+Carlsen et al. 2022 (arXiv:2201.07549, wave-optics model + condenser-aperture provenance)
+and the darkmod paper (arXiv:2503.22022, the GO-family comparison code).
+Stable anchors per entry so notebooks can deep-link.
 
 ## 5. Notebook CI
 
