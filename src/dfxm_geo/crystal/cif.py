@@ -60,12 +60,13 @@ def validate_space_group(name: str) -> str:
     gemmi = _import_gemmi()
     try:
         sg = gemmi.SpaceGroup(name)
-    except ValueError:
-        raise ValueError(f"unknown space-group symbol: {name!r}.") from None
+    except ValueError as exc:
+        raise ValueError(f"unknown space-group symbol: {name!r}.") from exc
     return str(sg.hm)
 
 
 def space_group_crystal_system(name: str) -> str:
+    """Return the crystal system string for a canonical H-M space-group symbol."""
     gemmi = _import_gemmi()
     return str(gemmi.SpaceGroup(name).crystal_system_str())
 
