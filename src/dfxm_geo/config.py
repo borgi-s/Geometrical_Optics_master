@@ -62,6 +62,29 @@ class AxisScanConfig:
 
 _CANONICAL_AXES = ("phi", "chi", "two_dtheta", "z")
 
+# Keys in a [crystal] block that belong to the mount geometry
+# (_crystal_mount_from_toml), NOT to the dislocation-layout schema
+# (CrystalConfig) or the identify sweep schema (IdentificationCrystalConfig).
+# Both CrystalConfig.from_dict and load_identification_config strip these
+# before parsing their own schemas; keep them sharing this one source so the
+# two strip sites can't drift (the identify list silently fell behind once).
+_CRYSTAL_MOUNT_KEYS: frozenset[str] = frozenset(
+    {
+        "lattice",
+        "a",
+        "b",
+        "c",
+        "alpha_deg",
+        "beta_deg",
+        "gamma_deg",
+        "cif",
+        "space_group",
+        "mount_x",
+        "mount_y",
+        "mount_z",
+    }
+)
+
 _AXIS_TO_LABEL = {
     "phi": "rocking",
     "chi": "rolling",
@@ -283,25 +306,7 @@ class CrystalConfig:
         # cell params, mount axes) — these feed _crystal_mount_from_toml, NOT
         # the dislocation-layout schema here. A [crystal] block carrying only
         # those keys (no dislocation `mode`) falls through to the default.
-        data = {
-            k: v
-            for k, v in data.items()
-            if k
-            not in (
-                "lattice",
-                "a",
-                "b",
-                "c",
-                "alpha_deg",
-                "beta_deg",
-                "gamma_deg",
-                "cif",
-                "space_group",
-                "mount_x",
-                "mount_y",
-                "mount_z",
-            )
-        }
+        data = {k: v for k, v in data.items() if k not in _CRYSTAL_MOUNT_KEYS}
         if not data:
             return cls.default()
         if "mode" not in data:
@@ -824,20 +829,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     # IdentificationCrystalConfig dislocation-sweep schema. Strip them so an
     # oblique identify config's [crystal] block parses (forward's
     # CrystalConfig.from_dict filters the same keys by picking known fields).
-    for _mount_key in (
-        "lattice",
-        "a",
-        "b",
-        "c",
-        "alpha_deg",
-        "beta_deg",
-        "gamma_deg",
-        "cif",
-        "space_group",
-        "mount_x",
-        "mount_y",
-        "mount_z",
-    ):
+    for _mount_key in _CRYSTAL_MOUNT_KEYS:
         crystal_data.pop(_mount_key, None)
     if "slip_plane_normal" in crystal_data:
         crystal_data = {
