@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 import pytest
 
 from dfxm_geo.find_reflections_cmd import cli_main
@@ -141,11 +144,8 @@ def test_hexagonal_config_enumerates(tmp_path, capsys):
 
 
 def test_cif_config_relative_path_and_sg_header(tmp_path, capsys):
-    import shutil
-    from pathlib import Path as _P
-
     pytest.importorskip("gemmi")
-    data = _P(__file__).parent / "data" / "cif"
+    data = Path(__file__).parent / "data" / "cif"
     shutil.copy(data / "al_fm3m.cif", tmp_path / "al.cif")
     cfg = tmp_path / "config.toml"
     cfg.write_text(
@@ -158,4 +158,7 @@ def test_cif_config_relative_path_and_sg_header(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "space_group=F m -3 m" in out
-    assert " 1 0 0 " not in out  # forbidden FCC reflection filtered
+    # Forbidden FCC reflection (mixed-parity 100) must be filtered out.
+    # Formatting-independent check: no data row whose first three columns are 1 0 0.
+    data_rows = [ln.split() for ln in out.splitlines() if ln.strip() and not ln.startswith("#")]
+    assert ["1", "0", "0"] not in [row[:3] for row in data_rows if row[0] != "hkl"]
