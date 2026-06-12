@@ -8,10 +8,10 @@ import pytest
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     AxisScanConfig,
+    DetectorConfig,
     IdentificationConfig,
     IdentificationCrystalConfig,
     IdentificationMonteCarloConfig,
-    IdentificationNoiseConfig,
     IOConfig,
     ReciprocalConfig,
     ScanConfig,
@@ -65,11 +65,11 @@ def test_identification_crystal_config_defaults():
 
 
 def test_identification_scan_config_defaults():
-    """IdentificationNoiseConfig holds the old IdentificationScanConfig noise fields."""
-    noise = IdentificationNoiseConfig()
-    assert noise.poisson_noise is True
-    assert noise.rng_seed == 0
-    assert noise.intensity_scale == 7.0
+    """DetectorConfig holds the detector model + calibration fields."""
+    detector = DetectorConfig()
+    assert detector.model == "pco_edge_4.2_id03"
+    assert detector.rng_seed == 0
+    assert detector.counts_scale == 1.0e4
 
 
 def test_identification_montecarlo_config_defaults():
@@ -97,11 +97,11 @@ def _make_io_config():
     )
 
 
-def _make_scan_noise(rng_seed: int = 0, intensity_scale: float = 7.0):
-    """Return a (ScanConfig, IdentificationNoiseConfig) pair replacing old IdentificationScanConfig."""
+def _make_scan_noise(rng_seed: int = 0):
+    """Return a (ScanConfig, DetectorConfig) pair replacing old IdentificationScanConfig."""
     scan = ScanConfig(phi=AxisScanConfig(value=150e-6))
-    noise = IdentificationNoiseConfig(rng_seed=rng_seed, intensity_scale=intensity_scale)
-    return scan, noise
+    detector = DetectorConfig(rng_seed=rng_seed)
+    return scan, detector
 
 
 def test_identification_config_mode_single_ok():
@@ -110,7 +110,7 @@ def test_identification_config_mode_single_ok():
         mode="single",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
         scan=scan,
-        noise=noise,
+        detector=noise,
         io=_make_io_config(),
     )
     assert cfg.mode == "single"
@@ -123,7 +123,7 @@ def test_identification_config_mode_multi_ok():
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
         scan=scan,
-        noise=noise,
+        detector=noise,
         multi=IdentificationMonteCarloConfig(),
         io=_make_io_config(),
     )
@@ -138,7 +138,7 @@ def test_identification_config_mode_multi_requires_multi_block():
             mode="multi",
             crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
             scan=scan,
-            noise=noise,
+            detector=noise,
             multi=None,
             io=_make_io_config(),
         )
@@ -151,7 +151,7 @@ def test_identification_config_invalid_slip_plane_raises():
             mode="single",
             crystal=IdentificationCrystalConfig(slip_plane_normal=(2, 0, 0)),
             scan=scan,
-            noise=noise,
+            detector=noise,
             io=_make_io_config(),
         )
 
@@ -163,7 +163,7 @@ def test_identification_config_invalid_mode_raises():
             mode="bogus",  # type: ignore[arg-type]
             crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
             scan=scan,
-            noise=noise,
+            detector=noise,
             io=_make_io_config(),
         )
 
@@ -185,10 +185,8 @@ invisibility_threshold_deg = 10.0
 [scan.phi]
 value = 1.5e-4
 
-[noise]
-poisson_noise = true
+[detector]
 rng_seed = 0
-intensity_scale = 7.0
 
 [io]
 fn_prefix = "/mosa_test_0000_"
@@ -222,7 +220,7 @@ slip_plane_normal = [1, 1, 1]
 [scan.phi]
 value = 1.5e-4
 
-[noise]
+[detector]
 rng_seed = 42
 
 [multi]
@@ -248,7 +246,7 @@ keV = 17.0
     assert cfg.mode == "multi"
     assert cfg.multi is not None
     assert cfg.multi.n_samples == 100
-    assert cfg.noise.rng_seed == 42
+    assert cfg.detector.rng_seed == 42
 
 
 def test_load_identification_config_missing_mode_defaults_to_single(tmp_path):
@@ -261,7 +259,7 @@ def test_load_identification_config_missing_mode_defaults_to_single(tmp_path):
 
 def _tiny_single_config(tmp_path):
     scan = ScanConfig(phi=AxisScanConfig(value=150e-6))
-    noise = IdentificationNoiseConfig(rng_seed=0, intensity_scale=1.0)
+    noise = DetectorConfig(model="ideal", rng_seed=0)
     return IdentificationConfig(
         mode="single",
         crystal=IdentificationCrystalConfig(
@@ -274,7 +272,7 @@ def _tiny_single_config(tmp_path):
             exclude_invisibility=False,  # don't filter
         ),
         scan=scan,
-        noise=noise,
+        detector=noise,
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         io=_make_io_config(),
     )
@@ -311,12 +309,12 @@ def test_run_identification_single_writes_expected_count(tmp_path, monkeypatch):
 
 def _tiny_multi_config():
     scan = ScanConfig(phi=AxisScanConfig(value=150e-6))
-    noise = IdentificationNoiseConfig(rng_seed=0, intensity_scale=1.0)
+    noise = DetectorConfig(model="ideal", rng_seed=0)
     return IdentificationConfig(
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
         scan=scan,
-        noise=noise,
+        detector=noise,
         multi=IdentificationMonteCarloConfig(n_samples=3, pos_std_um=2.0),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         io=_make_io_config(),
@@ -453,10 +451,9 @@ exclude_invisibility = false
 [scan.phi]
 value = 1.5e-4
 
-[noise]
-poisson_noise = false
+[detector]
+model = "ideal"
 rng_seed = 0
-intensity_scale = 1.0
 
 [io]
 fn_prefix = "/mosa_test_0000_"
@@ -530,10 +527,9 @@ exclude_invisibility = false
 [scan.phi]
 value = 1.5e-4
 
-[noise]
-poisson_noise = false
+[detector]
+model = "ideal"
 rng_seed = 0
-intensity_scale = 1.0
 
 [io]
 fn_prefix = "/mosa_test_0000_"
@@ -602,7 +598,7 @@ def _tiny_zscan_config(slip_plane=(1, 1, 1)):
         phi=AxisScanConfig(range=0.034377, steps=2),
         chi=AxisScanConfig(range=0.114, steps=2),
     )
-    noise = IdentificationNoiseConfig(rng_seed=0, intensity_scale=1.0)
+    noise = DetectorConfig(model="ideal", rng_seed=0)
     return IdentificationConfig(
         mode="z-scan",
         crystal=IdentificationCrystalConfig(
@@ -615,7 +611,7 @@ def _tiny_zscan_config(slip_plane=(1, 1, 1)):
             exclude_invisibility=False,
         ),
         scan=scan,
-        noise=noise,
+        detector=noise,
         zscan=IdentificationZScanConfig(
             z_offsets_um=[0.0],
             include_secondary=False,
@@ -641,7 +637,7 @@ def test_identification_config_mode_zscan_requires_zscan_block():
             mode="z-scan",
             crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
             scan=scan,
-            noise=noise,
+            detector=noise,
             zscan=None,
             io=_make_io_config(),
         )
@@ -657,7 +653,7 @@ def test_identification_config_mode_single_rejects_zscan_block():
             mode="single",
             crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
             scan=scan,
-            noise=noise,
+            detector=noise,
             zscan=IdentificationZScanConfig(z_offsets_um=[0.0]),
             io=_make_io_config(),
         )
@@ -681,7 +677,7 @@ steps = 21
 range = 0.1
 steps = 21
 
-[noise]
+[detector]
 rng_seed = 7
 
 [zscan]
@@ -711,7 +707,7 @@ keV = 17.0
     assert cfg.zscan.secondary_rng_offset == 2
     assert cfg.scan.phi.steps == 21
     assert cfg.scan.chi.steps == 21
-    assert cfg.noise.rng_seed == 7
+    assert cfg.detector.rng_seed == 7
 
 
 def test_run_identification_zscan_writes_per_config_rocking_grid(tmp_path, monkeypatch):
@@ -787,7 +783,7 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
         phi=AxisScanConfig(range=0.034377, steps=2),
         chi=AxisScanConfig(range=0.114, steps=2),
     )
-    noise = IdentificationNoiseConfig(rng_seed=0, intensity_scale=1.0)
+    noise = DetectorConfig(model="ideal", rng_seed=0)
     cfg = IdentificationConfig(
         mode="z-scan",
         crystal=IdentificationCrystalConfig(
@@ -800,7 +796,7 @@ def test_run_identification_zscan_is_deterministic_for_seed(tmp_path, monkeypatc
             exclude_invisibility=False,
         ),
         scan=scan,
-        noise=noise,
+        detector=noise,
         zscan=IdentificationZScanConfig(
             z_offsets_um=[0.0],
             include_secondary=True,  # exercise the secondary draw
@@ -868,10 +864,9 @@ steps = 2
 range = 0.114
 steps = 2
 
-[noise]
-poisson_noise = false
+[detector]
+model = "ideal"
 rng_seed = 0
-intensity_scale = 1.0
 
 [zscan]
 z_offsets_um = [0.0]
@@ -924,10 +919,8 @@ class TestIdentificationConfigScanReusesSharedShape:
             "[scan.phi]\n"
             "value = 0.00015\n"
             "\n"
-            "[noise]\n"
-            "poisson_noise = true\n"
+            "[detector]\n"
             "rng_seed = 0\n"
-            "intensity_scale = 7.0\n"
             "\n"
             "[io]\n"
             'fn_prefix = "/mosa_test_0000_"\n'
@@ -942,9 +935,9 @@ class TestIdentificationConfigScanReusesSharedShape:
         # New shape: scan is the shared ScanConfig
         assert isinstance(cfg.scan, ScanConfig)
         assert cfg.scan.phi.value == 1.5e-4
-        # Noise lives in its own block
-        assert cfg.noise.poisson_noise is True
-        assert cfg.noise.intensity_scale == 7.0
+        # Detector config lives in its own block
+        assert cfg.detector.model == "pco_edge_4.2_id03"
+        assert cfg.detector.rng_seed == 0
 
 
 class TestIdentificationConfigZScanForbidsScanZ:

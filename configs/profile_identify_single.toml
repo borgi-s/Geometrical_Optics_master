@@ -24,10 +24,8 @@ value = 1.25e-4
 range = 1.25e-4
 steps = 5
 
-[noise]
-poisson_noise = true
+[detector]
 rng_seed = 1
-intensity_scale = 7.0
 
 [io]
 include_perfect_crystal = false

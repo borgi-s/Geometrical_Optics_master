@@ -17,10 +17,10 @@ import pytest
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     AxisScanConfig,
+    DetectorConfig,
     IdentificationConfig,
     IdentificationCrystalConfig,
     IdentificationMonteCarloConfig,
-    IdentificationNoiseConfig,
     IOConfig,
     ReciprocalConfig,
     ScanConfig,
@@ -49,7 +49,7 @@ def test_single_with_phi_scanned_produces_phi_steps_frames(tmp_path: Path) -> No
             exclude_invisibility=False,
         ),
         scan=ScanConfig(phi=AxisScanConfig(range=0.01, steps=4)),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
     )
@@ -78,7 +78,7 @@ def test_single_with_z_scanned_emits_one_scanspec_per_z(tmp_path: Path) -> None:
             phi=AxisScanConfig(value=1.5e-4),
             z=AxisScanConfig(range=2.0, steps=3),  # 3 z values
         ),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
     )
@@ -102,7 +102,7 @@ def test_multi_with_z_scanned_emits_one_scanspec_per_z(tmp_path: Path) -> None:
             phi=AxisScanConfig(value=1e-4),
             z=AxisScanConfig(range=2.0, steps=2),  # 2 z values
         ),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         multi=IdentificationMonteCarloConfig(n_samples=2, pos_std_um=5.0),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
@@ -125,7 +125,7 @@ def test_multi_with_phi_and_chi_scanned_produces_phi_x_chi_frames(
             phi=AxisScanConfig(range=0.01, steps=3),
             chi=AxisScanConfig(range=0.01, steps=2),
         ),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         multi=IdentificationMonteCarloConfig(n_samples=1, pos_std_um=5.0),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
@@ -158,7 +158,7 @@ def test_single_with_two_dtheta_scanned_does_not_raise(tmp_path: Path) -> None:
             phi=AxisScanConfig(value=1.5e-4),
             two_dtheta=AxisScanConfig(range=1e-4, steps=3),
         ),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
     )
@@ -189,7 +189,7 @@ def test_single_with_two_dtheta_scanned_keeps_one_scan_per_plane(tmp_path: Path)
             phi=AxisScanConfig(value=1.5e-4),
             two_dtheta=AxisScanConfig(range=1e-4, steps=3),  # 3 two_dtheta values
         ),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
     )
@@ -216,7 +216,7 @@ def test_multi_with_two_dtheta_scanned_keeps_one_scan_per_mc_sample(tmp_path: Pa
             phi=AxisScanConfig(value=1e-4),
             two_dtheta=AxisScanConfig(range=1e-4, steps=2),  # 2 two_dtheta values
         ),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         multi=IdentificationMonteCarloConfig(n_samples=2, pos_std_um=5.0),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
@@ -256,7 +256,7 @@ def test_single_with_all_four_axes_scanned(tmp_path: Path) -> None:
             two_dtheta=AxisScanConfig(range=1e-4, steps=2),
             z=AxisScanConfig(range=1.0, steps=2),  # 2 z values
         ),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
     )

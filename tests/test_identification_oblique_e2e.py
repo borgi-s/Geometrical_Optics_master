@@ -162,11 +162,11 @@ def test_identify_multi_oblique_e2e(tmp_path: Path) -> None:
     from dfxm_geo.crystal.oblique import CrystalMount
     from dfxm_geo.pipeline import (
         AxisScanConfig,
+        DetectorConfig,
         GeometryConfig,
         IdentificationConfig,
         IdentificationCrystalConfig,
         IdentificationMonteCarloConfig,
-        IdentificationNoiseConfig,
         IOConfig,
         ReciprocalConfig,
         ScanConfig,
@@ -183,7 +183,7 @@ def test_identify_multi_oblique_e2e(tmp_path: Path) -> None:
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, -1)),
         scan=ScanConfig(phi=AxisScanConfig(value=0.46e-3)),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         multi=IdentificationMonteCarloConfig(n_samples=1, pos_std_um=5.0),
         geometry=GeometryConfig(
@@ -223,10 +223,10 @@ def test_identify_zscan_oblique_e2e(tmp_path: Path) -> None:
     from dfxm_geo.crystal.oblique import CrystalMount
     from dfxm_geo.pipeline import (
         AxisScanConfig,
+        DetectorConfig,
         GeometryConfig,
         IdentificationConfig,
         IdentificationCrystalConfig,
-        IdentificationNoiseConfig,
         IdentificationZScanConfig,
         IOConfig,
         ReciprocalConfig,
@@ -252,7 +252,7 @@ def test_identify_zscan_oblique_e2e(tmp_path: Path) -> None:
             exclude_invisibility=False,
         ),
         scan=ScanConfig(phi=AxisScanConfig(value=0.46e-3)),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         zscan=IdentificationZScanConfig(z_offsets_um=[5.0], include_secondary=False),
         geometry=GeometryConfig(

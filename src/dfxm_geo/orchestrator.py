@@ -1062,7 +1062,7 @@ def _iter_identification_multi(
     """
     assert config.multi is not None  # validated in __post_init__
     mc = config.multi
-    noise_cfg = config.noise
+    detector_cfg = config.detector
     q_hkl = np.asarray(ctx.q_hkl, dtype=float)
 
     # Source geometry + instrument from ctx (oblique-safe).
@@ -1077,7 +1077,7 @@ def _iter_identification_multi(
     # Split master rng → child streams. [0] = param draws (consumed here);
     # [1] = Poisson noise (consumed by _maybe_apply_poisson_noise, which
     # re-spawns with the same seed to get the same noise stream).
-    param_rng, _noise_rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)
+    param_rng, _noise_rng = np.random.default_rng(detector_cfg.rng_seed).spawn(2)
 
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
@@ -1243,20 +1243,23 @@ def _maybe_apply_poisson_noise(
       have independent detector noise even though all reflections share the
       same crystal/dislocation realization).
     """
-    noise_cfg = config.noise
-    scale = noise_cfg.intensity_scale
-    if scale == 1.0 and not noise_cfg.poisson_noise:
+    # INTERIM SHIM (Task 7): keep this function compiling + the suite green.
+    # Task 9 replaces it wholesale with the real DetectorModel seam.
+    detector_cfg = config.detector
+    scale = 1.0
+    poisson = detector_cfg.model != "ideal"
+    if scale == 1.0 and not poisson:
         return  # nothing to do; skip the per-scan file open
-    if noise_cfg.poisson_noise:
+    if poisson:
         if reflection_index > 0:
             # Multi-reflection: per-reflection independent noise stream
             # (same crystal / dislocation params, independent detector noise).
             rng: np.random.Generator | None = np.random.default_rng(
-                [noise_cfg.rng_seed, reflection_index]
+                [detector_cfg.rng_seed, reflection_index]
             )
         else:
             # Single-reflection: bit-compatible stream (v2.5.x behaviour).
-            rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)[1]
+            rng = np.random.default_rng(detector_cfg.rng_seed).spawn(2)[1]
     else:
         rng = None
     for k in range(1, n_scans + 1):
@@ -1303,7 +1306,7 @@ def _iter_identification_zscan(
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
     crystal_cfg = config.crystal
-    noise_cfg = config.noise
+    detector_cfg = config.detector
 
     planes = (
         _ALL_111_PLANES if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
@@ -1317,7 +1320,7 @@ def _iter_identification_zscan(
     # Secondary stream uses SeedSequence child [secondary_rng_offset]. Default
     # is 0; _maybe_apply_poisson_noise uses child [1] from a spawn(2), so the
     # two streams are independent SeedSequence siblings.
-    spawned = np.random.default_rng(noise_cfg.rng_seed).spawn(zscan.secondary_rng_offset + 1)
+    spawned = np.random.default_rng(detector_cfg.rng_seed).spawn(zscan.secondary_rng_offset + 1)
     secondary_rng = spawned[zscan.secondary_rng_offset]
 
     q_hkl = np.asarray(ctx.q_hkl, dtype=float)
@@ -1598,7 +1601,7 @@ def run_identification(
     list[dict]}``.
 
     RNG policy (M3 plan 2): the dislocation parameter stream uses
-    ``config.noise.rng_seed`` UNCHANGED for every reflection — all
+    ``config.detector.rng_seed`` UNCHANGED for every reflection — all
     reflections image the SAME crystal realization (the scientific
     requirement for multi-reflection data). Poisson noise is seeded
     independently per reflection via ``[rng_seed, reflection_index]``

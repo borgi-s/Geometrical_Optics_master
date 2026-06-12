@@ -15,10 +15,8 @@ value = 1.25e-4
 range = 1.25e-4
 steps = 11
 
-[noise]
-poisson_noise = true
+[detector]
 rng_seed = 1
-intensity_scale = 7.0
 
 [multi]
 n_samples = 3

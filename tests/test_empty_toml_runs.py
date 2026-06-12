@@ -69,8 +69,8 @@ class TestEmptyTomlIdentify:
         # crystal hypothesis sweep cascades:
         assert cfg.crystal.slip_plane_normal == (1, 1, 1)
         assert cfg.crystal.sweep_all_slip_planes is True
-        # noise + reciprocal cascade:
-        assert cfg.noise.poisson_noise is True
+        # detector + reciprocal cascade:
+        assert cfg.detector.model == "pco_edge_4.2_id03"
         assert cfg.reciprocal.hkl == (-1, 1, -1)
         # multi/zscan blocks stay None outside their modes:
         assert cfg.multi is None

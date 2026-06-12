@@ -49,10 +49,8 @@ steps = 21                       # downscaled example; bump to 61 for a real run
 range = 0.11459155902616465     # = 0.002 rad
 steps = 21
 
-[noise]
-poisson_noise = false            # noise lives in the rocking-curve forward calls
-rng_seed = 0
-intensity_scale = 7.0
+[detector]
+model = "ideal"            # noise lives in the rocking-curve forward calls
 
 [zscan]
 z_offsets_um = [-2.0, -1.0, 0.0, 1.0, 2.0]   # 5 depth slices

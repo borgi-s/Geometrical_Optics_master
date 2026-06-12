@@ -38,10 +38,8 @@ value = 1.25e-4
 range = 1.25e-4
 steps = 2
 
-[noise]
-poisson_noise = true
+[detector]
 rng_seed = 7
-intensity_scale = 7.0
 
 [multi]
 n_samples = 1
@@ -114,10 +112,8 @@ value = 1.25e-4
 range = 1.25e-4
 steps = 2
 
-[noise]
-poisson_noise = true
+[detector]
 rng_seed = 7
-intensity_scale = 7.0
 
 [crystal]
 sweep_all_slip_planes = false

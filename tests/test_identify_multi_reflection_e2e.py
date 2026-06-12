@@ -38,8 +38,8 @@ b_vector_indices    = [0, 1]
 sweep_all_slip_planes = false
 exclude_invisibility  = false
 
-[noise]
-poisson_noise = false
+[detector]
+model = "ideal"
 
 [identification]
 
@@ -61,10 +61,11 @@ _MULTI_IDENTIFY_EXCL_TOML = _MULTI_IDENTIFY_TOML.replace(
     "exclude_invisibility  = false", "exclude_invisibility  = true"
 )
 
-# Same TOML but with Poisson noise enabled (fixed seed for determinism).
+# Same TOML but with the detector model enabled (fixed seed for determinism).
+# Dropping the model="ideal" line lets the default (noisy) detector model apply.
 _MULTI_IDENTIFY_NOISY_TOML = _MULTI_IDENTIFY_TOML.replace(
-    "poisson_noise = false",
-    "poisson_noise = true\nrng_seed = 42",
+    'model = "ideal"',
+    "rng_seed = 42",
 )
 
 

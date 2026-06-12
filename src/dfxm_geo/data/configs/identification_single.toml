@@ -35,10 +35,8 @@ invisibility_threshold_deg = 10.0
 [scan.phi]
 value = 1.5e-4   # 8e-4 deg ~= 1.4e-4 rad in Borgi 2025; this run uses 1.5e-4 rad
 
-[noise]
-poisson_noise = true
+[detector]
 rng_seed = 0
-intensity_scale = 7.0
 
 [io]
 fn_prefix = "/mosa_test_0000_"     # unused for dfxm-identify but IOConfig requires

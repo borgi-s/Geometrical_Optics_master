@@ -32,10 +32,8 @@ steps = 3
 z_offsets_um = [-5.0, 0.0, 5.0]
 include_secondary = true
 
-[noise]
-poisson_noise = true
+[detector]
 rng_seed = 1
-intensity_scale = 7.0
 
 [io]
 include_perfect_crystal = false
