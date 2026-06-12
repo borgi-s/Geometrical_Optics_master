@@ -115,3 +115,26 @@ def test_no_kev_in_config_warns_on_stderr(tmp_path, capsys):
     assert rc == 0
     err = capsys.readouterr().err
     assert "defaulting to 17.0" in err
+
+
+HEX_CONFIG = """
+[reciprocal]
+keV = 17.0
+
+[crystal]
+lattice = "hexagonal"
+a       = 3.2094e-10
+c       = 5.2108e-10
+mount_x = [2, -1, 0]
+mount_y = [0, 1, 0]
+mount_z = [0, 0, 1]
+"""
+
+
+def test_hexagonal_config_enumerates(tmp_path, capsys):
+    p = tmp_path / "mg.toml"
+    p.write_text(HEX_CONFIG, encoding="utf-8")
+    rc = cli_main(["--config", str(p), "--hkl-max", "2"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert any(line.strip().startswith("2 -1 0") for line in out.splitlines())

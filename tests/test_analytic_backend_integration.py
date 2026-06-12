@@ -9,6 +9,7 @@ import numpy as np  # noqa: E402
 import pytest  # noqa: E402
 
 import dfxm_geo.direct_space.forward_model as fm  # noqa: E402
+from dfxm_geo.crystal.cell import UnitCell  # noqa: E402
 from dfxm_geo.pipeline import (  # noqa: E402
     ReciprocalConfig,
     _load_resolution,
@@ -171,7 +172,7 @@ def test_analytic_forward_matches_mc_no_beamstop(tmp_path):
     choice doesn't affect it.
     """
     hkl, keV = (-1, 1, -1), 17.0
-    theta = _validate_reflection(hkl, keV, 4.0495e-10)
+    theta = _validate_reflection(hkl, keV, UnitCell.cubic(4.0495e-10))
     # No-beamstop MC kernel (NA aperture ON via phys_aper, beamstop OFF) with
     # the SAME instrument params the analytic backend uses. Coarse + high-N so
     # each bin is well populated (see docstring). Written into tmp_path/pkl_files.

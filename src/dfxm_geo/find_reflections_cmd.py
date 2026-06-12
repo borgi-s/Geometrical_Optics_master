@@ -83,7 +83,7 @@ def cli_main(argv: list[str] | None = None) -> int:
     geoms = find_reflections(mount, keV, **kwargs)
 
     print(
-        f"# mount: x={mount.mount_x} y={mount.mount_y} z={mount.mount_z}  a={mount.a:g} m  keV={keV:g}"
+        f"# mount: x={mount.mount_x} y={mount.mount_y} z={mount.mount_z}  lattice={mount.lattice}  a={mount.a:g} m  keV={keV:g}"
     )
     print(
         f"{'hkl':>12} {'theta_deg':>10} {'eta1_deg':>10} {'omega1_deg':>11} {'eta2_deg':>10} {'omega2_deg':>11} {'group':>6}"

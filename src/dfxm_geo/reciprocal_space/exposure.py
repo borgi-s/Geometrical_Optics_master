@@ -21,6 +21,7 @@ def run_exposure_simulation(
     eps_rms: float = 0.014 / 2.35,
     NA_rms: float = 7.31e-4 / 2.35,
     energy0: float = 17.00,
+    d0_angstrom: float = 4.0495 / np.sqrt(3),
 ) -> tuple[int, float]:
     """Monte Carlo a single-objective DFXM exposure and return transmission stats.
 
@@ -30,6 +31,7 @@ def run_exposure_simulation(
         eps_rms: RMS width of the x-ray energy bandwidth.
         NA_rms: NA of the objective (rad).
         energy0: Beam energy (keV).
+        d0_angstrom: Interplanar spacing of the active reflection (Å). Default Al d_111.
 
     Returns:
         ``(total_transmitted, fraction_transmitted)``.
@@ -37,7 +39,7 @@ def run_exposure_simulation(
     rng = np.random.default_rng()
 
     lambda0 = 12.398 / energy0  # in Å
-    d0 = 4.0495 / np.sqrt(3)  # in Å
+    d0 = d0_angstrom  # in Å (default: Al d_111)
     theta0 = np.arcsin(lambda0 / (2 * d0))  # in rad
     G = 2 * np.pi / d0 * np.asarray([-np.sin(theta0), np.cos(theta0)])
     D = 2 * np.sqrt(50e-6 * 1e-3)  # physical aperture of objective, in m

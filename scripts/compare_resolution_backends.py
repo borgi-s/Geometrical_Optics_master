@@ -40,6 +40,7 @@ matplotlib.use("Agg")  # headless: write a PNG, never open a window
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
+from dfxm_geo.crystal.cell import UnitCell  # noqa: E402
 from dfxm_geo.pipeline import ReciprocalConfig  # noqa: E402
 from dfxm_geo.reciprocal_space.analytic_resolution import AnalyticResolution  # noqa: E402
 from dfxm_geo.reciprocal_space.kernel import (  # noqa: E402
@@ -101,7 +102,7 @@ def resolve_params(hkl: tuple[int, int, int], keV: float) -> dict[str, float]:
     theta from the reflection; the four resolution sigmas + the zeta_v clip from
     ``ReciprocalConfig`` defaults; ``phys_aper = D/d1`` from ``generate_kernel``.
     """
-    theta = _validate_reflection(hkl, keV, _A_AL)
+    theta = _validate_reflection(hkl, keV, UnitCell.cubic(_A_AL))
     cfg = ReciprocalConfig()  # defaults mirror generate_kernel's instrument args
     gk = inspect.signature(generate_kernel).parameters
     phys_aper = float(gk["D"].default) / float(gk["d1"].default)

@@ -21,6 +21,7 @@ import h5py
 import numpy as np
 
 import dfxm_geo.direct_space.forward_model as _fm
+from dfxm_geo.crystal.cell import UnitCell
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 
 
@@ -112,7 +113,7 @@ def migrate_npy_dir_to_h5(
     kernel_npz = _fm._lookup_kernel_path(
         directory=_fm.pkl_fpath, mode="simplified", hkl=_HKL, keV=_KEV
     )
-    theta_run = _validate_reflection(_HKL, _KEV, 4.0495e-10)  # Al cubic lattice (m)
+    theta_run = _validate_reflection(_HKL, _KEV, UnitCell.cubic(4.0495e-10))  # Al (m)
     res = _fm.ResolutionContext(
         Resq_i=None,
         qi1_start=0.0,

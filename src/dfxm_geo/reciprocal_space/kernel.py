@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
+from dfxm_geo.crystal.cell import UnitCell
 from dfxm_geo.crystal.oblique import CrystalMount, compute_omega_eta
 from dfxm_geo.reciprocal_space.resolution import reciprocal_res_func
 
@@ -34,13 +35,27 @@ _DEFAULT_AL_CRYSTAL = CrystalMount(
 
 
 def _crystal_mount_from_toml(data: dict | None) -> CrystalMount:
-    """Build a CrystalMount from a `[crystal]` TOML block (or None → default Al)."""
+    """Build a CrystalMount from a `[crystal]` TOML block (or None → default Al).
+
+    Optional cell parameters ``b``/``c`` (metres) and ``alpha_deg``/``beta_deg``/
+    ``gamma_deg`` (degrees) extend the mount beyond cubic; constrained values
+    are filled per crystal system (see ``UnitCell.from_lattice``).
+    """
     if data is None:
         return _DEFAULT_AL_CRYSTAL
+
+    def _opt(key: str) -> float | None:
+        return float(data[key]) if key in data else None
+
     try:
         return CrystalMount(
             lattice=data["lattice"],
             a=float(data["a"]),
+            b=_opt("b"),
+            c=_opt("c"),
+            alpha_deg=_opt("alpha_deg"),
+            beta_deg=_opt("beta_deg"),
+            gamma_deg=_opt("gamma_deg"),
             mount_x=tuple(int(x) for x in data["mount_x"]),  # type: ignore[arg-type]
             mount_y=tuple(int(x) for x in data["mount_y"]),  # type: ignore[arg-type]
             mount_z=tuple(int(x) for x in data["mount_z"]),  # type: ignore[arg-type]
@@ -136,14 +151,15 @@ def _default_theta_al_111(keV: float = 17) -> float:
 def _validate_reflection(
     hkl: tuple[int, int, int],
     keV: float,
-    a: float,
+    cell: UnitCell,
 ) -> float:
-    """Compute and validate the Bragg angle θ for an arbitrary cubic reflection.
+    """Compute and validate the Bragg angle θ for an arbitrary reflection.
 
     Args:
         hkl: Miller indices (must be ints, length 3, not all zero).
         keV: beam energy in keV (must be > 0).
-        a: cubic lattice parameter in metres.
+        cell: unit cell; d-spacing is the metric-tensor form d = 2π/|B·G|
+            (bit-identical to the legacy a/√(h²+k²+l²) for cubic cells).
 
     Returns:
         Bragg angle θ in radians.
@@ -163,11 +179,8 @@ def _validate_reflection(
         raise ValueError("hkl=(0,0,0) is not a valid reflection (no diffraction).")
     if keV <= 0:
         raise ValueError(f"keV must be > 0, got {keV}.")
-    if a <= 0:
-        raise ValueError(f"lattice parameter `a` must be > 0, got {a}.")
 
-    h, k, l = hkl
-    d_hkl = a / np.sqrt(h * h + k * k + l * l)
+    d_hkl = cell.d_spacing(hkl)
     wavelength = 1.239841984e-9 / keV  # hc/E, metres
     sin_theta = wavelength / (2 * d_hkl)
     if sin_theta > 1:
@@ -742,6 +755,9 @@ def cli_main(argv: list[str] | None = None) -> int:
     # when a genuine mount is supplied (the spec-§6 explicitness guard, now
     # correctly scoped so it no longer over-fires on a forward layout).
     _MOUNT_KEYS = ("lattice", "a", "mount_x", "mount_y", "mount_z")
+    # The five required mount fields suffice for detection; optional cell
+    # params (b/c/alpha_deg/...) are deliberately excluded — generic keys
+    # like `b` would misfire on forward-layout [crystal] blocks.
     is_mount_block = mount_block is not None and any(k in mount_block for k in _MOUNT_KEYS)
     if is_mount_block and geometry_block is None:
         print(
@@ -763,6 +779,14 @@ def cli_main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    if not mount.cell.is_cubic and mode == "simplified":
+        print(
+            "error: non-cubic [crystal] cells require [geometry] mode='oblique' "
+            "(simplified mode hardwires the cubic symmetric geometry).",
+            file=sys.stderr,
+        )
+        return 1
+
     # -------------------------------------------------------------------------
     # Multi-reflection branch: [[reflections]] / [reflections_auto]
     # -------------------------------------------------------------------------
@@ -778,11 +802,11 @@ def cli_main(argv: list[str] | None = None) -> int:
             pkl_fpath=fm.pkl_fpath,
         )
 
-    a_lattice = mount.a
+    cell = mount.cell
     if raw_hkl is not None and raw_keV is not None:
         try:
             hkl_tuple: tuple[int, int, int] = tuple(raw_hkl)
-            theta = _validate_reflection(hkl_tuple, float(raw_keV), a_lattice)
+            theta = _validate_reflection(hkl_tuple, float(raw_keV), cell)
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1

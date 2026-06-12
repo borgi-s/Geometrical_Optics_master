@@ -14,6 +14,7 @@ import numpy as np
 from dfxm_geo.crystal.burgers import (
     burgers_vectors as _burgers_vectors,
 )
+from dfxm_geo.crystal.cell import UnitCell
 from dfxm_geo.crystal.oblique import CrystalMount
 from dfxm_geo.crystal.reflections import (
     ReflectionRun as _ReflectionRun,
@@ -385,7 +386,7 @@ class ReciprocalConfig:
         # lattice_a defaults to Al (4.0495e-10) but is now config-driven, so a
         # non-Al cubic lattice can be supplied via [reciprocal] lattice_a and
         # flows through to both the Bragg-validity check and the analytic backend.
-        _validate_reflection(self.hkl, self.keV, self.lattice_a)
+        _validate_reflection(self.hkl, self.keV, UnitCell.cubic(self.lattice_a))
 
     @classmethod
     def from_dict(cls, data: dict | None) -> ReciprocalConfig:
@@ -471,9 +472,28 @@ def _build_geometry_config(
 
     mode, eta = _parse_geometry_block(raw.get("geometry"), allow_missing_eta=multi_reflection)
     if mode == "simplified":
+        crystal_raw = raw.get("crystal") or {}
+        # A "lattice" key signals an explicit bootstrap-style mount; parse it
+        # (which may surface mount errors simplified mode previously ignored)
+        # so non-cubic cells cannot slip through the cubic-only path.
+        if "lattice" in crystal_raw:
+            mount = _crystal_mount_from_toml(crystal_raw)
+            if not mount.cell.is_cubic:
+                raise ValueError(
+                    "non-cubic [crystal] cells require [geometry] mode='oblique' "
+                    "(simplified mode hardwires the cubic symmetric geometry)."
+                )
         return GeometryConfig(mode="simplified")
 
     mount = _crystal_mount_from_toml(raw.get("crystal"))
+
+    if not mount.cell.is_cubic:
+        raise ValueError(
+            "non-cubic cells are not yet supported in the forward/identify "
+            "pipeline (lands in M4 Stage 4.3 with general slip systems). "
+            "Stage 4.1 supports non-cubic lattices in dfxm-bootstrap and "
+            "dfxm-find-reflections."
+        )
 
     if multi_reflection:
         # Per-entry angles resolved by _parse_reflections_tables; return a
@@ -799,7 +819,7 @@ def run_theta(config: SimulationConfig | IdentificationConfig) -> float:
     from dfxm_geo.reciprocal_space.kernel import _validate_reflection
 
     r = config.reciprocal
-    return float(_validate_reflection(r.hkl, r.keV, r.lattice_a))
+    return float(_validate_reflection(r.hkl, r.keV, UnitCell.cubic(r.lattice_a)))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -868,6 +888,12 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
     if mount is not None:
         lines.append(f'lattice = "{mount.lattice}"')
         lines.append(f"a = {mount.a}")
+        if not mount.cell.is_cubic:
+            lines.append(f"b = {mount.cell.b}")
+            lines.append(f"c = {mount.cell.c}")
+            lines.append(f"alpha_deg = {mount.cell.alpha_deg}")
+            lines.append(f"beta_deg = {mount.cell.beta_deg}")
+            lines.append(f"gamma_deg = {mount.cell.gamma_deg}")
         lines.append(f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]")
         lines.append(f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]")
         lines.append(f"mount_z = [{mount.mount_z[0]}, {mount.mount_z[1]}, {mount.mount_z[2]}]")
@@ -971,6 +997,16 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
         lines += [
             f'lattice = "{mount.lattice}"',
             f"a = {mount.a}",
+        ]
+        if not mount.cell.is_cubic:
+            lines += [
+                f"b = {mount.cell.b}",
+                f"c = {mount.cell.c}",
+                f"alpha_deg = {mount.cell.alpha_deg}",
+                f"beta_deg = {mount.cell.beta_deg}",
+                f"gamma_deg = {mount.cell.gamma_deg}",
+            ]
+        lines += [
             f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]",
             f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]",
             f"mount_z = [{mount.mount_z[0]}, {mount.mount_z[1]}, {mount.mount_z[2]}]",
