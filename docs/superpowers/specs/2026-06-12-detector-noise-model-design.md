@@ -87,17 +87,49 @@ Frozen dataclass + pure application function:
 
 ### 3.2 Absolute calibration (`counts_scale` + `exposure_time`)
 
-- `ideal_adu = intensity_sim · counts_scale · exposure_time`
-- `counts_scale` [ADU·s⁻¹ per simulation intensity unit] is the data
-  anchor. Default is derived once during implementation by matching the
-  simulated single-dislocation weak-beam scene (M5 notebook 03 settings)
-  to the measured feature levels in the dislocations dataset
-  (cores ≈ 2000–6000 ADU at 1 s); the derivation run is recorded in
-  `docs/detector-noise-model.md`.
-- `exposure_time` default 1.0 s. Linear knob: doubling it doubles signal
-  ADU above offset and noise follows physically.
-- `reciprocal_space/exposure.py` (HFP transmission MC) stays a standalone
-  cross-check; cited in docs, not wired into the pipeline.
+`ideal_adu = intensity_norm · counts_scale · exposure_time`, in three
+defined steps:
+
+**(a) Sampling-invariant intensity first.** The raw forward image is a sum
+over sample voxels of LUT acceptance × beam z-profile
+(`forward_model.py` bincount accumulation), so raw brightness scales with
+numerical sampling density (`Nsub`, grid resolution) — pure numerics, not
+physics. Before `counts_scale` applies, the image is normalized by the
+sampling density (voxels per unit illuminated sample area) to give
+`intensity_norm`, invariant under `Nsub`/grid changes. Acceptance test:
+the same scene at `Nsub=1` vs `Nsub=2` must agree in absolute level to a
+few % after normalization. Without this, the calibration silently breaks
+whenever someone changes grid settings.
+
+**(b) Data anchor.** `counts_scale` [ADU·s⁻¹ per normalized intensity
+unit] is derived once during implementation: configure a sim scene as
+close as possible to the dislocations dataset (Al (111), 17 keV,
+weak-beam condition, comparable FOV) and match the **integrated signal
+over dislocation features** to the measured frames (1 s), with peak core
+ADU (≈2000–6000) as a secondary sanity check. Integrated-feature matching
+is primary because core peak values are sensitive to PSF/magnification
+mismatch between sim and the 10× experimental optic. Derivation run +
+numbers recorded in `docs/detector-noise-model.md`.
+
+**(c) Physics-first cross-check.** Independent estimate:
+ID03 incident flux (beamline specs) × illuminated-FOV fraction ×
+objective transmission (HFP MC, `reciprocal_space/exposure.py`) ×
+gain 2.14 ADU/photon. Must agree with the data anchor within roughly an
+order of magnitude; disagreement beyond that means a units bug, not a
+calibration tweak. The BLISS files also log `pico3`/`pico4` monitor
+diodes + machine current for relative flux normalization if frames from
+different fills are ever compared. `exposure.py` stays standalone (cited,
+not wired into the pipeline).
+
+- `exposure_time` default 1.0 s. Linear knob: signal ADU above offset
+  scales with t, offset and noise follow the measured t-dependence (§2).
+  SNR consequences then come out automatically — e.g. a 1000-ADU feature
+  at 1 s (SNR ≈ 22) drops to 100 ADU at 0.1 s (SNR ≈ 6.5).
+- Numerical-noise guard: the forward pass is deterministic voxel
+  sampling (no per-ray MC in the image), but the reciprocal-space LUT
+  carries bootstrap MC noise. Calibration docs must state the kernel
+  `Nrays` used, and shipped configs keep it high enough that LUT noise is
+  negligible against the modeled photon noise (production-Nrays rule).
 
 ### 3.3 Config schema (new `[detector]` block)
 
@@ -154,6 +186,8 @@ seed_sensor = true             # sensor map from config seed chain
 - Unit: model statistics (mean/var vs spec at several signal levels and
   exposures), determinism for fixed seed, uint16 clamp, sensor-map
   reproducibility + fixedness across scans, `ideal` passthrough.
+- Calibration invariance: same scene at `Nsub=1` vs `Nsub=2` agrees in
+  absolute ADU to a few % after the §3.2(a) normalization (slow-marked).
 - e2e: forward + identification single/multi/zscan with model on →
   uint16 dataset, floor ≈ offset(t), SNR sanity; labels stay noiseless.
 - Existing suite: test configs asserting ideal physics get explicit
