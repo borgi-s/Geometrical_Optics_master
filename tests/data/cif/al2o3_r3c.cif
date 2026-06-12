@@ -1,0 +1,9 @@
+data_Al2O3
+_cell_length_a    4.7602
+_cell_length_b    4.7602
+_cell_length_c    12.9933
+_cell_angle_alpha 90
+_cell_angle_beta  90
+_cell_angle_gamma 120
+_symmetry_space_group_name_H-M   'R -3 c'
+_space_group_IT_number           167
