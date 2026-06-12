@@ -34,28 +34,78 @@ _DEFAULT_AL_CRYSTAL = CrystalMount(
 )
 
 
-def _crystal_mount_from_toml(data: dict | None) -> CrystalMount:
+def _crystal_mount_from_toml(data: dict | None, base_dir: Path | None = None) -> CrystalMount:
     """Build a CrystalMount from a `[crystal]` TOML block (or None → default Al).
 
-    Optional cell parameters ``b``/``c`` (metres) and ``alpha_deg``/``beta_deg``/
-    ``gamma_deg`` (degrees) extend the mount beyond cubic; constrained values
-    are filled per crystal system (see ``UnitCell.from_lattice``).
+    M4 Stage 4.2: an optional ``cif`` key reads cell parameters + space group
+    from a CIF file (relative paths resolve against ``base_dir``, the config
+    TOML's directory); explicit TOML keys override CIF values per-key. An
+    optional ``space_group`` key works with or without a CIF. ``mount_x/y/z``
+    are always TOML-only (the CIF cannot know the experimental mounting).
     """
     if data is None:
         return _DEFAULT_AL_CRYSTAL
 
+    cif_vals: dict = {}
+    if "cif" in data:
+        from dfxm_geo.crystal.cif import load_cif
+
+        cif_path = Path(str(data["cif"]))
+        if not cif_path.is_absolute() and base_dir is not None:
+            cif_path = base_dir / cif_path
+        cc = load_cif(cif_path)
+        # Always carry lattice, a, space_group from the CIF.  For the constrained
+        # cell parameters (b, c, angles), only carry the ones that are *free*
+        # (independent) for this lattice system.  UnitCell.from_lattice fills the
+        # constrained ones from `a`; passing redundant CIF values here would cause
+        # a spurious mismatch if TOML overrides `a` without also overriding b/c.
+        _lattice_cif = cc.lattice
+        # Free params per lattice (beyond the always-free `a`):
+        #   cubic        — none (b=c=a, all angles 90)
+        #   tetragonal   — c        (b=a, angles 90)
+        #   orthorhombic — b, c     (angles 90)
+        #   hexagonal    — c        (b=a, alpha=beta=90, gamma=120)
+        #   trigonal     — alpha_deg (b=c=a, alpha=beta=gamma=alpha)
+        #   monoclinic   — b, c, beta_deg  (alpha=gamma=90)
+        #   triclinic    — all six
+        _FREE: dict[str, frozenset[str]] = {
+            "cubic": frozenset(),
+            "tetragonal": frozenset({"c"}),
+            "orthorhombic": frozenset({"b", "c"}),
+            "hexagonal": frozenset({"c"}),
+            "trigonal": frozenset({"alpha_deg"}),
+            "monoclinic": frozenset({"b", "c", "beta_deg"}),
+            "triclinic": frozenset({"b", "c", "alpha_deg", "beta_deg", "gamma_deg"}),
+        }
+        _free = _FREE.get(_lattice_cif, frozenset())
+        _cell_keys = {"b", "c", "alpha_deg", "beta_deg", "gamma_deg"}
+        cif_vals = {"lattice": cc.lattice, "a": cc.a, "space_group": cc.space_group}
+        for _k in _cell_keys:
+            if _k in _free:
+                cif_vals[_k] = getattr(cc, _k)
+
     def _opt(key: str) -> float | None:
-        return float(data[key]) if key in data else None
+        if key in data:
+            return float(data[key])
+        val = cif_vals.get(key)
+        return float(val) if val is not None else None
 
     try:
+        lattice = data.get("lattice", cif_vals.get("lattice"))
+        if lattice is None:
+            raise KeyError("lattice")
+        a_val = data.get("a", cif_vals.get("a"))
+        if a_val is None:
+            raise KeyError("a")
         return CrystalMount(
-            lattice=data["lattice"],
-            a=float(data["a"]),
+            lattice=lattice,
+            a=float(a_val),
             b=_opt("b"),
             c=_opt("c"),
             alpha_deg=_opt("alpha_deg"),
             beta_deg=_opt("beta_deg"),
             gamma_deg=_opt("gamma_deg"),
+            space_group=data.get("space_group", cif_vals.get("space_group")),
             mount_x=tuple(int(x) for x in data["mount_x"]),  # type: ignore[arg-type]
             mount_y=tuple(int(x) for x in data["mount_y"]),  # type: ignore[arg-type]
             mount_z=tuple(int(x) for x in data["mount_z"]),  # type: ignore[arg-type]
