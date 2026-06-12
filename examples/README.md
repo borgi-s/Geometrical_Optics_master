@@ -21,7 +21,7 @@ yourself or ask for a copy.
 Citations: [docs/references.md](../docs/references.md). CI executes
 notebooks 01–03 on every push (`.github/workflows/notebooks.yml`).
 
-## Legacy examples
+## In-depth examples
 
 ### `identification_ml_tutorial/` — ML workflow tutorial
 
