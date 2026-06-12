@@ -65,7 +65,7 @@ Role: the DFXM optics and resolution-function theory behind the reciprocal-space
 ```bibtex
 @article{poulsen2017,
   author  = {Poulsen, H. F. and Jakobsen, A. C. and Simons, H. and Ahl, S. R. and Cook, P. K. and Detlefs, C.},
-  title   = {X-ray diffraction microscopy based on refractive optics},
+  title   = {{X}-ray diffraction microscopy based on refractive optics},
   journal = {Journal of Applied Crystallography},
   volume  = {50},
   pages   = {1441--1456},
