@@ -3,8 +3,11 @@
 Pins the 'ceramics planning works' claim: the CIF loads, the mount builds,
 dfxm-find-reflections enumerates only symmetry-allowed reflections, and the
 textbook R-3c extinction conditions hold for every emitted row:
-  - R-centering (hexagonal axes): -h + k + l = 3n
-  - c-glide on (0,0,l): l = 6n
+  - R-centering (hexagonal axes): -h + k + l = 3n  (checked over every row)
+  - c-glide on (0,0,l): l = 6n  (the (0,0,l) family is geometrically
+    inaccessible with this mount, so it is verified via the named-absence
+    check at the bottom — e.g. (0,0,3)/(0,0,9) must not appear — rather
+    than by the per-row loop)
 """
 
 import shutil
@@ -47,6 +50,7 @@ def _rows(out: str) -> list[tuple[int, int, int]]:
 def test_alumina_reflection_table_obeys_textbook_extinctions(
     alumina_config: Path, capsys: pytest.CaptureFixture
 ) -> None:
+    # hkl-max=4 is fast (84 rows) and already covers every textbook named absence.
     rc = cli_main(["--config", str(alumina_config), "--hkl-max", "4"])
     out = capsys.readouterr().out
     assert rc == 0
@@ -55,6 +59,9 @@ def test_alumina_reflection_table_obeys_textbook_extinctions(
     assert len(rows) > 0, "no reachable reflections enumerated for alumina"
     for h, k, l in rows:
         assert (-h + k + l) % 3 == 0, f"R-centering violated by {(h, k, l)}"
+        # Defensive: (0,0,l) is inaccessible with this mount so this never
+        # fires here; the c-glide condition is pinned by the named-absence
+        # check below. Kept so a mount change that exposes 00l is still gated.
         if h == 0 and k == 0:
             assert l % 6 == 0, f"c-glide 000l condition violated by {(0, 0, l)}"
     # Named textbook absences never appear.
