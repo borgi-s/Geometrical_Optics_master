@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from dfxm_geo.crystal.cif import reject_extinct
 from dfxm_geo.crystal.oblique import CrystalMount, compute_omega_eta, find_reflections
 
 # Matches the Phase-A bootstrap tolerance (kernel._validate_eta_against_compute_omega_eta):
@@ -48,6 +49,8 @@ def _resolve_entry(
         raise ValueError(f"[[reflections]] hkl components must be integers, got {raw_hkl!r}.")
     h, k, l = (int(c) for c in raw_hkl)
     hkl: tuple[int, int, int] = (h, k, l)
+
+    reject_extinct(mount.space_group, hkl, "[[reflections]]")
 
     geom = compute_omega_eta(mount, hkl, keV)
     if np.isnan(geom.omega_1) and np.isnan(geom.omega_2):
