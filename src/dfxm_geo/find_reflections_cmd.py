@@ -59,7 +59,7 @@ def cli_main(argv: list[str] | None = None) -> int:
         print(f"error: invalid TOML in {config_path}: {exc}", file=sys.stderr)
         return 1
 
-    mount = _crystal_mount_from_toml(raw.get("crystal"))
+    mount = _crystal_mount_from_toml(raw.get("crystal"), base_dir=config_path.parent)
 
     # Resolve keV: CLI flag > config value > hardcoded fallback (with warning).
     if args.keV is not None:
@@ -82,8 +82,9 @@ def cli_main(argv: list[str] | None = None) -> int:
         kwargs["eta_tol"] = float(np.deg2rad(args.eta_tol_deg))
     geoms = find_reflections(mount, keV, **kwargs)
 
+    sg_note = f"  space_group={mount.space_group}" if mount.space_group else ""
     print(
-        f"# mount: x={mount.mount_x} y={mount.mount_y} z={mount.mount_z}  lattice={mount.lattice}  a={mount.a:g} m  keV={keV:g}"
+        f"# mount: x={mount.mount_x} y={mount.mount_y} z={mount.mount_z}  lattice={mount.lattice}  a={mount.a:g} m  keV={keV:g}{sg_note}"
     )
     print(
         f"{'hkl':>12} {'theta_deg':>10} {'eta1_deg':>10} {'omega1_deg':>11} {'eta2_deg':>10} {'omega2_deg':>11} {'group':>6}"

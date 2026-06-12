@@ -49,6 +49,9 @@ class CrystalMount:
     mount_x: tuple[int, int, int]
     mount_y: tuple[int, int, int]
     mount_z: tuple[int, int, int]
+    # M4 Stage 4.2: optional space group (canonical H-M after __post_init__).
+    # None = no symmetry knowledge; extinction filtering is opt-in.
+    space_group: str | None = None
 
     def __post_init__(self) -> None:
         if self.lattice not in _LATTICE_SYSTEMS:
@@ -105,6 +108,12 @@ class CrystalMount:
                         f"(lattice={self.lattice!r}). Pick Miller indices whose "
                         f"reciprocal vectors B@m are orthogonal."
                     )
+
+        if self.space_group is not None:
+            from dfxm_geo.crystal.cif import check_space_group_lattice
+
+            canonical = check_space_group_lattice(self.space_group, self.lattice)
+            object.__setattr__(self, "space_group", canonical)
 
     @cached_property
     def cell(self) -> UnitCell:
@@ -326,15 +335,25 @@ def find_reflections(
     Returns a list sorted by primary η, then primary θ. When `eta_target` is
     given, only reflections whose η₁ OR η₂ is within `eta_tol` of the target
     are kept. NaN-filled rows (unreachable Laue at this keV) are dropped.
+    When the mount carries a space_group, systematically-absent reflections are
+    skipped (M4 Stage 4.2).
 
     Phase A: implemented and unit-tested. Phase B wires this into config-load
     validation and the dfxm-find-reflections CLI.
     """
+    is_absent = None
+    if mount.space_group is not None:
+        from dfxm_geo.crystal.cif import absence_checker
+
+        is_absent = absence_checker(mount.space_group)
+
     results: list[ReflectionGeometry] = []
     for h in range(-hkl_max, hkl_max + 1):
         for k in range(-hkl_max, hkl_max + 1):
             for l in range(-hkl_max, hkl_max + 1):
                 if h == 0 and k == 0 and l == 0:
+                    continue
+                if is_absent is not None and is_absent((h, k, l)):
                     continue
                 geom = compute_omega_eta(mount, (h, k, l), keV)
                 if np.isnan(geom.omega_1) and np.isnan(geom.omega_2):

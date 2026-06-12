@@ -1,0 +1,7 @@
+data_X
+_cell_length_a    4.0
+_cell_length_b    4.0
+_cell_length_c    4.0
+_cell_angle_alpha 90
+_cell_angle_beta  90
+_cell_angle_gamma 90

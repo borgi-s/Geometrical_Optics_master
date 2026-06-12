@@ -62,6 +62,29 @@ class AxisScanConfig:
 
 _CANONICAL_AXES = ("phi", "chi", "two_dtheta", "z")
 
+# Keys in a [crystal] block that belong to the mount geometry
+# (_crystal_mount_from_toml), NOT to the dislocation-layout schema
+# (CrystalConfig) or the identify sweep schema (IdentificationCrystalConfig).
+# Both CrystalConfig.from_dict and load_identification_config strip these
+# before parsing their own schemas; keep them sharing this one source so the
+# two strip sites can't drift (the identify list silently fell behind once).
+_CRYSTAL_MOUNT_KEYS: frozenset[str] = frozenset(
+    {
+        "lattice",
+        "a",
+        "b",
+        "c",
+        "alpha_deg",
+        "beta_deg",
+        "gamma_deg",
+        "cif",
+        "space_group",
+        "mount_x",
+        "mount_y",
+        "mount_z",
+    }
+)
+
 _AXIS_TO_LABEL = {
     "phi": "rocking",
     "chi": "rolling",
@@ -279,6 +302,13 @@ class CrystalConfig:
         # below; "default" is reached only by omission, not declaration.
         if not data:
             return cls.default()
+        # Strip oblique [geometry] mount/cell keys (cif, space_group, lattice
+        # cell params, mount axes) — these feed _crystal_mount_from_toml, NOT
+        # the dislocation-layout schema here. A [crystal] block carrying only
+        # those keys (no dislocation `mode`) falls through to the default.
+        data = {k: v for k, v in data.items() if k not in _CRYSTAL_MOUNT_KEYS}
+        if not data:
+            return cls.default()
         if "mode" not in data:
             raise ValueError("missing `mode` in [crystal] — required to pick a layout.")
         mode = data["mode"]
@@ -439,10 +469,31 @@ class GeometryConfig:
     mount: CrystalMount | None = None
 
 
+def _maybe_inherit_cif_lattice_a(raw: dict, base_dir: Path | None) -> None:
+    """[crystal] cif + cubic cell + no explicit [reciprocal] lattice_a → inherit a.
+
+    Mutates ``raw`` in place BEFORE ReciprocalConfig.from_dict so the Bragg
+    validity check and the analytic backend see the CIF lattice parameter.
+    Explicit [reciprocal] lattice_a wins (per-key override rule). Non-cubic
+    cells don't inherit — lattice_a is the CUBIC simplified-geometry knob.
+    """
+    crystal_raw = raw.get("crystal") or {}
+    if "cif" not in crystal_raw:
+        return
+    if "lattice_a" in (raw.get("reciprocal") or {}):
+        return
+    from dfxm_geo.reciprocal_space.kernel import _crystal_mount_from_toml
+
+    mount = _crystal_mount_from_toml(crystal_raw, base_dir=base_dir)
+    if mount.cell.is_cubic:
+        raw.setdefault("reciprocal", {})["lattice_a"] = mount.a
+
+
 def _build_geometry_config(
     raw: dict,
     reciprocal: ReciprocalConfig,
     multi_reflection: bool = False,
+    base_dir: Path | None = None,
 ) -> GeometryConfig:
     """Build a GeometryConfig from raw TOML tables (``[geometry]`` + ``[crystal]``).
 
@@ -464,6 +515,7 @@ def _build_geometry_config(
         ValueError: on a malformed ``[geometry]`` block, a missing mount key, or
             an ``eta`` that does not match any computed reflection geometry.
     """
+    from dfxm_geo.crystal.cif import reject_extinct
     from dfxm_geo.reciprocal_space.kernel import (
         _crystal_mount_from_toml,
         _parse_geometry_block,
@@ -473,19 +525,30 @@ def _build_geometry_config(
     mode, eta = _parse_geometry_block(raw.get("geometry"), allow_missing_eta=multi_reflection)
     if mode == "simplified":
         crystal_raw = raw.get("crystal") or {}
-        # A "lattice" key signals an explicit bootstrap-style mount; parse it
-        # (which may surface mount errors simplified mode previously ignored)
-        # so non-cubic cells cannot slip through the cubic-only path.
-        if "lattice" in crystal_raw:
-            mount = _crystal_mount_from_toml(crystal_raw)
+        # A "lattice" or "cif" key signals an explicit bootstrap-style mount;
+        # parse it (which may surface mount errors simplified mode previously
+        # ignored) so non-cubic cells cannot slip through the cubic-only path.
+        if "lattice" in crystal_raw or "cif" in crystal_raw:
+            mount = _crystal_mount_from_toml(crystal_raw, base_dir=base_dir)
             if not mount.cell.is_cubic:
                 raise ValueError(
                     "non-cubic [crystal] cells require [geometry] mode='oblique' "
                     "(simplified mode hardwires the cubic symmetric geometry)."
                 )
+            if not multi_reflection:
+                reject_extinct(mount.space_group, reciprocal.hkl, "[reciprocal] hkl")
+        elif "space_group" in crystal_raw and not multi_reflection:
+            # Bare symmetry knowledge on an otherwise-default mount (no CIF,
+            # no mount keys) still gates the configured reflection.
+            reject_extinct(str(crystal_raw["space_group"]), reciprocal.hkl, "[reciprocal] hkl")
         return GeometryConfig(mode="simplified")
 
-    mount = _crystal_mount_from_toml(raw.get("crystal"))
+    mount = _crystal_mount_from_toml(raw.get("crystal"), base_dir=base_dir)
+
+    # Diagnose a forbidden reflection before the (coarser) non-cubic-unsupported
+    # gate: "systematically absent" is the more specific, actionable error.
+    if not multi_reflection:
+        reject_extinct(mount.space_group, reciprocal.hkl, "[reciprocal] hkl")
 
     if not mount.cell.is_cubic:
         raise ValueError(
@@ -581,13 +644,17 @@ class SimulationConfig:
         """Load a SimulationConfig from a TOML file."""
         with open(path, "rb") as fh:
             raw = tomllib.load(fh)
+        base_dir = Path(path).parent
+        _maybe_inherit_cif_lattice_a(raw, base_dir)
         crystal = CrystalConfig.from_dict(raw.get("crystal"))
         scan = ScanConfig.from_dict(raw.get("scan"))
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
         reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
         multi = ("reflections" in raw) or ("reflections_auto" in raw)
-        geometry = _build_geometry_config(raw, reciprocal, multi_reflection=multi)
+        geometry = _build_geometry_config(
+            raw, reciprocal, multi_reflection=multi, base_dir=base_dir
+        )
         reflections = _parse_reflections_tables(raw, geometry, reciprocal)
         # The analytic backend reads eta off ReciprocalConfig (see
         # forward_model._load_analytic_resolution). The user supplies it in
@@ -752,6 +819,8 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     """
     with open(path, "rb") as fh:
         data = tomllib.load(fh)
+    base_dir = Path(path).parent
+    _maybe_inherit_cif_lattice_a(data, base_dir)
 
     # Sub-project F: 'mode' is now optional in TOML; defaults to 'single'.
     mode = data.get("mode", "single")
@@ -762,7 +831,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     # IdentificationCrystalConfig dislocation-sweep schema. Strip them so an
     # oblique identify config's [crystal] block parses (forward's
     # CrystalConfig.from_dict filters the same keys by picking known fields).
-    for _mount_key in ("lattice", "a", "mount_x", "mount_y", "mount_z"):
+    for _mount_key in _CRYSTAL_MOUNT_KEYS:
         crystal_data.pop(_mount_key, None)
     if "slip_plane_normal" in crystal_data:
         crystal_data = {
@@ -779,7 +848,9 @@ def load_identification_config(path: Path) -> IdentificationConfig:
     zscan = IdentificationZScanConfig(**data["zscan"]) if data.get("zscan") is not None else None
     reciprocal = ReciprocalConfig.from_dict(data.get("reciprocal"))
     multi_refl = ("reflections" in data) or ("reflections_auto" in data)
-    geometry = _build_geometry_config(data, reciprocal, multi_reflection=multi_refl)
+    geometry = _build_geometry_config(
+        data, reciprocal, multi_reflection=multi_refl, base_dir=base_dir
+    )
     reflections = _parse_reflections_tables(data, geometry, reciprocal)
     # Mirror SimulationConfig.from_toml: the analytic backend reads eta off
     # ReciprocalConfig, so surface the validated oblique eta there (single
@@ -894,6 +965,8 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
             lines.append(f"alpha_deg = {mount.cell.alpha_deg}")
             lines.append(f"beta_deg = {mount.cell.beta_deg}")
             lines.append(f"gamma_deg = {mount.cell.gamma_deg}")
+        if mount.space_group is not None:
+            lines.append(f'space_group = "{mount.space_group}"')
         lines.append(f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]")
         lines.append(f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]")
         lines.append(f"mount_z = [{mount.mount_z[0]}, {mount.mount_z[1]}, {mount.mount_z[2]}]")
@@ -1006,6 +1079,8 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
                 f"beta_deg = {mount.cell.beta_deg}",
                 f"gamma_deg = {mount.cell.gamma_deg}",
             ]
+        if mount.space_group is not None:
+            lines += [f'space_group = "{mount.space_group}"']
         lines += [
             f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]",
             f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]",

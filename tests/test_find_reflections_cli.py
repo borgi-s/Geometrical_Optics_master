@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 import pytest
 
 from dfxm_geo.find_reflections_cmd import cli_main
@@ -138,3 +141,24 @@ def test_hexagonal_config_enumerates(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert any(line.strip().startswith("2 -1 0") for line in out.splitlines())
+
+
+def test_cif_config_relative_path_and_sg_header(tmp_path, capsys):
+    pytest.importorskip("gemmi")
+    data = Path(__file__).parent / "data" / "cif"
+    shutil.copy(data / "al_fm3m.cif", tmp_path / "al.cif")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[crystal]\ncif = "al.cif"\n'
+        "mount_x = [1, 0, 0]\nmount_y = [0, 1, 0]\nmount_z = [0, 0, 1]\n"
+        "[reciprocal]\nkeV = 17.0\n",
+        encoding="utf-8",
+    )
+    rc = cli_main(["--config", str(cfg), "--hkl-max", "2"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "space_group=F m -3 m" in out
+    # Forbidden FCC reflection (mixed-parity 100) must be filtered out.
+    # Formatting-independent check: no data row whose first three columns are 1 0 0.
+    data_rows = [ln.split() for ln in out.splitlines() if ln.strip() and not ln.startswith("#")]
+    assert ["1", "0", "0"] not in [row[:3] for row in data_rows if row[0] != "hkl"]

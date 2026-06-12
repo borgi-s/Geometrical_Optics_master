@@ -33,29 +33,78 @@ _DEFAULT_AL_CRYSTAL = CrystalMount(
     mount_z=(0, 0, 1),
 )
 
+# Free (independent) cell parameters per lattice system, beyond the always-free
+# `a`. UnitCell.from_lattice fills the constrained ones from `a`; carrying a
+# redundant CIF value for a constrained param would spuriously conflict when
+# TOML overrides `a` without also overriding b/c. Used by _crystal_mount_from_toml.
+#   cubic        — none (b=c=a, all angles 90)
+#   tetragonal   — c        (b=a, angles 90)
+#   orthorhombic — b, c     (angles 90)
+#   hexagonal    — c        (b=a, alpha=beta=90, gamma=120)
+#   trigonal     — alpha_deg (b=c=a, alpha=beta=gamma=alpha)
+#   monoclinic   — b, c, beta_deg  (alpha=gamma=90)
+#   triclinic    — all six
+_FREE_CELL_PARAMS: dict[str, frozenset[str]] = {
+    "cubic": frozenset(),
+    "tetragonal": frozenset({"c"}),
+    "orthorhombic": frozenset({"b", "c"}),
+    "hexagonal": frozenset({"c"}),
+    "trigonal": frozenset({"alpha_deg"}),
+    "monoclinic": frozenset({"b", "c", "beta_deg"}),
+    "triclinic": frozenset({"b", "c", "alpha_deg", "beta_deg", "gamma_deg"}),
+}
 
-def _crystal_mount_from_toml(data: dict | None) -> CrystalMount:
+
+def _crystal_mount_from_toml(data: dict | None, base_dir: Path | None = None) -> CrystalMount:
     """Build a CrystalMount from a `[crystal]` TOML block (or None → default Al).
 
-    Optional cell parameters ``b``/``c`` (metres) and ``alpha_deg``/``beta_deg``/
-    ``gamma_deg`` (degrees) extend the mount beyond cubic; constrained values
-    are filled per crystal system (see ``UnitCell.from_lattice``).
+    M4 Stage 4.2: an optional ``cif`` key reads cell parameters + space group
+    from a CIF file (relative paths resolve against ``base_dir``, the config
+    TOML's directory); explicit TOML keys override CIF values per-key. An
+    optional ``space_group`` key works with or without a CIF. ``mount_x/y/z``
+    are always TOML-only (the CIF cannot know the experimental mounting).
     """
     if data is None:
         return _DEFAULT_AL_CRYSTAL
 
+    cif_vals: dict = {}
+    if "cif" in data:
+        from dfxm_geo.crystal.cif import load_cif
+
+        cif_path = Path(str(data["cif"]))
+        if not cif_path.is_absolute() and base_dir is not None:
+            cif_path = base_dir / cif_path
+        cc = load_cif(cif_path)
+        # Always carry lattice, a, space_group from the CIF; carry only the
+        # *free* cell parameters for this lattice system (see _FREE_CELL_PARAMS
+        # for why constrained ones are dropped).
+        _free = _FREE_CELL_PARAMS.get(cc.lattice, frozenset())
+        cif_vals = {"lattice": cc.lattice, "a": cc.a, "space_group": cc.space_group}
+        for _k in _free:
+            cif_vals[_k] = getattr(cc, _k)
+
     def _opt(key: str) -> float | None:
-        return float(data[key]) if key in data else None
+        if key in data:
+            return float(data[key])
+        val = cif_vals.get(key)
+        return float(val) if val is not None else None
 
     try:
+        lattice = data.get("lattice", cif_vals.get("lattice"))
+        if lattice is None:
+            raise KeyError("lattice")
+        a_val = data.get("a", cif_vals.get("a"))
+        if a_val is None:
+            raise KeyError("a")
         return CrystalMount(
-            lattice=data["lattice"],
-            a=float(data["a"]),
+            lattice=lattice,
+            a=float(a_val),
             b=_opt("b"),
             c=_opt("c"),
             alpha_deg=_opt("alpha_deg"),
             beta_deg=_opt("beta_deg"),
             gamma_deg=_opt("gamma_deg"),
+            space_group=data.get("space_group", cif_vals.get("space_group")),
             mount_x=tuple(int(x) for x in data["mount_x"]),  # type: ignore[arg-type]
             mount_y=tuple(int(x) for x in data["mount_y"]),  # type: ignore[arg-type]
             mount_z=tuple(int(x) for x in data["mount_z"]),  # type: ignore[arg-type]
@@ -754,10 +803,11 @@ def cli_main(argv: list[str] | None = None) -> int:
     # forward layout) works, while still requiring an explicit [geometry] mode
     # when a genuine mount is supplied (the spec-§6 explicitness guard, now
     # correctly scoped so it no longer over-fires on a forward layout).
-    _MOUNT_KEYS = ("lattice", "a", "mount_x", "mount_y", "mount_z")
+    _MOUNT_KEYS = ("lattice", "a", "mount_x", "mount_y", "mount_z", "cif")
     # The five required mount fields suffice for detection; optional cell
     # params (b/c/alpha_deg/...) are deliberately excluded — generic keys
     # like `b` would misfire on forward-layout [crystal] blocks.
+    # `cif` is also a mount-block indicator: a CIF path implies lattice data.
     is_mount_block = mount_block is not None and any(k in mount_block for k in _MOUNT_KEYS)
     if is_mount_block and geometry_block is None:
         print(
@@ -774,7 +824,9 @@ def cli_main(argv: list[str] | None = None) -> int:
         mode, config_eta = _parse_geometry_block(geometry_block, allow_missing_eta=multi)
         # Ignore a forward-layout [crystal] (use the default Al mount); only a
         # genuine mount block feeds the lattice parameter / orientation.
-        mount = _crystal_mount_from_toml(mount_block if is_mount_block else None)
+        mount = _crystal_mount_from_toml(
+            mount_block if is_mount_block else None, base_dir=args.config.parent
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -807,6 +859,13 @@ def cli_main(argv: list[str] | None = None) -> int:
         try:
             hkl_tuple: tuple[int, int, int] = tuple(raw_hkl)
             theta = _validate_reflection(hkl_tuple, float(raw_keV), cell)
+            from dfxm_geo.crystal.cif import reject_extinct
+
+            sg = mount.space_group
+            if sg is None and mount_block:
+                raw_sg = mount_block.get("space_group")
+                sg = str(raw_sg) if raw_sg is not None else None
+            reject_extinct(sg, hkl_tuple, "[reciprocal] hkl")
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1

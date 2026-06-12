@@ -48,15 +48,25 @@ Top row: the (negated) ϕ and χ center-of-mass (COM) maps extracted from the ro
 ## Stack
 
 - **Language:** Python 3.11+
-- **Key libraries:** NumPy, SciPy, h5py, matplotlib
-- **HPC:** Batch templates for LSF (DTU Sophia) and SLURM (ESRF clusters); HDF5 / BLISS-schema outputs
-- **Testing:** pytest (498 tests) with reference golden datasets
+- **Key libraries:** NumPy, SciPy, numba, h5py, matplotlib; optional `gemmi` for CIF input
+- **Geometry:** symmetric and oblique-angle diffraction; single- and multi-reflection runs; any of the seven crystal systems via explicit cell parameters or a CIF file
+- **HPC:** Batch templates for LSF (DTU Sophia) and SLURM (ESRF clusters); in-node config fan-out for large image batches
+- **I/O:** HDF5 / BLISS-schema outputs (master + per-scan layout) readable by `silx` and `darfix`
+- **Testing:** pytest (900+ tests) with reference golden datasets; mypy-clean
 - **License:** MIT
 
 ## Install
 
 ```bash
 pip install dfxm-geo
+# or, via conda-forge:
+conda install -c conda-forge dfxm-geo
+```
+
+CIF crystal-structure input is optional and pulls in `gemmi`:
+
+```bash
+pip install "dfxm-geo[cif]"      # or: conda install -c conda-forge gemmi
 ```
 
 or from source:
@@ -89,9 +99,14 @@ dfxm-forward    --config configs/default.toml   --output ./run_output
 
 # dislocation identification (image-to-library matching):
 dfxm-identify   --config configs/identification_single.toml --output ./id_output
+
+# enumerate the reflections reachable for a crystal mount + beam energy:
+dfxm-find-reflections --config configs/default.toml
 ```
 
 Every block in `configs/default.toml` shows the value the pipeline would use if the block were omitted — edit any block to override, delete to fall back to the default. For larger parameter sweeps, see `lsf/` and `slurm/` for ready-to-submit batch scripts. Output is written to a BLISS-schema HDF5 file (master + per-scan layout) that `silx` and `darfix` can consume directly.
+
+Beyond the default symmetric Al 111 geometry, a `[geometry] mode = "oblique"` block tilts the diffraction vector off the symmetric condition, and `[[reflections]]` runs several reflections of the same crystal in one pass. The crystal cell is set either with explicit parameters (`[crystal] lattice`, `a`, `b`, `c`, the cell angles) or by pointing at a structure file — `[crystal] cif = "path/to/file.cif"` populates the cell and space group, and systematically-absent reflections are filtered out automatically. `dfxm-find-reflections` lists the accessible `(θ, η, ω)` groups for any mount so you can pick a reflection before bootstrapping its kernel.
 
 ## Cite
 
@@ -109,4 +124,6 @@ Developed during PhD research at DTU Physics in collaboration with ESRF (Europea
 
 ## Roadmap
 
-Released: v2.0.0 (2026-05-23) — empty-TOML defaults, `WallCrystalConfig` defaults stripped (breaking), BLISS-schema HDF5 output, identification → HDF5. Next: Zenodo deposit of reference datasets; expanded multi-reflection support beyond Al; darling/darfix interop polish (see follow-up issues).
+Latest release: **v2.5.1** (2026-06) — identification throughput work (persistent worker pool, fused numba strain engine, config fan-out) reaching ≥5× on cluster nodes. Earlier milestones added oblique-angle diffraction geometry (v2.1–v2.3), the closed-form analytic resolution backend, and multi-reflection runs.
+
+In development for **v3.0.0** — general crystal-cell geometry (all seven systems) and CIF crystal-structure input with space-group extinction rules, broadening the model beyond cubic FCC toward ceramics and other lattices. Also tracked: slip-system registries beyond FCC, Zenodo deposit of reference datasets, and darling/darfix interop polish (see follow-up issues).
