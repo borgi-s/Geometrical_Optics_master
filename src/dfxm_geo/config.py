@@ -963,6 +963,8 @@ def _dataclass_to_toml_str(config: SimulationConfig) -> str:
             lines.append(f"alpha_deg = {mount.cell.alpha_deg}")
             lines.append(f"beta_deg = {mount.cell.beta_deg}")
             lines.append(f"gamma_deg = {mount.cell.gamma_deg}")
+        if mount.space_group is not None:
+            lines.append(f'space_group = "{mount.space_group}"')
         lines.append(f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]")
         lines.append(f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]")
         lines.append(f"mount_z = [{mount.mount_z[0]}, {mount.mount_z[1]}, {mount.mount_z[2]}]")
@@ -1075,6 +1077,8 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
                 f"beta_deg = {mount.cell.beta_deg}",
                 f"gamma_deg = {mount.cell.gamma_deg}",
             ]
+        if mount.space_group is not None:
+            lines += [f'space_group = "{mount.space_group}"']
         lines += [
             f"mount_x = [{mount.mount_x[0]}, {mount.mount_x[1]}, {mount.mount_x[2]}]",
             f"mount_y = [{mount.mount_y[0]}, {mount.mount_y[1]}, {mount.mount_y[2]}]",
