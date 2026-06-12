@@ -68,7 +68,7 @@ Conventions (follow `examples/identification_ml_tutorial/`):
 ## 4. References page
 
 `docs/references.md`: full BibTeX + one-line role for each of —
-Borgi 2024 (IUCrJ, forward model), Borgi 2025 (identification),
+Borgi 2024 (J. Appl. Cryst., forward model), Borgi 2025 (identification),
 Poulsen 2021 (original MATLAB GO model), Poulsen 2017 (DFXM optics),
 Hirth & Lothe (dislocation displacement fields),
 Carlsen et al. 2022 (arXiv:2201.07549, wave-optics model + condenser-aperture provenance)

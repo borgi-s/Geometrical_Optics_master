@@ -24,7 +24,7 @@ Role: the dislocation-contrast forward model this package implements (two-stage 
 
 ### <a id="borgi-2025"></a>Borgi 2025 — identification
 
-Role: the identification approach notebook 05 demonstrates.
+Role: the identification approach notebook 05 demonstrates; the g·b invisibility physics appears in notebook 04.
 
 ```bibtex
 @article{borgi2025,
@@ -98,13 +98,16 @@ Role: the dislocation displacement fields used by the direct-space model.
 Role: wave-optics DFXM model; provenance of the condenser-aperture clip (±140 µrad zeta\_v) both resolution backends apply.
 
 ```bibtex
-@misc{carlsen2022,
-  author        = {Carlsen, M. and Detlefs, C. and Yildirim, C. and R{\ae}der, T. and Simons, H.},
-  title         = {Simulating dark-field x-ray microscopy images with wave front propagation techniques},
-  year          = {2022},
-  eprint        = {2201.07549},
+@article{carlsen2022,
+  author  = {Carlsen, M. and Detlefs, C. and Yildirim, C. and R{\ae}der, T. and Simons, H.},
+  title   = {Simulating dark-field {X}-ray microscopy images with wave front propagation techniques},
+  journal = {Acta Crystallographica Section A},
+  volume  = {78},
+  pages   = {482--490},
+  year    = {2022},
+  doi     = {10.1107/S2053273322007379},
+  eprint  = {2201.07549},
   archivePrefix = {arXiv},
-  doi           = {10.48550/arXiv.2201.07549},
 }
 ```
 
