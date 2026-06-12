@@ -803,10 +803,11 @@ def cli_main(argv: list[str] | None = None) -> int:
     # forward layout) works, while still requiring an explicit [geometry] mode
     # when a genuine mount is supplied (the spec-§6 explicitness guard, now
     # correctly scoped so it no longer over-fires on a forward layout).
-    _MOUNT_KEYS = ("lattice", "a", "mount_x", "mount_y", "mount_z")
+    _MOUNT_KEYS = ("lattice", "a", "mount_x", "mount_y", "mount_z", "cif")
     # The five required mount fields suffice for detection; optional cell
     # params (b/c/alpha_deg/...) are deliberately excluded — generic keys
     # like `b` would misfire on forward-layout [crystal] blocks.
+    # `cif` is also a mount-block indicator: a CIF path implies lattice data.
     is_mount_block = mount_block is not None and any(k in mount_block for k in _MOUNT_KEYS)
     if is_mount_block and geometry_block is None:
         print(
@@ -823,7 +824,9 @@ def cli_main(argv: list[str] | None = None) -> int:
         mode, config_eta = _parse_geometry_block(geometry_block, allow_missing_eta=multi)
         # Ignore a forward-layout [crystal] (use the default Al mount); only a
         # genuine mount block feeds the lattice parameter / orientation.
-        mount = _crystal_mount_from_toml(mount_block if is_mount_block else None)
+        mount = _crystal_mount_from_toml(
+            mount_block if is_mount_block else None, base_dir=args.config.parent
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -856,6 +859,13 @@ def cli_main(argv: list[str] | None = None) -> int:
         try:
             hkl_tuple: tuple[int, int, int] = tuple(raw_hkl)
             theta = _validate_reflection(hkl_tuple, float(raw_keV), cell)
+            from dfxm_geo.crystal.cif import reject_extinct
+
+            sg = mount.space_group
+            if sg is None and mount_block:
+                raw_sg = mount_block.get("space_group")
+                sg = str(raw_sg) if raw_sg is not None else None
+            reject_extinct(sg, hkl_tuple, "[reciprocal] hkl")
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
