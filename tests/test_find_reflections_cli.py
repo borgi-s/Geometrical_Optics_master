@@ -138,3 +138,24 @@ def test_hexagonal_config_enumerates(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert any(line.strip().startswith("2 -1 0") for line in out.splitlines())
+
+
+def test_cif_config_relative_path_and_sg_header(tmp_path, capsys):
+    import shutil
+    from pathlib import Path as _P
+
+    pytest.importorskip("gemmi")
+    data = _P(__file__).parent / "data" / "cif"
+    shutil.copy(data / "al_fm3m.cif", tmp_path / "al.cif")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[crystal]\ncif = "al.cif"\n'
+        "mount_x = [1, 0, 0]\nmount_y = [0, 1, 0]\nmount_z = [0, 0, 1]\n"
+        "[reciprocal]\nkeV = 17.0\n",
+        encoding="utf-8",
+    )
+    rc = cli_main(["--config", str(cfg), "--hkl-max", "2"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "space_group=F m -3 m" in out
+    assert " 1 0 0 " not in out  # forbidden FCC reflection filtered
