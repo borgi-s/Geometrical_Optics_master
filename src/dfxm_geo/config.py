@@ -545,6 +545,11 @@ def _build_geometry_config(
 
     mount = _crystal_mount_from_toml(raw.get("crystal"), base_dir=base_dir)
 
+    # Diagnose a forbidden reflection before the (coarser) non-cubic-unsupported
+    # gate: "systematically absent" is the more specific, actionable error.
+    if not multi_reflection:
+        reject_extinct(mount.space_group, reciprocal.hkl, "[reciprocal] hkl")
+
     if not mount.cell.is_cubic:
         raise ValueError(
             "non-cubic cells are not yet supported in the forward/identify "
@@ -552,9 +557,6 @@ def _build_geometry_config(
             "Stage 4.1 supports non-cubic lattices in dfxm-bootstrap and "
             "dfxm-find-reflections."
         )
-
-    if not multi_reflection:
-        reject_extinct(mount.space_group, reciprocal.hkl, "[reciprocal] hkl")
 
     if multi_reflection:
         # Per-entry angles resolved by _parse_reflections_tables; return a
