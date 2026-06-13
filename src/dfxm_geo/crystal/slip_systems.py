@@ -18,7 +18,7 @@ from __future__ import annotations
 import itertools
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
 
@@ -61,7 +61,7 @@ class SlipFamily:
     plane_family: tuple[int, ...]  # 3-index (cubic) or 4-index (hcp) representative
     burgers_family: tuple[int, ...]
     literal: bool = False  # when True: yield exactly this (b, n) pair, no symmetry expansion
-    enumerator: str = "cubic"  # "cubic" (sign+perm) | "hex" (Miller–Bravais)
+    enumerator: Literal["cubic", "hex"] = "cubic"  # "cubic" (sign+perm) | "hex" (Miller–Bravais)
 
 
 @dataclass(frozen=True)
@@ -173,6 +173,7 @@ def _variants_hex_4(rep4: tuple[int, int, int, int]) -> set[tuple[int, int, int,
       * an independent sign flip of the 4th index (l/w) — the σ_h mirror,
       * an overall sign flip — inversion.
     |S3| · 2 · 2 = 24 = |6/mmm|.  (Permuting the triple keeps t = -(u+v) valid.)
+    Permuting a valid triple always yields another valid triple — the constraint c = -(a+b) is preserved because the three elements always sum to zero.
     """
     a, b, c, d = rep4
     out: set[tuple[int, int, int, int]] = set()

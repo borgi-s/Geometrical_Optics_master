@@ -56,16 +56,18 @@ def test_hcp_every_system_is_glide():
 
 
 def test_hcp_basal_systems_are_the_three_a_axes_in_0001():
-    basal = [s for s in slip_systems("hcp", families=["{0001}<11-20>"]) if True]
+    basal = slip_systems("hcp", families=["{0001}<11-20>"])
     assert len(basal) == 3
     assert all(s.n == (0, 0, 1) for s in basal)
     # The three basal <a> directions (in reduced 3-index) are [1,0,0], [0,1,0], [-1,-1,0].
     # The first two are permutations of [1,0,0]-type; the third is [-1,-1,0]-type.
     # All are in-plane (W=0) — check that every Burgers has zero z-component.
     assert all(s.b[2] == 0 for s in basal), "all basal <a> Burgers must lie in the ab-plane"
-    # The set of Burgers vectors (up to sign) must cover the three a-axes.
-    bset = {tuple(abs(c) for c in s.b) for s in basal}
-    assert (1, 0, 0) in bset or (0, 1, 0) in bset  # at least one [1,0,0]-type
+    # The set of canonical Burgers vectors must exactly pin the three a-axes.
+    from dfxm_geo.crystal.slip_systems import _canon
+
+    canon_set = {_canon(s.b) for s in basal}
+    assert canon_set == {(1, 0, 0), (0, 1, 0), (1, 1, 0)}, f"got {sorted(canon_set)}"
 
 
 def test_hcp_plane_normals_distinct_counts():
