@@ -306,3 +306,5 @@ def test_bcc_via_fe_cif(tmp_path: Path) -> None:
         attrs = dict(f["/1.1"].attrs)
     assert attrs["structure_type"] == "bcc"
     assert np.isclose(float(attrs["burgers_magnitude_um"]), _EXPECTED_B_UM, rtol=1e-4)
+    assert "space_group" in attrs
+    assert attrs["space_group"]  # non-empty

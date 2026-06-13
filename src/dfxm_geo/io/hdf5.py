@@ -630,6 +630,8 @@ def structure_provenance_attrs(mount: CrystalMount) -> dict[str, Any]:
         attrs["material"] = mount.material
     if mount.slip_families is not None:
         attrs["slip_families"] = list(mount.slip_families)
+    if mount.space_group is not None:
+        attrs["space_group"] = mount.space_group
     return attrs
 
 
