@@ -24,7 +24,7 @@ from numba import njit
 from dfxm_geo.constants import BURGERS_VECTOR
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
-from dfxm_geo.crystal.slip_systems import burgers_magnitude, slip_systems
+from dfxm_geo.crystal.slip_systems import SlipSystem, burgers_magnitude, slip_systems
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
 if TYPE_CHECKING:
@@ -269,6 +269,9 @@ def Find_Hg(
     # EMPTY so the v2.x filename is byte-identical and existing caches/goldens
     # still hit. A non-FCC wall (different |b|) gets a distinct cache, so it
     # can never collide with the FCC cache.
+    # Identity comparison is exact ONLY because _resolve_structure_systems_b returns
+    # the BURGERS_VECTOR object unchanged for FCC. If FCC ever switches to a
+    # cell-derived |b|, revisit this (the existing FCC cache filename would be missed).
     b_suffix = "" if b == BURGERS_VECTOR else f"_b{round(b * 1e7)}"
     Fg_path = str(
         Fg_dir
@@ -1096,7 +1099,7 @@ def _ud_matrix_from_bnt(
 
 def _resolve_structure_systems_b(
     mount: "CrystalMount | None",
-) -> tuple[str, list, float]:
+) -> tuple[str, list[SlipSystem], float]:
     """Resolve (structure, slip_systems, |b| in µm) for the population builder.
 
     M4 Stage 4.3a (Task 8): the dislocation slip systems and Burgers magnitude
@@ -1150,8 +1153,9 @@ def build_dislocation_population(
     ``resolved_structure_type`` / ``slip_families`` / ``cell`` drive the slip
     systems and Burgers magnitude. ``None`` (the default, used by the simplified
     geometry FCC path) resolves to ``"fcc"`` + ``BURGERS_VECTOR`` — byte-identical
-    to v2.x. The centered mode is unaffected (it carries its own explicit
-    (b, n, t) and keeps ``BURGERS_VECTOR``).
+    to v2.x. All modes (centered / wall / random_dislocations) receive the
+    structure-resolved ``b_um`` so a non-FCC mount correctly propagates |b|
+    into the Hg kernels.
     """
     structure, systems, b_um = _resolve_structure_systems_b(mount)
 
@@ -1160,9 +1164,12 @@ def build_dislocation_population(
         assert c is not None  # __post_init__ guarantees
         positions = np.zeros((1, 3), dtype=np.float64)
         Ud = _ud_matrix_from_bnt(c.b, c.n, c.t)[np.newaxis, :, :]  # (1, 3, 3)
-        # Centered carries an explicit (b, n, t) only — keep the historical
-        # |b| = BURGERS_VECTOR (the centered config has no structure/cell info).
-        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None)
+        # Centered carries an explicit (b, n, t) only; |b| comes from the
+        # structure-resolved b_um (same as wall/random). For FCC (or mount=None)
+        # this is BURGERS_VECTOR — byte-identical to v2.x. For non-FCC mounts
+        # (e.g. BCC) it is the cell-derived magnitude so the Hg kernel uses
+        # the correct |b|.
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None, b_um=b_um)
 
     if crystal.mode == "wall":
         w = crystal.wall

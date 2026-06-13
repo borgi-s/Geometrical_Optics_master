@@ -36,8 +36,8 @@ def load_or_generate_Hg(
     pre-port behaviour bit-for-bit; with `S != identity`, the strain field is
     computed in a remounted-sample frame.
 
-    ``b`` is the Burgers magnitude (Âµm); default ``BURGERS_VECTOR`` (FCC, the
-    v2.x value â€” byte-identical). Non-FCC walls pass the cell-derived |b|
+    ``b`` is the Burgers magnitude (µm); default ``BURGERS_VECTOR`` (FCC, the
+    v2.x value — byte-identical). Non-FCC walls pass the cell-derived |b|
     (M4 Stage 4.3a). ``b`` is forwarded to ``Fd_find`` where it linearly
     scales the displacement gradient (physics). It does NOT enter the cache
     filename, so a non-default ``b`` must be paired with a distinct

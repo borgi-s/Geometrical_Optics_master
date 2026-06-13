@@ -133,6 +133,8 @@ def _enumerate_family(fam: SlipFamily) -> list[SlipSystem]:
         b = fam.burgers_family
         t = cast("tuple[int, int, int]", tuple(int(x) for x in np.cross(n, b)))
         return [SlipSystem(b=b, n=n, t=t, family=fam.name)]
+    # Match the canonical {111}<110> rep (name + plane + burgers) so a custom
+    # family reusing the name can't accidentally hit the ordered FCC table.
     if (
         fam.name == "{111}<110>"
         and fam.plane_family == (1, 1, 1)

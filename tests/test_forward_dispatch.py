@@ -103,6 +103,40 @@ class TestBuildDislocationPopulationCentered:
         # And the result is a proper rotation (det=+1).
         np.testing.assert_allclose(np.linalg.det(pop.Ud[0]), 1.0, atol=1e-12)
 
+    def test_fcc_centered_no_mount_uses_BURGERS_VECTOR(self) -> None:
+        """I-2: FCC centered (mount=None) must carry BURGERS_VECTOR (byte-identical to v2.x)."""
+        from dfxm_geo.constants import BURGERS_VECTOR
+
+        crystal = CrystalConfig(
+            mode="centered",
+            centered=CenteredCrystalConfig(b=(1, -1, 0), n=(1, 1, 1), t=(1, 1, -2)),
+        )
+        pop = build_dislocation_population(crystal, fov_lateral_um=20.4, rng=None, mount=None)
+        assert pop.b_um == BURGERS_VECTOR
+
+    def test_bcc_centered_mount_uses_cell_derived_b_um(self) -> None:
+        """I-2: BCC centered (with BCC mount) must carry the cell-derived |b|,
+        NOT the historical FCC BURGERS_VECTOR constant."""
+        from dfxm_geo.constants import BURGERS_VECTOR
+        from dfxm_geo.crystal.oblique import CrystalMount
+        from dfxm_geo.crystal.slip_systems import burgers_magnitude, slip_systems
+
+        # Fe BCC, a = 2.8665 Å
+        bcc_mount = CrystalMount(lattice="cubic", a=2.8665e-10, structure_type="bcc")
+        # BCC {110}<111>: b=(1,-1,1), n=(1,1,0), b·n=0 check: 1+(-1)+0=0 ✓
+        # t = n x b = (1,1,0) x (1,-1,1) = (1*1-0*(-1), 0*1-1*1, 1*(-1)-1*1) = (1,-1,-2)
+        crystal = CrystalConfig(
+            mode="centered",
+            centered=CenteredCrystalConfig(b=(1, -1, 1), n=(1, 1, 0), t=(1, -1, -2)),
+        )
+        pop = build_dislocation_population(crystal, fov_lateral_um=20.4, rng=None, mount=bcc_mount)
+        # Must differ from the FCC constant
+        assert pop.b_um != BURGERS_VECTOR
+        # Must match the cell-derived magnitude for the BCC {110}<111> family
+        systems_bcc = slip_systems("bcc")
+        expected = burgers_magnitude("bcc", systems_bcc[0].family, bcc_mount.cell)
+        assert pop.b_um == pytest.approx(expected)
+
 
 class TestBuildDislocationPopulationWall:
     def test_returns_ndis_dislocations(self) -> None:
