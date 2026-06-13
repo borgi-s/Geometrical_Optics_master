@@ -43,11 +43,13 @@ eps_rms     = 6.0e-5
 beamstop    = false
 aperture    = false            # paper Fig 3B uses no beamstop / no aperture
 
-# NOTE: [detector] is the physical DETECTOR. dfxm's object-plane pixel =
+# NOTE: physical DETECTOR GEOMETRY. dfxm's object-plane pixel =
 # psize / magnification(15.1) ~= 50 nm ~= the module default (40 nm). The
 # pipeline currently uses module-default detector geometry; this block is not
 # yet consumed (deferred: re-derive the ray grid from psize/Npixels at runtime).
-[detector]
+# Renamed from [detector] -> [detector_geometry] because [detector] now denotes
+# the noise-model block (DetectorConfig); this geometry table stays unread.
+[detector_geometry]
 Npixels = 272
 psize   = 0.75e-6
 psf_kernel_size = 9

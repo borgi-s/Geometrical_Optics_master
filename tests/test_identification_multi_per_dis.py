@@ -17,10 +17,10 @@ import pytest
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     AxisScanConfig,
+    DetectorConfig,
     IdentificationConfig,
     IdentificationCrystalConfig,
     IdentificationMonteCarloConfig,
-    IdentificationNoiseConfig,
     IOConfig,
     ReciprocalConfig,
     ScanConfig,
@@ -42,7 +42,7 @@ def test_render_per_dislocation_writes_three_files(tmp_path: Path) -> None:
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
         scan=ScanConfig(phi=AxisScanConfig(value=1e-4)),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         multi=IdentificationMonteCarloConfig(
             n_samples=2, pos_std_um=5.0, render_per_dislocation=True
@@ -101,7 +101,7 @@ def test_per_dis_renders_are_positioned(tmp_path: Path, monkeypatch) -> None:
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
         scan=ScanConfig(phi=AxisScanConfig(value=1e-4)),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         multi=IdentificationMonteCarloConfig(
             n_samples=1, pos_std_um=5.0, render_per_dislocation=True
@@ -131,7 +131,7 @@ def test_per_dis_files_are_noiseless(tmp_path: Path) -> None:
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
         scan=ScanConfig(phi=AxisScanConfig(value=1e-4)),
-        noise=IdentificationNoiseConfig(poisson_noise=True, rng_seed=0),
+        detector=DetectorConfig(rng_seed=0),
         io=IOConfig(),
         multi=IdentificationMonteCarloConfig(
             n_samples=1, pos_std_um=5.0, render_per_dislocation=True

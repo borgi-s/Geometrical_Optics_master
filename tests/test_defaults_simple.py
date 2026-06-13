@@ -105,7 +105,7 @@ class TestIdentificationConfigDefaults:
         assert cfg.mode == "single"
         assert cfg.crystal.slip_plane_normal == (1, 1, 1)
         assert cfg.scan.derived_mode_name() == "single"
-        assert cfg.noise.poisson_noise is True
+        assert cfg.detector.model == "pco_edge_4.2_id03"
         assert cfg.reciprocal is not None
         assert cfg.reciprocal.hkl == (-1, 1, -1)
         # multi/zscan blocks stay None outside their modes

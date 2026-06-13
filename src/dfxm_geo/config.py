@@ -26,6 +26,7 @@ from dfxm_geo.crystal.reflections import (
     resolve_reflections_auto as _resolve_reflections_auto,
 )
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
+from dfxm_geo.detector import resolve_model
 
 
 @dataclass
@@ -625,6 +626,31 @@ def _parse_reflections_tables(
     )
 
 
+@dataclass(frozen=True, kw_only=True)
+class DetectorConfig:
+    """[detector] block: realistic detector model + absolute calibration.
+
+    Replaces the pre-v3 [noise] block. ``rng_seed`` is the run's stochastic
+    seed: identification parameter draws use spawn child [0], detector noise
+    child [1], the synthetic sensor map child [2] (SeedSequence children are
+    stable under spawn-count growth, so [0]/[1] are bit-identical to the old
+    layout when seeds match). ``counts_scale`` is the data anchor in ADU/s
+    per normalized intensity unit (docs/detector-noise-model.md).
+    """
+
+    model: str = "pco_edge_4.2_id03"
+    exposure_time: float = 1.0
+    counts_scale: float = 1.0e4  # provisional anchor; data-anchored derivation NOT yet pinned (fails per-pixel sanity due to optic/pixel-pitch mismatch) — see docs/detector-noise-model.md and docs/calibration/derive_counts_scale.py
+    rng_seed: int = 0
+
+    def __post_init__(self) -> None:
+        resolve_model(self.model)  # raises ValueError on unknown names
+        if self.exposure_time <= 0:
+            raise ValueError(f"exposure_time must be > 0, got {self.exposure_time}")
+        if self.counts_scale <= 0:
+            raise ValueError(f"counts_scale must be > 0, got {self.counts_scale}")
+
+
 @dataclass
 class SimulationConfig:
     # Sub-project F: crystal cascades to canonical-centered default (was: required).
@@ -638,6 +664,8 @@ class SimulationConfig:
     geometry: GeometryConfig = field(default_factory=GeometryConfig)
     # v2.6.0 (M3): resolved multi-reflection runs; empty = single-reflection config.
     reflections: list[_ReflectionRun] = field(default_factory=list)
+    # v3 (detector-noise-model): realistic detector model + calibration.
+    detector: DetectorConfig = field(default_factory=DetectorConfig)
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -648,6 +676,13 @@ class SimulationConfig:
         _maybe_inherit_cif_lattice_a(raw, base_dir)
         crystal = CrystalConfig.from_dict(raw.get("crystal"))
         scan = ScanConfig.from_dict(raw.get("scan"))
+        if "noise" in raw:
+            raise ValueError(
+                "[noise] was removed; use [detector] instead "
+                "(poisson_noise -> model, intensity_scale -> counts_scale, "
+                "rng_seed -> [detector] rng_seed). See docs/detector-noise-model.md."
+            )
+        detector = DetectorConfig(**raw.get("detector", {}))
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
         reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
@@ -669,6 +704,7 @@ class SimulationConfig:
             reciprocal=reciprocal,
             geometry=geometry,
             reflections=reflections,
+            detector=detector,
         )
 
 
@@ -684,20 +720,6 @@ class IdentificationCrystalConfig:
     sweep_all_slip_planes: bool = True
     exclude_invisibility: bool = True
     invisibility_threshold_deg: float = 10.0
-
-
-@dataclass(frozen=True, kw_only=True)
-class IdentificationNoiseConfig:
-    """Noise + intensity parameters for dfxm-identify forward calls.
-
-    Sub-project B carry-out: these moved out of the old
-    IdentificationScanConfig (now deleted) into their own block since
-    they describe noise/detector, not the scan trajectory.
-    """
-
-    poisson_noise: bool = True
-    rng_seed: int = 0
-    intensity_scale: float = 7.0
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -731,8 +753,9 @@ class IdentificationZScanConfig:
 
     z_offsets_um: list[float]
     include_secondary: bool = True
-    # 0 = independent of the Poisson-noise stream (which uses
-    # `default_rng(seed).spawn(2)[1]` in `_maybe_apply_poisson_noise`).
+    # 0 = independent of the detector-noise stream (which uses
+    # `default_rng(seed).spawn(2)[1]` in `_apply_detector_model`; child[2]
+    # is reserved for the sensor fixed-pattern map).
     # Bump to a different value only if a future RNG split needs slot 0.
     secondary_rng_offset: int = 0
     # When True (requires include_secondary), each scan dir also writes
@@ -754,7 +777,7 @@ class IdentificationConfig:
     mode: Literal["single", "multi", "z-scan"] = "single"
     crystal: IdentificationCrystalConfig = field(default_factory=IdentificationCrystalConfig)
     scan: ScanConfig = field(default_factory=ScanConfig)
-    noise: IdentificationNoiseConfig = field(default_factory=IdentificationNoiseConfig)
+    detector: DetectorConfig = field(default_factory=DetectorConfig)
     io: IOConfig = field(default_factory=IOConfig)
     multi: IdentificationMonteCarloConfig | None = None
     zscan: IdentificationZScanConfig | None = None
@@ -840,7 +863,13 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         }
     crystal = IdentificationCrystalConfig(**crystal_data)
     scan = ScanConfig.from_dict(data.get("scan"))  # shared ScanConfig
-    noise = IdentificationNoiseConfig(**data.get("noise", {}))  # noise/intensity block
+    if "noise" in data:
+        raise ValueError(
+            "[noise] was removed; use [detector] instead "
+            "(poisson_noise -> model, intensity_scale -> counts_scale, "
+            "rng_seed -> [detector] rng_seed). See docs/detector-noise-model.md."
+        )
+    detector = DetectorConfig(**data.get("detector", {}))
     io = IOConfig(**data.get("io", {}))
     multi = (
         IdentificationMonteCarloConfig(**data["multi"]) if data.get("multi") is not None else None
@@ -862,7 +891,7 @@ def load_identification_config(path: Path) -> IdentificationConfig:
         mode=mode,
         crystal=crystal,
         scan=scan,
-        noise=noise,
+        detector=detector,
         io=io,
         multi=multi,
         zscan=zscan,
@@ -1047,7 +1076,7 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
     """Best-effort TOML render of an IdentificationConfig (for /dfxm_geo/config_toml).
 
     Not round-trip-perfect; the goal is provenance, not reconstruction.
-    Captures mode, reciprocal, scan, crystal (identification), noise, multi, zscan.
+    Captures mode, reciprocal, scan, crystal (identification), detector, multi, zscan.
     """
     lines: list[str] = [f'mode = "{cfg.mode}"']
     if cfg.reciprocal is not None:
@@ -1109,13 +1138,14 @@ def _identification_config_to_toml_str(cfg: IdentificationConfig) -> str:
         if axis.is_scanned:
             lines.append(f"range = {axis.range}")
             lines.append(f"steps = {axis.steps}")
-    # [noise]
+    # [detector]
     lines += [
         "",
-        "[noise]",
-        f"poisson_noise = {str(cfg.noise.poisson_noise).lower()}",
-        f"rng_seed = {cfg.noise.rng_seed}",
-        f"intensity_scale = {cfg.noise.intensity_scale}",
+        "[detector]",
+        f'model = "{cfg.detector.model}"',
+        f"exposure_time = {cfg.detector.exposure_time}",
+        f"counts_scale = {cfg.detector.counts_scale}",
+        f"rng_seed = {cfg.detector.rng_seed}",
     ]
     # [multi]
     if cfg.multi is not None:

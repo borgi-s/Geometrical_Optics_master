@@ -38,8 +38,8 @@ b_vector_indices    = [0, 1]
 sweep_all_slip_planes = false
 exclude_invisibility  = false
 
-[noise]
-poisson_noise = false
+[detector]
+model = "ideal"
 
 [identification]
 
@@ -61,10 +61,11 @@ _MULTI_IDENTIFY_EXCL_TOML = _MULTI_IDENTIFY_TOML.replace(
     "exclude_invisibility  = false", "exclude_invisibility  = true"
 )
 
-# Same TOML but with Poisson noise enabled (fixed seed for determinism).
+# Same TOML but with the detector model enabled (fixed seed for determinism).
+# Dropping the model="ideal" line lets the default (noisy) detector model apply.
 _MULTI_IDENTIFY_NOISY_TOML = _MULTI_IDENTIFY_TOML.replace(
-    "poisson_noise = false",
-    "poisson_noise = true\nrng_seed = 42",
+    'model = "ideal"',
+    "rng_seed = 42",
 )
 
 
@@ -223,63 +224,71 @@ def test_exclude_invisibility_same_scan_count_across_reflections(tmp_path):
     )
 
 
-def test_poisson_noise_independence_across_reflections(tmp_path):
-    """Poisson noise draws are independent per reflection.
+@pytest.mark.slow
+def test_detector_noise_determinism_and_per_reflection_independence(tmp_path):
+    """Detector-model noise is deterministic (fixed seed) and independent per reflection.
 
-    Runs the 2-reflection identify config in two modes:
-      - noise-off (poisson_noise=false): clean reference images.
-      - noise-on  (poisson_noise=true, rng_seed=42): noisy images.
+    Three assertions at the e2e level:
 
-    Assertions:
-      1. For EACH reflection, noisy != clean (noise was actually applied).
-      2. The per-reflection noise residuals (noisy - clean) DIFFER between
-         reflection_001 and reflection_002 — the two reflections draw from
-         independent RNG streams keyed by reflection_index (via
-         default_rng([seed, reflection_index])), so even though they share
-         the same crystal / Burgers realization they receive different
-         Poisson draws. This is the per-reflection noise independence
-         property that ensures multi-reflection ML datasets have decorrelated
-         detector noise.
+      1. Two noisy runs with the SAME rng_seed produce bit-for-bit identical
+         uint16 detector frames for every reflection (seed → reproducibility).
 
-    Note: this does not assert that the clean images differ across reflections
-    (that is already covered by test_per_reflection_images_differ in
-    test_forward_multi_reflection_e2e.py).  Here the focus is solely on the
-    noise stream.
+      2. The two reflections within ONE noisy run produce DIFFERENT uint16
+         frames for scan0001 — i.e. reflection_001 and reflection_002 receive
+         independent noise draws. This follows from the
+         ``default_rng([seed, reflection_index])`` contract: each reflection's
+         noise RNG is seeded with a distinct tuple and cannot be identical to
+         another reflection's stream.  The per-stream unit test lives in
+         ``tests/test_apply_detector_model.py``.
+
+      3. (Sanity) The ideal (noiseless) run produces float32 frames; both
+         noisy runs produce uint16 frames — confirming the detector model was
+         actually applied.
+
+    Note: this test does NOT compare uint16 ADU to float32 normalized intensity
+    (different scales) — all comparisons are between same-dtype uint16 arrays.
     """
-    # --- noise-off run ---
-    cfg_clean = load_identification_config(_write(tmp_path, _MULTI_IDENTIFY_TOML))
-    out_clean = tmp_path / "out_clean"
-    run_identification(cfg_clean, out_clean)
-
-    # --- noise-on run ---
-    noisy_dir = tmp_path / "noisy_config.toml"
-    noisy_dir.write_text(_MULTI_IDENTIFY_NOISY_TOML, encoding="utf-8")
-    cfg_noisy = load_identification_config(noisy_dir)
-    out_noisy = tmp_path / "out_noisy"
-    run_identification(cfg_noisy, out_noisy)
-
     det_path = "scan0001/dfxm_sim_detector_0000.h5"
     det_internal = "/entry_0000/dfxm_sim_detector/image"
 
-    residuals: list[np.ndarray] = []
+    def _read_frame(out_dir, reflection_idx):
+        refl = f"reflection_{reflection_idx:03d}"
+        with h5py.File(out_dir / refl / det_path, "r") as fh:
+            return fh[det_internal][...]
+
+    # --- noisy run A (seed=42) ---
+    p_a = tmp_path / "noisy_a.toml"
+    p_a.write_text(_MULTI_IDENTIFY_NOISY_TOML, encoding="utf-8")
+    out_a = tmp_path / "out_a"
+    run_identification(load_identification_config(p_a), out_a)
+
+    # --- noisy run B (same TOML, same seed) ---
+    p_b = tmp_path / "noisy_b.toml"
+    p_b.write_text(_MULTI_IDENTIFY_NOISY_TOML, encoding="utf-8")
+    out_b = tmp_path / "out_b"
+    run_identification(load_identification_config(p_b), out_b)
+
+    # Assertion 3: noisy frames are uint16; sanity-check ideal is float32.
+    ideal_cfg = load_identification_config(_write(tmp_path, _MULTI_IDENTIFY_TOML))
+    out_ideal = tmp_path / "out_ideal"
+    run_identification(ideal_cfg, out_ideal)
+    assert _read_frame(out_ideal, 1).dtype == np.float32, "ideal model must produce float32"
+    assert _read_frame(out_a, 1).dtype == np.uint16, "noisy model must produce uint16"
+
+    # Assertion 1: determinism — run A and run B are bit-for-bit identical.
     for idx in (1, 2):
-        refl = f"reflection_{idx:03d}"
-
-        with h5py.File(out_noisy / refl / det_path, "r") as fh:
-            noisy_img = fh[det_internal][...].astype(float)
-        with h5py.File(out_clean / refl / det_path, "r") as fh:
-            clean_img = fh[det_internal][...].astype(float)
-
-        residual = noisy_img - clean_img
-        # 1. Noise was applied: at least one pixel differs.
-        assert not np.allclose(noisy_img, clean_img), (
-            f"{refl}: noisy image equals clean image — Poisson noise was not applied"
+        frame_a = _read_frame(out_a, idx)
+        frame_b = _read_frame(out_b, idx)
+        assert np.array_equal(frame_a, frame_b), (
+            f"reflection_{idx:03d}: same-seed runs produced different uint16 frames — "
+            "detector noise RNG is not deterministic"
         )
-        residuals.append(residual)
 
-    # 2. Per-reflection noise residuals are not identical (independent RNG streams).
-    assert not np.array_equal(residuals[0], residuals[1]), (
-        "Noise residuals are identical for reflection_001 and reflection_002 — "
-        "per-reflection noise independence is broken (expected independent "
-        "default_rng([seed, reflection_index]) streams)"
+    # Assertion 2: per-reflection independence — refl_001 != refl_002 within run A.
+    frame_r1 = _read_frame(out_a, 1)
+    frame_r2 = _read_frame(out_a, 2)
+    assert not np.array_equal(frame_r1, frame_r2), (
+        "reflection_001 and reflection_002 produced identical uint16 frames — "
+        "per-reflection RNG streams are not independent "
+        "(expected default_rng([seed, reflection_index]) to differ)"
     )

@@ -705,7 +705,7 @@ class TestReciprocalConfigParsing:
             "sweep_all_slip_planes = false\nexclude_invisibility = false\n"
             "invisibility_threshold_deg = 10.0\n"
             "[scan.phi]\nvalue = 1.5e-4\n"
-            "[noise]\npoisson_noise = false\nrng_seed = 0\nintensity_scale = 7.0\n"
+            '[detector]\nmodel = "ideal"\nrng_seed = 0\n'
             '[io]\nfn_prefix = "/x"\nftype = ".npy"\n'
             'dislocs_dirname = "d"\nperfect_dirname = "p"\ninclude_perfect_crystal = false\n'
         )

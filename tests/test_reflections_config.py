@@ -179,8 +179,8 @@ mount_x = [1, 0, 0]
 mount_y = [0, 1, 0]
 mount_z = [0, 0, 1]
 
-[noise]
-poisson_noise = false
+[detector]
+model = "ideal"
 
 [[reflections]]
 hkl = [1, 1, 3]
@@ -223,8 +223,8 @@ b_vector_indices  = [0]
 sweep_all_slip_planes = false
 exclude_invisibility  = false
 
-[noise]
-poisson_noise = false
+[detector]
+model = "ideal"
 
 [scan]
 [scan.phi]

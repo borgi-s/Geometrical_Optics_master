@@ -30,8 +30,7 @@ value = 1.25e-4
 range = 1.25e-4
 steps = 2
 
-[noise]
-poisson_noise = true
+[detector]
 rng_seed = 1
 
 [multi]

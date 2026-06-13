@@ -1,11 +1,11 @@
 """TDD tests for `--seed` on `dfxm-identify` (cli_main_identify).
 
 Tests the seed-override path without requiring an on-disk kernel by:
-  1. Checking the RNG draw directly from IdentificationNoiseConfig
-  2. Verifying cli_main_identify's argparse wires the seed into cfg.noise.rng_seed
+  1. Checking the RNG draw directly from DetectorConfig
+  2. Verifying cli_main_identify's argparse wires the seed into cfg.detector.rng_seed
 
 For the determinism test we use _draw_dislocation (the actual sampler used by
-_iter_identification_multi) seeded with two different seeds from noise.rng_seed.
+_iter_identification_multi) seeded with two different seeds from detector.rng_seed.
 This tests the full contract — same seed → same draws, different seed → different
 draws — without invoking the kernel-dependent forward model.
 """
@@ -85,7 +85,7 @@ def test_cli_identify_accepts_seed_argument(tmp_path: Path) -> None:
     cfg_toml = (
         "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n\n"
         "[scan.phi]\nrange = 0.001\nsteps = 2\n\n"
-        "[noise]\npoisson_noise = false\nrng_seed = 0\n\n"
+        '[detector]\nmodel = "ideal"\nrng_seed = 0\n\n'
         "[multi]\nn_samples = 1\n"
     )
     cfg_file = tmp_path / "id_multi.toml"
@@ -119,17 +119,17 @@ def test_cli_identify_accepts_seed_argument(tmp_path: Path) -> None:
 
 
 def test_cli_identify_seed_overrides_config_rng_seed(tmp_path: Path) -> None:
-    """--seed overrides noise.rng_seed in the loaded IdentificationConfig.
+    """--seed overrides detector.rng_seed in the loaded IdentificationConfig.
 
     We monkey-patch run_identification to capture the config it receives,
-    then verify noise.rng_seed was overridden by --seed.
+    then verify detector.rng_seed was overridden by --seed.
     """
     import dfxm_geo.pipeline as pipeline_mod
 
     cfg_toml = (
         "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n\n"
         "[scan.phi]\nrange = 0.001\nsteps = 2\n\n"
-        "[noise]\npoisson_noise = false\nrng_seed = 0\n\n"
+        '[detector]\nmodel = "ideal"\nrng_seed = 0\n\n'
         "[multi]\nn_samples = 1\n"
     )
     cfg_file = tmp_path / "id_multi.toml"
@@ -162,8 +162,8 @@ def test_cli_identify_seed_overrides_config_rng_seed(tmp_path: Path) -> None:
         pipeline_mod.run_identification = original
 
     assert len(captured) == 1, "run_identification was not called"
-    assert captured[0].noise.rng_seed == 42, (
-        f"Expected rng_seed=42 but got {captured[0].noise.rng_seed}"
+    assert captured[0].detector.rng_seed == 42, (
+        f"Expected rng_seed=42 but got {captured[0].detector.rng_seed}"
     )
 
 
@@ -174,7 +174,7 @@ def test_cli_identify_seed_none_leaves_config_rng_seed(tmp_path: Path) -> None:
     cfg_toml = (
         "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n\n"
         "[scan.phi]\nrange = 0.001\nsteps = 2\n\n"
-        "[noise]\npoisson_noise = false\nrng_seed = 77\n\n"
+        '[detector]\nmodel = "ideal"\nrng_seed = 77\n\n'
         "[multi]\nn_samples = 1\n"
     )
     cfg_file = tmp_path / "id_multi.toml"
@@ -205,6 +205,6 @@ def test_cli_identify_seed_none_leaves_config_rng_seed(tmp_path: Path) -> None:
         pipeline_mod.run_identification = original
 
     assert len(captured) == 1
-    assert captured[0].noise.rng_seed == 77, (
-        f"Expected rng_seed=77 (from config) but got {captured[0].noise.rng_seed}"
+    assert captured[0].detector.rng_seed == 77, (
+        f"Expected rng_seed=77 (from config) but got {captured[0].detector.rng_seed}"
     )

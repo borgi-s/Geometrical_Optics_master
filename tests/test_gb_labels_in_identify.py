@@ -47,8 +47,8 @@ b_vector_indices    = [0, 1]
 sweep_all_slip_planes = false
 exclude_invisibility  = false
 
-[noise]
-poisson_noise = false
+[detector]
+model = "ideal"
 
 [identification]
 
@@ -85,8 +85,8 @@ b_vector_indices    = [0, 1]
 sweep_all_slip_planes = false
 exclude_invisibility  = false
 
-[noise]
-poisson_noise = false
+[detector]
+model = "ideal"
 
 [identification]
 
