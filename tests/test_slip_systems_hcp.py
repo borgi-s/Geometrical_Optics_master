@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from dfxm_geo.crystal.slip_systems import (
@@ -89,3 +90,26 @@ def test_fcc_bcc_unchanged_by_hcp_addition():
     # The cubic enumerator must be untouched: counts identical to 4.3a.
     assert len(slip_systems("fcc")) == 12
     assert len(slip_systems("bcc")) == 24
+
+
+def test_burgers_magnitude_of_int_hcp_a_and_ca():
+    from dfxm_geo.crystal.cell import UnitCell
+    from dfxm_geo.crystal.slip_systems import burgers_magnitude_of
+
+    # alpha-Ti: a = 2.951 A, c = 4.684 A.
+    cell = UnitCell.from_lattice("hexagonal", a=2.951e-10, c=4.684e-10)
+    a_um = 2.951e-10 * 1e6
+    ca_um = float(np.sqrt(2.951e-10**2 + 4.684e-10**2) * 1e6)
+    assert np.isclose(burgers_magnitude_of((1, 0, 0), cell, fraction=1.0), a_um, rtol=1e-12)
+    assert np.isclose(burgers_magnitude_of((1, 0, 1), cell, fraction=1.0), ca_um, rtol=1e-12)
+
+
+def test_hcp_family_magnitudes_via_registry():
+    from dfxm_geo.crystal.cell import UnitCell
+    from dfxm_geo.crystal.slip_systems import burgers_magnitude
+
+    cell = UnitCell.from_lattice("hexagonal", a=2.951e-10, c=4.684e-10)
+    a_um = 2.951e-10 * 1e6
+    ca_um = float(np.sqrt(2.951e-10**2 + 4.684e-10**2) * 1e6)
+    assert np.isclose(burgers_magnitude("hcp", "{0001}<11-20>", cell), a_um, rtol=1e-12)
+    assert np.isclose(burgers_magnitude("hcp", "{10-11}<11-23>", cell), ca_um, rtol=1e-12)

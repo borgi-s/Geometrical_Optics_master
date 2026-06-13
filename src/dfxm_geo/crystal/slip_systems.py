@@ -319,6 +319,13 @@ _BURGERS_FRACTION: dict[str, float] = {
     "{111}<110>": 0.5,
     "{110}<111>": 0.5,
     "{112}<111>": 0.5,
+    # HCP: the registry stores the reduced full-translation integer direction
+    # (a1 = [100], c+a = [101]), so no centered-lattice halving.
+    "{0001}<11-20>": 1.0,
+    "{10-10}<11-20>": 1.0,
+    "{10-11}<11-20>": 1.0,
+    "{10-11}<11-23>": 1.0,
+    "{11-22}<11-23>": 1.0,
 }
 
 
@@ -482,6 +489,21 @@ def burgers_magnitude(structure: str, family: str, cell: UnitCell) -> float:
                 f"add it to _BURGERS_FRACTION."
             )
         frac = _BURGERS_FRACTION[family]
-    b_int = np.array(fam.burgers_family, dtype=float)
-    cart = cell.A @ b_int  # metres
+    if fam.enumerator == "hex":
+        b_int_3 = uvtw_to_uvw(cast("tuple[int, int, int, int]", fam.burgers_family))
+    else:
+        b_int_3 = cast("tuple[int, int, int]", fam.burgers_family)
+    cart = cell.A @ np.array(b_int_3, dtype=float)  # metres
     return float(frac * np.linalg.norm(cart) * 1e6)
+
+
+def burgers_magnitude_of(b_int: tuple[int, int, int], cell: UnitCell, *, fraction: float) -> float:
+    """|b| in micrometres for an explicit integer Burgers direction.
+
+    |b| = fraction * |A . b_int| (A in metres -> result in um).  HCP stores the
+    REDUCED full-translation integer direction (a1 = [100], c+a = [101], ...),
+    so fraction = 1.0; the centered-lattice 1/2 only applies to the cubic
+    centered translations (handled by the family-level ``burgers_magnitude``).
+    """
+    cart = cell.A @ np.array(b_int, dtype=float)  # metres
+    return float(fraction * np.linalg.norm(cart) * 1e6)
