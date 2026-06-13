@@ -77,22 +77,13 @@ def test_unknown_family_raises():
 def test_burgers_in_plane_fcc_matches_legacy_basis():
     """For each {111} plane, the 6 unit Burgers match the pre-branch
     _BASIS_TABLE / sqrt(2) (FCC bit-identity)."""
-    from dfxm_geo.crystal.burgers import _BASIS_TABLE  # still present pre-Task 5
-
-    def _slug_to_plane(slug):
-        # "1-11" -> (1,-1,1); "-111" -> (-1,1,1)
-        out, i = [], 0
-        while i < len(slug):
-            if slug[i] == "-":
-                out.append(-int(slug[i + 1]))
-                i += 2
-            else:
-                out.append(int(slug[i]))
-                i += 1
-        return tuple(out)
-
-    for slug, basis in _BASIS_TABLE.items():
-        plane = _slug_to_plane(slug)
+    legacy = {
+        (1, 1, 1): np.array([[-1, 1, 0], [1, 0, -1], [0, 1, -1]], float),
+        (1, -1, 1): np.array([[1, 1, 0], [1, 0, -1], [0, 1, 1]], float),
+        (1, 1, -1): np.array([[1, -1, 0], [1, 0, 1], [0, -1, -1]], float),
+        (-1, 1, 1): np.array([[-1, -1, 0], [-1, 0, -1], [0, 1, -1]], float),
+    }
+    for plane, basis in legacy.items():
         got = burgers_in_plane("fcc", plane)
         want = np.vstack([basis, -basis]) / np.sqrt(2)
         gs = sorted(tuple(np.round(v, 9)) for v in got)

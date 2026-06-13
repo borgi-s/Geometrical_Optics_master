@@ -15,24 +15,30 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial.transform import Rotation as _Rotation
 
-# Lookup table for the four {111}-family slip-plane normals. Each entry maps
-# the slug "h k l" (with `-` for minus) to its three basis Burgers vectors,
-# in the cubic crystal frame. Negatives are appended in `burgers_vectors`.
-_BASIS_TABLE: dict[str, np.ndarray] = {
-    "111": np.array([[-1, 1, 0], [1, 0, -1], [0, 1, -1]], dtype=float),
-    "1-11": np.array([[1, 1, 0], [1, 0, -1], [0, 1, 1]], dtype=float),
-    "11-1": np.array([[1, -1, 0], [1, 0, 1], [0, -1, -1]], dtype=float),
-    "-111": np.array([[-1, -1, 0], [-1, 0, -1], [0, 1, -1]], dtype=float),
+from dfxm_geo.crystal.slip_systems import burgers_in_plane
+
+# Canonical ordering of the three positive basis Burgers vectors for each
+# {111}-family plane, expressed as unit-normalized directions. This ordering
+# is preserved from the original hand-written table so that downstream
+# index-based selection (e.g. b_vector_indices = [0]) continues to select the
+# same physical Burgers vector before and after the refactor.
+# Values are bit-identical to the old `_BASIS_TABLE / sqrt(2)` table.
+_ORDERED_BASES: dict[tuple[int, int, int], np.ndarray] = {
+    (1, 1, 1): np.array([[-1, 1, 0], [1, 0, -1], [0, 1, -1]], dtype=float) / np.sqrt(2),
+    (1, -1, 1): np.array([[1, 1, 0], [1, 0, -1], [0, 1, 1]], dtype=float) / np.sqrt(2),
+    (1, 1, -1): np.array([[1, -1, 0], [1, 0, 1], [0, -1, -1]], dtype=float) / np.sqrt(2),
+    (-1, 1, 1): np.array([[-1, -1, 0], [-1, 0, -1], [0, 1, -1]], dtype=float) / np.sqrt(2),
 }
-
-
-def _slug(slip_plane_normal: tuple[int, int, int]) -> str:
-    """Convert (h, k, l) to a lookup key like '1-11'."""
-    return "".join(str(c) if c >= 0 else f"-{abs(c)}" for c in slip_plane_normal)
 
 
 def burgers_vectors(slip_plane_normal: tuple[int, int, int]) -> np.ndarray:
     """Return the 6 Burgers vectors associated with a {111}-family slip plane.
+
+    FCC-compat shim over the structure-family registry. Non-{111} planes raise
+    (the identify workflow defaults to FCC). The ordering of the 6 vectors is
+    preserved bit-identically from the original hand-written table so that
+    index-based selection (``b_vector_indices``) selects the same vector before
+    and after the refactor.
 
     Args:
         slip_plane_normal: One of (1,1,1), (1,-1,1), (1,1,-1), (-1,1,1).
@@ -47,14 +53,16 @@ def burgers_vectors(slip_plane_normal: tuple[int, int, int]) -> np.ndarray:
     Raises:
         ValueError: if slip_plane_normal is not one of the four {111} variants.
     """
-    key = _slug(slip_plane_normal)
-    if key not in _BASIS_TABLE:
+    # Validate via the registry (raises for non-{111} planes; future structure
+    # types will override this whole shim in a later task).
+    try:
+        burgers_in_plane("fcc", slip_plane_normal)
+    except ValueError as exc:
         raise ValueError(
-            f"slip_plane_normal {slip_plane_normal} is not one of the four "
-            f"{{111}}-family variants {list(_BASIS_TABLE.keys())}"
-        )
-    basis = _BASIS_TABLE[key]
-    return np.vstack([basis, -basis]) / np.sqrt(2)
+            f"slip_plane_normal {slip_plane_normal} is not one of the four {{111}}-family variants"
+        ) from exc
+    basis = _ORDERED_BASES[tuple(slip_plane_normal)]  # type: ignore[index]
+    return np.vstack([basis, -basis])
 
 
 def gb_cos(q_hkl: np.ndarray, b_vec: np.ndarray) -> float:
