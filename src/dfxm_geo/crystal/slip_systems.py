@@ -15,6 +15,7 @@ Spec: docs/superpowers/specs/2026-06-13-m4-stage43-slip-systems-design.md.
 
 from __future__ import annotations
 
+import functools
 import itertools
 import math
 from dataclasses import dataclass
@@ -214,16 +215,29 @@ def _enumerate_hex(fam: SlipFamily) -> list[SlipSystem]:
     return systems
 
 
-def _enumerate_family(fam: SlipFamily) -> list[SlipSystem]:
+@functools.cache
+def _enumerate_family(fam: SlipFamily) -> tuple[SlipSystem, ...]:
+    """Return all slip systems for *fam* as an immutable tuple (cached).
+
+    ``SlipFamily`` is ``@dataclass(frozen=True)`` (hashable) and ``SlipSystem``
+    is ``@dataclass(frozen=True)`` (immutable), so the cached tuple is safe to
+    share across callers — no caller can mutate a frozen dataclass or the tuple
+    itself.  ``slip_systems`` wraps the results in a fresh ``list`` via
+    ``list.extend``, so callers may mutate that list without touching the cache.
+
+    The import-time guards (``_assert_fcc_ordered_table_complete``,
+    ``_assert_hcp_family_counts``) call this function before any user code runs;
+    their calls populate the cache so the first real call per family is free.
+    """
     if fam.enumerator == "hex":
-        return _enumerate_hex(fam)
+        return tuple(_enumerate_hex(fam))
     if fam.literal:
         # Literal families: yield exactly one system from the stored (b, n) pair,
         # with no symmetry-orbit expansion. The b.n==0 check was done at registration.
         n = cast("tuple[int, int, int]", fam.plane_family)
         b = cast("tuple[int, int, int]", fam.burgers_family)
         t = cast("tuple[int, int, int]", tuple(int(x) for x in np.cross(n, b)))
-        return [SlipSystem(b=b, n=n, t=t, family=fam.name)]
+        return (SlipSystem(b=b, n=n, t=t, family=fam.name),)
     # Match the canonical {111}<110> rep (name + plane + burgers) so a custom
     # family reusing the name can't accidentally hit the ordered FCC table.
     if (
@@ -235,8 +249,8 @@ def _enumerate_family(fam: SlipFamily) -> list[SlipSystem]:
         # symmetry enumeration, so the v2.x random/wall draw order is preserved
         # bit-for-bit (see _FCC_111_110_ORDERED). Set-completeness vs the
         # enumerator is guarded at import (the assertion below this function).
-        return [SlipSystem(b=b, n=n, t=t, family=fam.name) for b, n, t in _FCC_111_110_ORDERED]
-    return _enumerate_orbit(fam)
+        return tuple(SlipSystem(b=b, n=n, t=t, family=fam.name) for b, n, t in _FCC_111_110_ORDERED)
+    return tuple(_enumerate_orbit(fam))
 
 
 def _assert_fcc_ordered_table_complete() -> None:

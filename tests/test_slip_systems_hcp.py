@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from dfxm_geo.crystal.slip_systems import (
+    _REGISTRY,
     hkil_to_hkl,
     plane_normals,
     slip_systems,
@@ -113,3 +114,52 @@ def test_hcp_family_magnitudes_via_registry():
     ca_um = float(np.sqrt(2.951e-10**2 + 4.684e-10**2) * 1e6)
     assert np.isclose(burgers_magnitude("hcp", "{0001}<11-20>", cell), a_um, rtol=1e-12)
     assert np.isclose(burgers_magnitude("hcp", "{10-11}<11-23>", cell), ca_um, rtol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# FU2: mutation-safe memoization of _enumerate_family
+# ---------------------------------------------------------------------------
+
+
+def test_enumerate_family_memoized():
+    """_enumerate_family must be memoized: same object returned on repeat calls."""
+    from dfxm_geo.crystal.slip_systems import _enumerate_family
+
+    # Clear cache to get a clean count.
+    _enumerate_family.cache_clear()
+    fam = _REGISTRY["hcp"][0]
+    a = _enumerate_family(fam)
+    b = _enumerate_family(fam)
+
+    # The same tuple object should be returned from the cache.
+    assert a is b, (
+        "_enumerate_family must return the SAME tuple object on repeat calls (cache miss)"
+    )
+    # The returned type must be a tuple (immutable / hashable-safe).
+    assert isinstance(a, tuple), f"_enumerate_family must return tuple, got {type(a)}"
+    # Results are equal and non-empty.
+    assert len(a) > 0
+    assert a == b
+
+    # Confirm the two calls hit: 1 miss + 1 hit.
+    info = _enumerate_family.cache_info()
+    assert info.hits >= 1, f"Expected at least 1 cache hit, got {info}"
+    assert info.misses >= 1, f"Expected at least 1 cache miss, got {info}"
+
+
+def test_slip_systems_returns_fresh_list():
+    """slip_systems must return a fresh list each call (callers may mutate it)
+    but the contents must be equal — the cache provides the shared tuples."""
+    result_a = slip_systems("fcc")
+    result_b = slip_systems("fcc")
+
+    # A fresh list every call — not the same object.
+    assert result_a is not result_b, "slip_systems must return a NEW list each call"
+    # But the contents are equal.
+    assert result_a == result_b, "slip_systems must return EQUAL results each call"
+
+    # Also check HCP.
+    hcp_a = slip_systems("hcp")
+    hcp_b = slip_systems("hcp")
+    assert hcp_a is not hcp_b
+    assert hcp_a == hcp_b
