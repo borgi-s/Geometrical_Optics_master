@@ -26,7 +26,11 @@ def plot_slip_plane_3d(
 
     Args:
         slip_plane_normal: shape (3,) — the slip-plane normal `n`.
-        burgers: shape (n_burgers, 3) — Burgers vectors (typically 6).
+        burgers: shape (n_burgers, 3) — Burgers vectors plotted at their natural
+            length.  Pass integer-Miller directions (e.g. ``[-1, 1, 0]`` for FCC
+            ⟨110⟩, ``[1, 1, 1]`` for BCC ⟨111⟩) so the display length equals
+            the integer norm (``√2`` / ``√3`` respectively).  Unit-normalised
+            inputs are also accepted — in that case plotted lengths are ≈1.
         rotated_vectors: shape (n_angles, n_burgers, 3) — rotated t-vectors.
 
     Returns:
@@ -60,9 +64,12 @@ def plot_slip_plane_3d(
         )
     )
 
-    # Burgers vectors (red) — branch convention scales by sqrt(2) for display.
-    b_scaled = burgers * np.sqrt(2)
-    for i, b_vec in enumerate(b_scaled):
+    # Burgers vectors (red) — plotted at their natural length.
+    # The caller controls the display scale by choosing whether to pass
+    # integer-Miller vectors (|FCC ⟨110⟩| = √2, |BCC ⟨111⟩| = √3) or
+    # unit-normalised directions.  The old hard-coded ``* √2`` assumed FCC
+    # ⟨110⟩ unit inputs; using integer inputs generalises to any structure.
+    for i, b_vec in enumerate(burgers):
         fig.add_trace(
             go.Scatter3d(
                 x=[0, b_vec[0]],
