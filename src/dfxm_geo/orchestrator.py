@@ -887,7 +887,7 @@ def _iter_identification_single(
     )
     # Crystal cell for the Cartesian (HCP) frame; None or cubic → Miller path
     # (byte-identical). M4 4.3b.
-    _cell = config.geometry.mount.cell if config.geometry.mount is not None else None
+    _cell = _mount_cell(config)
     _is_cubic = _cell is None or _cell.is_cubic
     # Poisson ratio for the displacement field (M4 4.3a I2). Al/FCC → 0.334
     # (byte-identical to v2.x); a material/override changes the physics.
@@ -1193,8 +1193,9 @@ def _draw_dislocation(
 ) -> dict[str, Any]:
     """Draw a single random dislocation (slip plane, Burgers idx, angle, position).
 
-    Structure-aware via the optional (planes, burgers_fn, burgers_int_fn) triple
-    from ``_resolve_identify_planes_and_burgers``. ALL THREE default to the FCC
+    Structure-aware via the optional structure params
+    (planes, burgers_fn, burgers_int_fn, burgers_mag_fn, cell)
+    from ``_resolve_identify_planes_and_burgers``. All default to the FCC
     objects (``_ALL_111_PLANES`` / ``_burgers_vectors`` / the ``*√2`` reconstruction)
     so a bare ``_draw_dislocation(rng, pos)`` call is byte-identical to v2.x — the
     RNG draw ``rng.integers(0, len(planes))`` stays ``len(_ALL_111_PLANES)`` == 4
@@ -1313,7 +1314,7 @@ def _iter_identification_multi(
     )
     # Crystal cell for the Cartesian (HCP) frame; None or cubic → Miller path
     # (byte-identical). M4 4.3b.
-    _cell = config.geometry.mount.cell if config.geometry.mount is not None else None
+    _cell = _mount_cell(config)
     _is_cubic = _cell is None or _cell.is_cubic
     # FCC: pass burgers_int_fn=None so _draw_dislocation keeps b_vec as the v2.x
     # float array (unit * √2), not a newly constructed int->float array — byte-identical
@@ -1591,7 +1592,7 @@ def _iter_identification_zscan(
     )
     # Crystal cell for the Cartesian (HCP) frame; None or cubic → Miller path
     # (byte-identical). M4 4.3b.
-    _cell = config.geometry.mount.cell if config.geometry.mount is not None else None
+    _cell = _mount_cell(config)
     _is_cubic = _cell is None or _cell.is_cubic
     # FCC: pass burgers_int_fn=None to _draw_dislocation (secondary) so b_vec
     # stays the v2.x float array (unit * √2), not a newly constructed int->float array.
