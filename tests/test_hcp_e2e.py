@@ -36,7 +36,7 @@ import numpy as np
 import pytest
 
 from dfxm_geo.crystal.oblique import CrystalMount, compute_omega_eta
-from dfxm_geo.crystal.slip_systems import plane_normals
+from dfxm_geo.crystal.slip_systems import _canon, plane_normals
 from dfxm_geo.pipeline import (
     SimulationConfig,
     load_identification_config,
@@ -150,7 +150,7 @@ def test_hcp_identify_has_ca_and_a_labels(tmp_path, metal):
     assert cfg.geometry.mount.resolved_structure_type == "hcp"
     out = tmp_path / "out"
     run_identification(cfg, out)
-    hcp_planes = {p for p in plane_normals("hcp")}
+    hcp_planes = set(plane_normals("hcp"))
     master = out / "dfxm_identify.h5"
     with h5py.File(master, "r") as f:
         scan_ids = sorted(k for k in f if k != "dfxm_geo")
@@ -160,14 +160,14 @@ def test_hcp_identify_has_ca_and_a_labels(tmp_path, metal):
             scan = f[sid]
             assert scan.attrs["structure_type"] == "hcp"
             spn = tuple(int(round(float(c))) for c in scan["sample"]["slip_plane_normal"][()])
-            from dfxm_geo.crystal.slip_systems import _canon
-
             assert _canon(spn) in hcp_planes
             b = scan["sample"]["burgers"][()]
             # |b_int|^2 proxy: ⟨a⟩ ([100]/[110]) vs ⟨c+a⟩ ([101]/[111]/...) classes.
             burgers_lens.add(int(round(float(np.dot(b, b)))))
-        # both an ⟨a⟩ and a ⟨c+a⟩ Burgers class appear across the swept systems.
-        assert len(burgers_lens) >= 2, f"only one Burgers class swept: {burgers_lens}"
+        # ⟨a⟩ (|b_int|²=1, unambiguous) AND ⟨c+a⟩ (|b_int|²=3, unambiguous) must both appear.
+        assert 1 in burgers_lens and 3 in burgers_lens, (
+            f"expected both ⟨a⟩ (|b_int|²=1) and ⟨c+a⟩ (|b_int|²=3) classes; got {burgers_lens}"
+        )
 
 
 @pytest.mark.slow
@@ -212,3 +212,5 @@ def test_hcp_via_ti_cif(tmp_path):
     with h5py.File(det, "r") as f:
         img = f["/entry_0000/dfxm_sim_detector/image"][...]
     assert np.isfinite(img).all() and float(img.max()) > 0.0
+    with h5py.File(out / "dfxm_geo.h5", "r") as f:
+        assert dict(f["/1.1"].attrs)["structure_type"] == "hcp"
