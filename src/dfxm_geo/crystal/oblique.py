@@ -29,6 +29,13 @@ class CrystalMount:
     reduces to the historical "Miller indices as directions" reading).
     The three directions must be mutually orthogonal in Cartesian space.
     Default for Al per paper §6.1: (1,0,0)/(0,1,0)/(0,0,1).
+
+    M4 Stage 4.3a metadata (all optional, default None → FCC/Al back-compat):
+    ``structure_type`` ("fcc"/"bcc"/...), ``material`` (Poisson-table key),
+    ``poisson_ratio`` (ν override), ``slip_families`` (subset of the structure's
+    families). Use ``resolved_structure_type`` (space-group authoritative, else
+    explicit, else "fcc") and ``resolved_poisson_ratio`` (override > material >
+    0.334) to read the resolved values.
     """
 
     lattice: Literal[
@@ -131,6 +138,7 @@ class CrystalMount:
         if self.structure_type is not None:
             from dfxm_geo.crystal.slip_systems import derive_structure_type
 
+            # Validation only: raises if explicit structure_type contradicts the space group (return discarded).
             derive_structure_type(
                 structure_type=self.structure_type,
                 space_group=self.space_group,
