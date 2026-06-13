@@ -356,7 +356,7 @@ def Fd_find_multi_dislocs_mixed(
     crystals: list[MixedDislocSpec],
     Theta: np.ndarray,
     *,
-    b: float = BURGERS_VECTOR,
+    b: float | np.ndarray = BURGERS_VECTOR,
     ny: float = POISSON_RATIO,
     S: np.ndarray = _S_IDENTITY,
 ) -> np.ndarray:
@@ -373,7 +373,9 @@ def Fd_find_multi_dislocs_mixed(
         Us: Sample-to-grain rotation, shape (3, 3).
         crystals: list of `MixedDislocSpec`, at least one.
         Theta: Lab-to-sample rotation, shape (3, 3).
-        b: Burgers vector magnitude (µm).
+        b: Burgers vector magnitude (µm) — scalar (broadcast to uniform array)
+            or explicit (N,) array for HCP per-dislocation magnitudes. Each
+            crystal's |b| is passed as a scalar to ``Fd_find_mixed``.
         ny: Poisson ratio.
         S: 3x3 rotation matrix (sample-remount; default identity).
 
@@ -383,16 +385,17 @@ def Fd_find_multi_dislocs_mixed(
     if not crystals:
         raise ValueError("Fd_find_multi_dislocs_mixed requires at least one crystal")
 
+    b_arr = np.broadcast_to(np.asarray(b, dtype=float), (len(crystals),))
     I = np.identity(3)
     Fg_sum = np.zeros((rl.shape[1], 3, 3))
-    for spec in crystals:
+    for i, spec in enumerate(crystals):
         Fg_one = Fd_find_mixed(
             rl,
             Us,
             Ud_mix=spec.Ud_mix,
             rotation_deg=spec.rotation_deg,
             Theta=Theta,
-            b=b,
+            b=float(b_arr[i]),
             ny=ny,
             position_lab_um=spec.position_lab_um,
             S=S,
@@ -410,7 +413,7 @@ def _population_hg_kernel(
     Ud: np.ndarray,  # (N, 3, 3) float64
     cos_rot: np.ndarray,  # (N,) float64
     sin_rot: np.ndarray,  # (N,) float64
-    b: float,
+    b: np.ndarray,  # (N,) float64 — per-dislocation Burgers magnitude (µm)
     ny: float,
     Hg_out: np.ndarray,  # (X, 3, 3) float64  (written in place)
 ) -> None:
@@ -425,14 +428,17 @@ def _population_hg_kernel(
     See math reference in the Phase 1 plan
     (docs/superpowers/plans/2026-05-27-find-hg-numba-fusion.md).
 
+    ``b`` is a per-dislocation (N,) float64 array of Burgers magnitudes (µm).
+    Pass a uniform array ``np.full(N, scalar_b)`` for the cubic path — the
+    per-d ``bf``/``bf1`` are then identical to the old single pre-loop scalar,
+    so the scalar path is byte-identical.
+
     NOTE: `_scene_perdis_hg_kernel` duplicates this math for the per-dislocation
     scene path — any physics change here must be mirrored there.
     """
     X = rl_um.shape[1]
     N = M.shape[0]
     alpha = 1e-20
-    bf = b / (4.0 * math.pi * (1.0 - ny))
-    bf1 = b / (2.0 * math.pi)
 
     # Per-ray scratch reused across iterations (no per-ray heap allocation).
     G = np.zeros((3, 3))
@@ -469,6 +475,8 @@ def _population_hg_kernel(
             nyf = 2.0 * ny * (sqx + sqy)
             c = cos_rot[d]
             s = sin_rot[d]
+            bf = b[d] / (4.0 * math.pi * (1.0 - ny))
+            bf1 = b[d] / (2.0 * math.pi)
             denom1 = sqz + sqy + alpha
 
             # Pure-field gradient G (= Fdd - I); only 5 entries are nonzero.
@@ -536,7 +544,7 @@ def find_hg_population(
     cos_rot: np.ndarray,
     sin_rot: np.ndarray,
     *,
-    b: float = BURGERS_VECTOR,
+    b: float | np.ndarray = BURGERS_VECTOR,
     ny: float = POISSON_RATIO,
 ) -> np.ndarray:
     """NumPy-facing wrapper around ``_population_hg_kernel``.
@@ -544,12 +552,20 @@ def find_hg_population(
     Allocates the (X, 3, 3) output and ensures C-contiguous float64 inputs the
     kernel expects. ``rl_um`` is the lab-frame ray grid in MICROMETRES.
 
+    ``b`` is the per-dislocation Burgers magnitude (µm) — either a scalar (broadcast
+    to a uniform (N,) array) or an explicit (N,) array for HCP where ⟨a⟩ and ⟨c+a⟩
+    dislocations have different magnitudes. A scalar is broadcast and materialised as
+    a contiguous (N,) array; the per-d ``bf``/``bf1`` values in the kernel are then
+    identical to the old single pre-loop scalar → byte-identical.
+
     N=0 divergence: for an empty population (N=0) this kernel returns Hg=0
     (Fg=I), whereas the NumPy ``Fd_find_multi_dislocs_mixed`` path raises
     ValueError. N=0 is not reachable from ``build_dislocation_population``
     (always >=1 dislocation), so the two paths are equivalent for all real
     inputs.
     """
+    N = M.shape[0]
+    b_arr = np.ascontiguousarray(np.broadcast_to(np.asarray(b, dtype=np.float64), (N,)))
     X = rl_um.shape[1]
     Hg_out = np.empty((X, 3, 3), dtype=np.float64)
     _population_hg_kernel(
@@ -559,7 +575,7 @@ def find_hg_population(
         np.ascontiguousarray(Ud, dtype=np.float64),
         np.ascontiguousarray(cos_rot, dtype=np.float64),
         np.ascontiguousarray(sin_rot, dtype=np.float64),
-        float(b),
+        b_arr,
         float(ny),
         Hg_out,
     )
@@ -573,7 +589,7 @@ def find_hg_scene(
     Theta: np.ndarray,
     *,
     per_dislocation: bool = False,
-    b: float = BURGERS_VECTOR,
+    b: float | np.ndarray = BURGERS_VECTOR,
     ny: float = POISSON_RATIO,
     S: np.ndarray = _S_IDENTITY,
     engine: str = "numba",
@@ -606,7 +622,10 @@ def find_hg_scene(
         specs: ≥1 dislocation specs (Ud_mix, rotation_deg, position_lab_um).
         Theta: Lab-to-sample rotation, (3, 3).
         per_dislocation: also return each dislocation's solo Hg.
-        b, ny, S: as in `Fd_find_mixed`.
+        b: Burgers magnitude (µm) — scalar (broadcast to uniform (N,) array)
+            or explicit (N,) array for HCP where ⟨a⟩/⟨c+a⟩ differ. Scalar
+            path is byte-identical to the old scalar interface.
+        ny, S: as in `Fd_find_mixed`.
         engine: "numba" (fused kernel, the default, parity ≤1e-12) or "numpy"
             (bit-identical legacy composition). Pass engine="numpy" only to
             run the legacy bit-identical path for parity verification.
@@ -706,7 +725,7 @@ def _scene_perdis_hg_kernel(
     Ud: np.ndarray,  # (N, 3, 3)
     cos_rot: np.ndarray,  # (N,)
     sin_rot: np.ndarray,  # (N,)
-    b: float,
+    b: np.ndarray,  # (N,) float64 — per-dislocation Burgers magnitude (µm)
     ny: float,
     Hg_combined_out: np.ndarray,  # (X, 3, 3), written in place
     Hg_per_out: np.ndarray,  # (N, X, 3, 3), written in place
@@ -723,12 +742,13 @@ def _scene_perdis_hg_kernel(
     (verified by ``test_numba_perdis_combined_equals_combined_only``) and at
     parity ≤ rtol=1e-12 / atol=1e-14 with the NumPy oracle.
     fastmath=False on both kernels keeps parity at those tolerances.
+
+    ``b`` is a per-dislocation (N,) float64 array of Burgers magnitudes (µm).
+    Pass a uniform array for the cubic path — byte-identical to the old scalar.
     """
     X = rl_um.shape[1]
     N = M.shape[0]
     alpha = 1e-20
-    bf = b / (4.0 * math.pi * (1.0 - ny))
-    bf1 = b / (2.0 * math.pi)
 
     # Per-ray scratch reused across iterations (no per-ray heap allocation).
     G = np.zeros((3, 3))
@@ -765,6 +785,8 @@ def _scene_perdis_hg_kernel(
             nyf = 2.0 * ny * (sqx + sqy)
             c = cos_rot[d]
             s = sin_rot[d]
+            bf = b[d] / (4.0 * math.pi * (1.0 - ny))
+            bf1 = b[d] / (2.0 * math.pi)
             denom1 = sqz + sqy + alpha
 
             # Pure-field gradient G (= Fdd - I); only 5 entries are nonzero.
@@ -834,7 +856,7 @@ def _find_hg_scene_perdis_numba(
     cos_rot: np.ndarray,
     sin_rot: np.ndarray,
     *,
-    b: float,
+    b: float | np.ndarray,
     ny: float,
 ) -> tuple[np.ndarray, list[np.ndarray]]:
     """Numba fused per-dislocation Hg computation via _scene_perdis_hg_kernel.
@@ -844,9 +866,13 @@ def _find_hg_scene_perdis_numba(
     (combined, [per-dislocation list]). The solo arrays are VIEWS into the
     shared (n, X, 3, 3) backing array and are released together when solos go
     out of scope; by contrast the NumPy oracle returns independent copies.
+
+    ``b`` accepts a scalar (broadcast to uniform (n,)) or an explicit (n,) array
+    for HCP per-dislocation Burgers magnitudes. Scalar path is byte-identical.
     """
     X = rl_um.shape[1]
     n = M.shape[0]
+    b_arr = np.ascontiguousarray(np.broadcast_to(np.asarray(b, dtype=np.float64), (n,)))
     Hg_combined = np.empty((X, 3, 3), dtype=np.float64)
     Hg_per = np.empty((n, X, 3, 3), dtype=np.float64)
     _scene_perdis_hg_kernel(
@@ -856,7 +882,7 @@ def _find_hg_scene_perdis_numba(
         np.ascontiguousarray(Ud, dtype=np.float64),
         np.ascontiguousarray(cos_rot, dtype=np.float64),
         np.ascontiguousarray(sin_rot, dtype=np.float64),
-        float(b),
+        b_arr,
         float(ny),
         Hg_combined,
         Hg_per,
@@ -871,7 +897,7 @@ def _find_hg_scene_numpy(
     Theta: np.ndarray,
     *,
     per_dislocation: bool,
-    b: float,
+    b: float | np.ndarray,
     ny: float,
     S: np.ndarray,
 ) -> tuple[np.ndarray, list[np.ndarray] | None]:
@@ -892,8 +918,13 @@ def _find_hg_scene_numpy(
         (~106 MB per array at px510). This is the exact accumulation formula
         that ``Fd_find_multi_dislocs_mixed`` computes, so bit-identity is
         guaranteed.
+
+    ``b`` is broadcast to a (len(specs),) array so each spec gets its own
+    scalar |b| passed to ``Fd_find_mixed`` — matching the numba kernel's
+    per-dislocation indexing for byte-identical parity.
     """
     identity = np.identity(3)
+    b_arr = np.broadcast_to(np.asarray(b, dtype=float), (len(specs),))
 
     def _hg(Fg: np.ndarray) -> np.ndarray:
         return np.transpose(fast_inverse2(Fg), [0, 2, 1]) - identity
@@ -906,7 +937,7 @@ def _find_hg_scene_numpy(
             Ud_mix=spec.Ud_mix,
             rotation_deg=spec.rotation_deg,
             Theta=Theta,
-            b=b,
+            b=float(b_arr[0]),
             ny=ny,
             position_lab_um=spec.position_lab_um,
             S=S,
@@ -920,12 +951,12 @@ def _find_hg_scene_numpy(
             Ud_mix=spec.Ud_mix,
             rotation_deg=spec.rotation_deg,
             Theta=Theta,
-            b=b,
+            b=float(b_arr[i]),
             ny=ny,
             position_lab_um=spec.position_lab_um,
             S=S,
         )
-        for spec in specs
+        for i, spec in enumerate(specs)
     ]
     # Same accumulation order as Fd_find_multi_dislocs_mixed: zeros, then
     # += (Fg_i − I) in spec order, then + I — keeps the combined result
