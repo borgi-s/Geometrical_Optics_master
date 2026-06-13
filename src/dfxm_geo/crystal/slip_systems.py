@@ -28,6 +28,7 @@ class SlipFamily:
     name: str
     plane_family: tuple[int, int, int]
     burgers_family: tuple[int, int, int]
+    literal: bool = False  # when True: yield exactly this (b, n) pair, no symmetry expansion
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,13 @@ def _canon(v: tuple[int, int, int]) -> tuple[int, int, int]:
 
 
 def _enumerate_family(fam: SlipFamily) -> list[SlipSystem]:
+    if fam.literal:
+        # Literal families: yield exactly one system from the stored (b, n) pair,
+        # with no symmetry-orbit expansion. The b.n==0 check was done at registration.
+        n = fam.plane_family
+        b = fam.burgers_family
+        t = cast("tuple[int, int, int]", tuple(int(x) for x in np.cross(n, b)))
+        return [SlipSystem(b=b, n=n, t=t, family=fam.name)]
     planes = {_canon(p) for p in _variants(fam.plane_family)}
     burgers = _variants(fam.burgers_family)
     seen: set[tuple[tuple[int, int, int], tuple[int, int, int]]] = set()
@@ -186,6 +194,38 @@ def derive_structure_type(
             )
         return structure_type
     return "fcc"
+
+
+def register_custom(name: str, systems: list[dict]) -> None:
+    """Register a user-defined structure from ``[[crystal.slip_system]]`` entries.
+
+    Each entry: ``{"plane": (h, k, l), "burgers": (u, v, w)}``. Validates
+    b·n == 0. Stored as literal single-system families so
+    ``slip_systems(name)`` returns exactly those systems (no symmetry-orbit
+    expansion).
+
+    Args:
+        name: structure key (e.g. ``"custom:Fe"``); replaces any existing entry.
+        systems: list of dicts with "plane" and "burgers" keys (integer triples).
+
+    Raises:
+        ValueError: if any system has b·n != 0 (not a glide system).
+    """
+    fams: list[SlipFamily] = []
+    for i, s in enumerate(systems):
+        plane = tuple(int(x) for x in s["plane"])
+        b = tuple(int(x) for x in s["burgers"])
+        if b[0] * plane[0] + b[1] * plane[1] + b[2] * plane[2] != 0:
+            raise ValueError(f"custom slip system {i}: b.n != 0 (b={b}, n={plane}); not glide")
+        fams.append(
+            SlipFamily(
+                f"custom{i}",
+                cast("tuple[int, int, int]", plane),
+                cast("tuple[int, int, int]", b),
+                literal=True,
+            )
+        )
+    _REGISTRY[name] = tuple(fams)
 
 
 def burgers_magnitude(structure: str, family: str, cell: UnitCell) -> float:

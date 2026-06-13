@@ -82,6 +82,12 @@ _CRYSTAL_MOUNT_KEYS: frozenset[str] = frozenset(
         "mount_x",
         "mount_y",
         "mount_z",
+        # M4 Stage 4.3a: structure/material metadata + user slip-system hatch.
+        "structure_type",
+        "material",
+        "poisson_ratio",
+        "slip_families",
+        "slip_system",  # [[crystal.slip_system]] array-of-tables (user escape hatch)
     }
 )
 
@@ -794,12 +800,30 @@ class IdentificationConfig:
                 "zscan.render_per_dislocation=True requires include_secondary=True "
                 "(nothing to separate from a single primary dislocation)"
             )
-        # Validate the slip plane against the {111} family (also used in 'multi'
-        # mode as the starting / fallback plane).
-        try:
-            _burgers_vectors(self.crystal.slip_plane_normal)
-        except ValueError as exc:
-            raise ValueError(str(exc)) from exc
+        # Validate the slip plane against the crystal's slip families.
+        # With an oblique mount (geometry.mount is set), use the registry-driven
+        # plane_normals for the resolved structure (fcc/bcc/custom) so BCC and
+        # user-defined structures are accepted. Without a mount (simplified mode,
+        # no [crystal] mount block), fall back to the legacy FCC-only check so
+        # existing identify configs remain backward-compatible.
+        mount = self.geometry.mount
+        if mount is not None:
+            from dfxm_geo.crystal.slip_systems import plane_normals
+
+            structure = mount.resolved_structure_type
+            valid_planes = plane_normals(structure, families=None)
+            from dfxm_geo.crystal.slip_systems import _canon as _ss_canon
+
+            if _ss_canon(self.crystal.slip_plane_normal) not in valid_planes:
+                raise ValueError(
+                    f"slip_plane_normal {self.crystal.slip_plane_normal!r} is not a valid "
+                    f"slip plane for structure {structure!r}; valid: {valid_planes}"
+                )
+        else:
+            try:
+                _burgers_vectors(self.crystal.slip_plane_normal)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
 
 
 def load_identification_config(path: Path) -> IdentificationConfig:

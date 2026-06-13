@@ -89,6 +89,18 @@ def _crystal_mount_from_toml(data: dict | None, base_dir: Path | None = None) ->
         val = cif_vals.get(key)
         return float(val) if val is not None else None
 
+    # M4 Stage 4.3a: [[crystal.slip_system]] array-of-tables user escape hatch.
+    # When present, register the systems under a deterministic name and use it
+    # as the structure_type so the mount resolves slip systems correctly.
+    custom_slip = data.get("slip_system")
+    resolved_structure_type = data.get("structure_type")
+    if custom_slip is not None:
+        from dfxm_geo.crystal.slip_systems import register_custom
+
+        custom_name = f"custom:{data.get('material', 'user')}"
+        register_custom(custom_name, custom_slip)
+        resolved_structure_type = custom_name
+
     try:
         lattice = data.get("lattice", cif_vals.get("lattice"))
         if lattice is None:
@@ -105,9 +117,14 @@ def _crystal_mount_from_toml(data: dict | None, base_dir: Path | None = None) ->
             beta_deg=_opt("beta_deg"),
             gamma_deg=_opt("gamma_deg"),
             space_group=data.get("space_group", cif_vals.get("space_group")),
-            mount_x=tuple(int(x) for x in data["mount_x"]),  # type: ignore[arg-type]
-            mount_y=tuple(int(x) for x in data["mount_y"]),  # type: ignore[arg-type]
-            mount_z=tuple(int(x) for x in data["mount_z"]),  # type: ignore[arg-type]
+            mount_x=tuple(int(x) for x in data.get("mount_x", (1, 0, 0))),  # type: ignore[arg-type]
+            mount_y=tuple(int(x) for x in data.get("mount_y", (0, 1, 0))),  # type: ignore[arg-type]
+            mount_z=tuple(int(x) for x in data.get("mount_z", (0, 0, 1))),  # type: ignore[arg-type]
+            # M4 Stage 4.3a: structure/material metadata (all optional).
+            structure_type=resolved_structure_type,
+            material=data.get("material"),
+            poisson_ratio=float(data["poisson_ratio"]) if "poisson_ratio" in data else None,
+            slip_families=data.get("slip_families"),
         )
     except KeyError as exc:
         raise ValueError(f"[crystal] block missing key: {exc.args[0]}") from None
