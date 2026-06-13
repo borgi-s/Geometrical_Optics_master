@@ -712,6 +712,15 @@ class IdentificationCrystalConfig:
     exclude_invisibility: bool = True
     invisibility_threshold_deg: float = 10.0
 
+    def __post_init__(self) -> None:
+        spn = self.slip_plane_normal
+        if len(spn) == 4:
+            from dfxm_geo.crystal.slip_systems import hkil_to_hkl
+
+            object.__setattr__(self, "slip_plane_normal", hkil_to_hkl(tuple(int(x) for x in spn)))
+        elif len(spn) != 3:
+            raise ValueError(f"slip_plane_normal must be 3- or 4-index; got {spn!r}.")
+
 
 @dataclass(frozen=True, kw_only=True)
 class IdentificationNoiseConfig:

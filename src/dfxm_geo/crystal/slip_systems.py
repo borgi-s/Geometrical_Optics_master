@@ -430,8 +430,17 @@ def register_custom(name: str, systems: list[dict]) -> None:
     """
     fams: list[SlipFamily] = []
     for i, s in enumerate(systems):
-        plane = tuple(int(x) for x in s["plane"])
-        b = tuple(int(x) for x in s["burgers"])
+        plane_raw: tuple[int, ...] = tuple(int(x) for x in s["plane"])
+        b_raw: tuple[int, ...] = tuple(int(x) for x in s["burgers"])
+        # Accept 4-index Miller–Bravais notation for HCP users; convert to 3-index.
+        plane: tuple[int, ...] = (
+            hkil_to_hkl((plane_raw[0], plane_raw[1], plane_raw[2], plane_raw[3]))
+            if len(plane_raw) == 4
+            else plane_raw
+        )
+        b: tuple[int, ...] = (
+            uvtw_to_uvw((b_raw[0], b_raw[1], b_raw[2], b_raw[3])) if len(b_raw) == 4 else b_raw
+        )
         if b[0] * plane[0] + b[1] * plane[1] + b[2] * plane[2] != 0:
             raise ValueError(f"custom slip system {i}: b.n != 0 (b={b}, n={plane}); not glide")
         fams.append(
