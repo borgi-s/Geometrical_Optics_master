@@ -25,8 +25,8 @@ _POISSON_TABLE: Final[dict[str, tuple[float, str]]] = {
     "Mg": (0.29, "SW"),  # magnesium (HCP)
 }
 
-_DEFAULT_NU: Final[float] = 0.334  # Al [SW]
-_DEFAULT_SOURCE: Final[str] = "SW"
+_DEFAULT_NU: Final[float] = _POISSON_TABLE["Al"][0]
+_DEFAULT_SOURCE: Final[str] = _POISSON_TABLE["Al"][1]
 
 
 def poisson_ratio(*, override: "float | None", material: "str | None") -> float:
@@ -44,8 +44,18 @@ def poisson_ratio(*, override: "float | None", material: "str | None") -> float:
     return _DEFAULT_NU
 
 
-def poisson_source(material: "str | None") -> str:
-    """Citation tag for the resolved material's nu (for provenance)."""
-    if material is None:
-        return _DEFAULT_SOURCE
-    return _POISSON_TABLE.get(material, (0.0, "override"))[1]
+def poisson_source(*, override: "float | None", material: "str | None") -> str:
+    """Citation tag for the resolved nu (for provenance), mirroring poisson_ratio's
+    precedence: explicit override -> 'override'; material -> its table tag; else
+    the Al default tag. Raises for an unknown material (consistent with poisson_ratio).
+    """
+    if override is not None:
+        return "override"
+    if material is not None:
+        try:
+            return _POISSON_TABLE[material][1]
+        except KeyError:
+            raise ValueError(
+                f"unknown material {material!r}; known: {sorted(_POISSON_TABLE)}."
+            ) from None
+    return _DEFAULT_SOURCE

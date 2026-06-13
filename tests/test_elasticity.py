@@ -24,5 +24,11 @@ def test_unknown_material_raises():
 
 
 def test_poisson_source_returns_citation_tag():
-    assert poisson_source("Fe") in ("KL", "SW")
-    assert poisson_source(None) == "SW"  # default Al value source
+    assert poisson_source(override=None, material="Fe") in ("KL", "SW")
+    assert poisson_source(override=None, material=None) == "SW"  # default Al source
+    assert poisson_source(override=0.3, material=None) == "override"
+
+
+def test_poisson_source_unknown_material_raises():
+    with pytest.raises(ValueError, match="unknown material"):
+        poisson_source(override=None, material="Unobtainium")
