@@ -128,7 +128,8 @@ def migrate_npy_dir_to_h5(
         analytic_eval=None,
         loaded_kernel_path=kernel_npz,
     )
-    ctx = _fm.build_forward_context(theta_run, res, _HKL)
+    # migrate is cubic-only (legacy npy outputs were always simplified/FCC); cell=None.
+    ctx = _fm.build_forward_context(theta_run, res, _HKL, cell=None)
 
     Hg, q_hkl = _fm.Find_Hg(
         dis, ndis, _fm.psize, _fm.zl_rms, S=S, remount_name=sample_remount, ctx=ctx

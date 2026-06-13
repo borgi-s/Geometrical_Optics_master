@@ -177,6 +177,25 @@ class CenteredCrystalConfig:
     t: tuple[int, int, int] = (1, -2, 1)
 
     def __post_init__(self) -> None:
+        # Accept 4-index Miller–Bravais notation; convert to 3-index before validation.
+        # n is a PLANE (hkil → hkl); b and t are DIRECTIONS (uvtw → uvw).
+        # Mirror the pattern used in IdentificationCrystalConfig.__post_init__.
+        for field_name, field_val in (("b", self.b), ("n", self.n), ("t", self.t)):
+            raw: tuple[int, ...] = tuple(int(x) for x in field_val)
+            length = len(raw)
+            if length == 4:
+                from dfxm_geo.crystal.slip_systems import hkil_to_hkl, uvtw_to_uvw
+
+                idx4 = (raw[0], raw[1], raw[2], raw[3])
+                converted: tuple[int, int, int] = (
+                    hkil_to_hkl(idx4) if field_name == "n" else uvtw_to_uvw(idx4)
+                )
+                setattr(self, field_name, converted)
+            elif length != 3:
+                raise ValueError(
+                    f"[crystal.centered] {field_name} must be a 3- or 4-index tuple; "
+                    f"got length {length}: {field_val!r}"
+                )
         b = self.b
         n = self.n
         t = self.t
@@ -577,12 +596,27 @@ def _build_geometry_config(
     if not multi_reflection:
         reject_extinct(mount.space_group, reciprocal.hkl, "[reciprocal] hkl")
 
-    if not mount.cell.is_cubic:
+    if not mount.cell.is_cubic and mount.resolved_structure_type != "hcp":
+        # M4 Stage 4.3b delivered HCP (hexagonal) forward/identify; other
+        # non-cubic systems (orthorhombic/monoclinic/triclinic) still have no
+        # slip-system registry, so they remain unsupported in the pipeline.
+        # Common case: a hexagonal cell with no structure_type/space_group
+        # resolves to the back-compat default 'fcc' and lands here — point the
+        # user straight at the HCP knob rather than the generic message.
+        hcp_hint = ""
+        if mount.lattice in ("hexagonal", "trigonal"):
+            hcp_hint = (
+                f" This is a {mount.lattice} cell with no structure_type or "
+                "space_group, so it resolved to the default 'fcc'; set "
+                '[crystal] structure_type = "hcp" (or a P-hexagonal space_group / '
+                "CIF) to use HCP slip systems."
+            )
         raise ValueError(
-            "non-cubic cells are not yet supported in the forward/identify "
-            "pipeline (lands in M4 Stage 4.3 with general slip systems). "
-            "Stage 4.1 supports non-cubic lattices in dfxm-bootstrap and "
-            "dfxm-find-reflections."
+            f"non-cubic cells with resolved structure "
+            f"{mount.resolved_structure_type!r} are not yet supported in the "
+            f"forward/identify pipeline (only cubic FCC/BCC and hexagonal HCP "
+            f"are wired; M4 Stage 4.3b added HCP).{hcp_hint} Stage 4.1 supports "
+            "arbitrary non-cubic lattices in dfxm-bootstrap and dfxm-find-reflections."
         )
 
     if multi_reflection:
@@ -711,6 +745,15 @@ class IdentificationCrystalConfig:
     sweep_all_slip_planes: bool = True
     exclude_invisibility: bool = True
     invisibility_threshold_deg: float = 10.0
+
+    def __post_init__(self) -> None:
+        spn = self.slip_plane_normal
+        if len(spn) == 4:
+            from dfxm_geo.crystal.slip_systems import hkil_to_hkl
+
+            object.__setattr__(self, "slip_plane_normal", hkil_to_hkl(tuple(int(x) for x in spn)))
+        elif len(spn) != 3:
+            raise ValueError(f"slip_plane_normal must be 3- or 4-index; got {spn!r}.")
 
 
 @dataclass(frozen=True, kw_only=True)

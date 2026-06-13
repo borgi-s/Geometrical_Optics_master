@@ -144,6 +144,21 @@ class CrystalMount:
                 space_group=self.space_group,
                 lattice=self.lattice,
             )
+            # M4 Stage 4.3b: explicit hcp requires a hexagonal/trigonal lattice
+            # (only when no space group — the space group path is already authoritative).
+            if (
+                self.structure_type == "hcp"
+                and self.space_group is None
+                and self.lattice
+                not in (
+                    "hexagonal",
+                    "trigonal",
+                )
+            ):
+                raise ValueError(
+                    f"structure_type='hcp' requires a hexagonal/trigonal lattice; got "
+                    f"lattice={self.lattice!r}. (Set lattice='hexagonal' with a and c.)"
+                )
 
     @cached_property
     def cell(self) -> UnitCell:

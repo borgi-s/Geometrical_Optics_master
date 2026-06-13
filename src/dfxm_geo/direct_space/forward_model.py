@@ -24,10 +24,16 @@ from numba import njit
 from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
-from dfxm_geo.crystal.slip_systems import SlipSystem, burgers_magnitude, slip_systems
+from dfxm_geo.crystal.slip_systems import (
+    SlipSystem,
+    burgers_magnitude,
+    burgers_magnitude_of,
+    slip_systems,
+)
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
 if TYPE_CHECKING:
+    from dfxm_geo.crystal.cell import UnitCell
     from dfxm_geo.crystal.oblique import CrystalMount
     from dfxm_geo.pipeline import CrystalConfig, ReciprocalConfig, ScanConfig
     from dfxm_geo.reciprocal_space.analytic_resolution import AnalyticResolution
@@ -209,6 +215,7 @@ def Find_Hg(
     z_offset_um: float = 0.0,
     b: float = BURGERS_VECTOR,
     ny: float = POISSON_RATIO,
+    Ud_override: np.ndarray | None = None,
     ctx: "ForwardContext",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the displacement gradient field Hg and reciprocal vector q_hkl.
@@ -237,6 +244,15 @@ def Find_Hg(
             byte-identical to v2.x). A non-Al material/override passes the
             resolved ν so the wall displacement field uses the correct elasticity
             (M4 Stage 4.3a I2).
+        Ud_override: Dislocation→grain rotation. ``None`` uses the legacy FCC wall
+            ``Ud`` module global (byte-identical — FCC unchanged). Non-cubic
+            (BCC/HCP) walls pass the population's cell-aware ``Ud`` so the wall
+            renders in the correct crystal frame (M4 Stage 4.3b follow-up FU5).
+            ``Us`` stays the shared module/instrument ``Us`` (structure-independent
+            sample/grain frame setup). NOTE: the legacy module-global ``Ud`` is a
+            DIFFERENT {111}⟨110⟩ system than ``slip_systems("fcc")[0]``, so FCC
+            walls MUST keep ``None`` here to stay byte-identical — do not route FCC
+            through ``population.Ud[0]``.
         ctx: Required ForwardContext; geometry (rl/Theta/theta_0) and kernel-path
             provenance are sourced from it (#16 Slice 5 — no module globals).
 
@@ -255,8 +271,9 @@ def Find_Hg(
             f"{sorted(SAMPLE_REMOUNT_OPTIONS)}"
         )
 
-    Q_norm = np.sqrt(h * h + k * k + l * l)  # We have assumed B_0 = I
-    q_hkl = np.asarray([h, k, l]) / Q_norm
+    # q_hkl comes from the context (cell-aware via _q_hkl_unit in build_forward_context).
+    # h, k, l are kept as parameters to drive the cache filename + _vars.txt sidecar.
+    q_hkl = ctx.q_hkl
 
     # The cache key must include every parameter that affects the rl ray grid
     # shape: dis/psize/zl_rms determine the physics, Npixels/Nsub determine the
@@ -307,7 +324,18 @@ def Find_Hg(
         else ctx.geometry.rl
     )
     Theta_ = ctx.geometry.Theta
-    Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta_, dis, ndis, Fg_path, b=b, ny=ny, S=S)
+    # Effective dislocation→grain rotation: the module-global FCC wall ``Ud`` when
+    # no override is given (byte-identical — FCC unchanged), else the population's
+    # cell-aware ``Ud`` for a non-cubic (BCC/HCP) wall (FU5).
+    Ud_eff = Ud if Ud_override is None else Ud_override
+    # NOTE (deferred repo-audit #1): the Fg cache filename is keyed by
+    # dis/psize/zl_rms/Npixels/Nsub/remount/z/b/ny — NOT by Ud or theta_0. For FCC
+    # the Ud is constant so this is safe; for non-FCC the b/ny suffixes
+    # differentiate structures/materials in practice. With FU5, ``Ud`` is now
+    # structure-dependent, so a future non-FCC run with the SAME b/ny/theta but a
+    # DIFFERENT Ud would collide on the cache key — covered by the deferred
+    # geometry/structure-aware cache-key fix (repo-audit #1), not here.
+    Hg = load_or_generate_Hg(rl_eff, Ud_eff, Us, Theta_, dis, ndis, Fg_path, b=b, ny=ny, S=S)
 
     if not os.path.exists(Fg_path.replace(".npy", "_vars.txt")):
         _lkp = ctx.resolution.loaded_kernel_path
@@ -318,7 +346,7 @@ def Find_Hg(
             "theta_0 [rad]": ctx.geometry.theta_0,
             "Npixels": Npixels,
             "Nsub": Nsub,
-            "Ud": Ud.tolist(),
+            "Ud": Ud_eff.tolist(),
             "Us": Us.tolist(),
             "Theta": Theta_.tolist(),
             "ndis": ndis,
@@ -670,12 +698,27 @@ def build_geometry_context(
     )
 
 
+def _q_hkl_unit(hkl: "tuple[int, int, int]", cell: "UnitCell | None") -> np.ndarray:
+    """Unit reciprocal-lattice direction for ``hkl`` in the crystal Cartesian frame.
+
+    Cubic / no cell: ``q/|q|`` (B ∝ I → byte-identical to the v2.x form).
+    Non-cubic: ``norm(B·[h,k,l])`` — the metric-correct direction (HCP, M4 4.3b).
+    """
+    q = np.asarray(hkl, dtype=float)
+    if cell is None or cell.is_cubic:
+        return q / np.sqrt(float(q @ q))
+    g = cell.B @ q
+    return g / np.linalg.norm(g)
+
+
 def build_forward_context(
     theta_run: float,
     resolution: "ResolutionContext",
     hkl: "tuple[int, int, int]",
     instrument: "InstrumentContext | None" = None,
     omega: float = 0.0,
+    *,
+    cell: "UnitCell | None" = None,
 ) -> "ForwardContext":
     """Compose a context for a run from explicit theta, resolution, and hkl.
 
@@ -689,11 +732,14 @@ def build_forward_context(
 
     ``omega`` is the B' goniometer angle in radians (default 0.0); forwarded
     to ``GeometryContext`` and consumed ONLY by ``precompute_forward_static``.
+
+    ``cell`` is the resolved ``UnitCell`` from the crystal mount, used to
+    compute q_hkl via ``norm(B·hkl)`` for non-cubic crystals (HCP, M4 4.3b).
+    When ``None`` or cubic, falls back to the byte-identical ``q/|q|`` form.
     """
     instr = instrument if instrument is not None else build_instrument_context()
     geom = build_geometry_context(theta_run, instr, omega=omega)
-    q = np.asarray(hkl, dtype=float)
-    q_hkl_ = q / np.sqrt(float(q @ q))  # B_0=I form; bit-identical to Find_Hg (~line 385)
+    q_hkl_ = _q_hkl_unit(hkl, cell)  # B_0=I (cubic/None) or B·G (non-cubic, M4 4.3b)
     return ForwardContext(instrument=instr, geometry=geom, resolution=resolution, q_hkl=q_hkl_)
 
 
@@ -1091,6 +1137,10 @@ class DislocationPopulation:
     # override that changes ν (e.g. BCC Fe → 0.29) alters the displacement field
     # (intended). Threaded into the Hg kernels alongside ``b_um``.
     ny: float = POISSON_RATIO
+    # Per-dislocation Burgers magnitude (µm), HCP only (⟨a⟩ vs ⟨c+a⟩ differ).
+    # None → uniform ``b_um`` for the whole population (FCC/BCC/centered/wall) →
+    # byte-identical scalar path.  Shape (N,) when set.
+    b_um_per: np.ndarray | None = None
 
 
 def _ud_matrix_from_bnt(
@@ -1110,6 +1160,39 @@ def _ud_matrix_from_bnt(
     arr = np.asarray([b, n, t], dtype=np.float64)
     norms = np.linalg.norm(arr, axis=1, keepdims=True)
     Ud = (arr / norms).T  # columns = b_hat, n_hat, t_hat
+    if np.linalg.det(Ud) < 0:
+        Ud[:, 2] = -Ud[:, 2]
+    return Ud
+
+
+def _ud_matrix_from_bnt_cell(
+    b: tuple[int, int, int],
+    n: tuple[int, int, int],
+    cell: "UnitCell",
+    *,
+    t_int: tuple[int, int, int],
+) -> np.ndarray:
+    """Cell-aware Ud builder: [b̂ | n̂ | t̂] with the non-orthonormal frame handled.
+
+    Cubic cells delegate to ``_ud_matrix_from_bnt`` (treats Miller as Cartesian)
+    so FCC/BCC stay byte-identical — ``t_int`` is the existing integer line
+    direction (registry ``s.t`` or the centered config ``c.t``).
+
+    Non-cubic cells convert to Cartesian first: b̂ = norm(A·b) (real direction),
+    n̂ = norm(B·n) (reciprocal plane normal), t̂ = norm(n̂ × b̂) (the pure-edge
+    line; b̂ ⊥ n̂ holds because the system is glide, see the cell identity
+    AᵀB = 2πI). The supplied ``t_int`` is ignored for non-cubic — the physical
+    line direction must be computed in the Cartesian frame.
+    """
+    if cell.is_cubic:
+        return _ud_matrix_from_bnt(b, n, t_int)
+    b_hat = cell.A @ np.array(b, dtype=np.float64)
+    b_hat /= np.linalg.norm(b_hat)
+    n_hat = cell.B @ np.array(n, dtype=np.float64)
+    n_hat /= np.linalg.norm(n_hat)
+    t_hat = np.cross(n_hat, b_hat)
+    t_hat /= np.linalg.norm(t_hat)
+    Ud = np.column_stack([b_hat, n_hat, t_hat])
     if np.linalg.det(Ud) < 0:
         Ud[:, 2] = -Ud[:, 2]
     return Ud
@@ -1184,18 +1267,29 @@ def build_dislocation_population(
     override that changes ν alters the displacement field.
     """
     structure, systems, b_um, ny = _resolve_structure_systems_b(mount)
+    cell = mount.cell if mount is not None else None
 
     if crystal.mode == "centered":
         c = crystal.centered
         assert c is not None  # __post_init__ guarantees
         positions = np.zeros((1, 3), dtype=np.float64)
-        Ud = _ud_matrix_from_bnt(c.b, c.n, c.t)[np.newaxis, :, :]  # (1, 3, 3)
+        if cell is None or cell.is_cubic:
+            Ud = _ud_matrix_from_bnt(c.b, c.n, c.t)[np.newaxis, :, :]  # (1, 3, 3)
+        else:
+            Ud = _ud_matrix_from_bnt_cell(c.b, c.n, cell, t_int=c.t)[np.newaxis, :, :]
         # Centered carries an explicit (b, n, t) only; |b| comes from the
         # structure-resolved b_um (same as wall/random). For FCC (or mount=None)
-        # this is BURGERS_VECTOR — byte-identical to v2.x. For non-FCC mounts
+        # this is BURGERS_VECTOR — byte-identical to v2.x. For non-FCC cubic mounts
         # (e.g. BCC) it is the cell-derived magnitude so the Hg kernel uses
-        # the correct |b|.
-        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None, b_um=b_um, ny=ny)
+        # the correct |b|. For HCP the user-supplied b direction sets the exact |b|.
+        b_centered = (
+            b_um
+            if (cell is None or cell.is_cubic)
+            else burgers_magnitude_of(c.b, cell, fraction=1.0)
+        )
+        return DislocationPopulation(
+            positions_um=positions, Ud=Ud, sidecar=None, b_um=b_centered, ny=ny
+        )
 
     if crystal.mode == "wall":
         w = crystal.wall
@@ -1210,9 +1304,20 @@ def build_dislocation_population(
         # {111}/<-110>/<11-2> system (the Borgi/Purdue layout), so the wall
         # population Ud stays byte-identical to v2.x.
         s0 = systems[0]
-        Ud_single = _ud_matrix_from_bnt(s0.b, s0.n, s0.t)
+        if cell is None or cell.is_cubic:
+            Ud_single = _ud_matrix_from_bnt(s0.b, s0.n, s0.t)
+        else:
+            Ud_single = _ud_matrix_from_bnt_cell(s0.b, s0.n, cell, t_int=s0.t)
         Ud = np.broadcast_to(Ud_single, (w.ndis, 3, 3)).copy()
-        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None, b_um=b_um, ny=ny)
+        # |b| for the wall's single system (HCP: that system's family magnitude).
+        b_wall = (
+            b_um
+            if (cell is None or cell.is_cubic)
+            else burgers_magnitude_of(s0.b, cell, fraction=1.0)
+        )
+        return DislocationPopulation(
+            positions_um=positions, Ud=Ud, sidecar=None, b_um=b_wall, ny=ny
+        )
 
     if crystal.mode == "random_dislocations":
         rd = crystal.random_dislocations
@@ -1274,22 +1379,39 @@ def build_dislocation_population(
         # picks the SAME (b, n, t) per dislocation as v2.x — byte-identical draw.
         slip_indices = rng.integers(0, len(systems), size=rd.ndis)
         Ud = np.zeros((rd.ndis, 3, 3), dtype=np.float64)
+        is_cubic = cell is None or cell.is_cubic
+        b_per: np.ndarray | None = None if is_cubic else np.empty(rd.ndis, dtype=np.float64)
         sidecar_dislocations: list[dict] = []
         for i in range(rd.ndis):
             s = systems[slip_indices[i]]
             b, n, t = s.b, s.n, s.t
-            Ud[i] = _ud_matrix_from_bnt(b, n, t)
-            sidecar_dislocations.append(
-                {
-                    "index": i,
-                    "x_um": float(positions[i, 0]),
-                    "y_um": float(positions[i, 1]),
-                    "z_um": float(positions[i, 2]),
-                    "b": list(b),
-                    "n": list(n),
-                    "t": list(t),
-                }
-            )
+            if is_cubic:
+                Ud[i] = _ud_matrix_from_bnt(b, n, t)
+            else:
+                assert cell is not None  # guarded by is_cubic = cell is None or cell.is_cubic
+                assert b_per is not None  # is_cubic False -> b_per allocated above
+                Ud[i] = _ud_matrix_from_bnt_cell(b, n, cell, t_int=t)
+                b_per[i] = burgers_magnitude_of(b, cell, fraction=1.0)
+            entry: dict = {
+                "index": i,
+                "x_um": float(positions[i, 0]),
+                "y_um": float(positions[i, 1]),
+                "z_um": float(positions[i, 2]),
+                "b": list(b),
+                "n": list(n),
+                "t": list(t),
+                "family": s.family,
+            }
+            if not is_cubic:
+                # For non-cubic (HCP) crystals the integer t (= n×b) is only a
+                # deterministic placeholder; the physical line direction is the
+                # Cartesian Ud third column, and |b| varies per dislocation
+                # (⟨a⟩ vs ⟨c+a⟩). Record both for honest provenance. Cubic
+                # sidecars keep the legacy keys/order byte-identically.
+                assert b_per is not None  # is_cubic False -> b_per allocated above
+                entry["t_cartesian"] = Ud[i][:, 2].tolist()
+                entry["burgers_magnitude_um"] = float(b_per[i])
+            sidecar_dislocations.append(entry)
 
         sidecar = {
             "ndis": rd.ndis,
@@ -1303,7 +1425,7 @@ def build_dislocation_population(
             "dislocations": sidecar_dislocations,
         }
         return DislocationPopulation(
-            positions_um=positions, Ud=Ud, sidecar=sidecar, b_um=b_um, ny=ny
+            positions_um=positions, Ud=Ud, sidecar=sidecar, b_um=b_um, ny=ny, b_um_per=b_per
         )
 
     raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
@@ -1346,6 +1468,9 @@ def _find_hg_from_population_numpy(
     truth the kernel is checked against at rtol=1e-12.
 
     Args:
+        h, k, l: Miller indices — accepted for call-site compatibility; IGNORED
+            (q_hkl is sourced from ctx, set cell-correctly by
+            build_forward_context).
         ctx: Required ForwardContext (#16 Slice 5). ``Us``, ``Theta``, and
             ``rl`` (when the explicit kwarg is None) are sourced from it —
             mirrors ``Find_Hg_from_population`` so parity holds for both the
@@ -1358,8 +1483,8 @@ def _find_hg_from_population_numpy(
     Us_ = ctx.instrument.Us
     Theta_ = ctx.geometry.Theta
 
-    Q_norm = np.sqrt(h * h + k * k + l * l)
-    q_hkl = np.asarray([h, k, l]) / Q_norm
+    # q_hkl comes from the context (cell-aware via _q_hkl_unit in build_forward_context).
+    q_hkl = ctx.q_hkl
 
     # Build MixedDislocSpec per dislocation. Fd_find_multi_dislocs_mixed
     # supports per-crystal Ud + lab-frame offset. Honour each dislocation's
@@ -1387,8 +1512,11 @@ def _find_hg_from_population_numpy(
     # Returns shape (X, 3, 3) with identity already added (Fg, not Fdd).
     # |b| and ν from the population (FCC/Al -> BURGERS_VECTOR / POISSON_RATIO ==
     # defaults, byte-identical; non-FCC -> cell-derived |b| + material ν).
+    # HCP random_dislocations: b_um_per is a per-dislocation (N,) array (⟨a⟩ vs ⟨c+a⟩).
+    # Cubic (b_um_per is None): uniform scalar → broadcast inside Fd_find_multi_dislocs_mixed.
+    b_eff = population.b_um_per if population.b_um_per is not None else population.b_um
     Fg = Fd_find_multi_dislocs_mixed(
-        rl_eff * 1e6, Us_, crystals, Theta_, b=population.b_um, ny=population.ny, S=S
+        rl_eff * 1e6, Us_, crystals, Theta_, b=b_eff, ny=population.ny, S=S
     )
 
     # Convert Fg → Hg using the same convention as load_or_generate_Hg:
@@ -1422,7 +1550,9 @@ def Find_Hg_from_population(
 
     Args:
         population: DislocationPopulation from `build_dislocation_population`.
-        h, k, l: Miller indices of the active reflection.
+        h, k, l: Miller indices — accepted for call-site compatibility; IGNORED
+            (q_hkl is sourced from ctx, set cell-correctly by
+            build_forward_context).
         S: 3x3 sample-remount rotation (default identity).
         rl: Detector ray grid to evaluate the strain on. Defaults to
             ``ctx.geometry.rl``. Pass `Z_shift(z_um, xl_range=ctx.geometry.xl_range)`
@@ -1439,8 +1569,8 @@ def Find_Hg_from_population(
 
     # rl precedence: explicit kwarg > ctx.geometry.rl.
     rl_eff = rl if rl is not None else ctx.geometry.rl
-    Q_norm = np.sqrt(h * h + k * k + l * l)
-    q_hkl = np.asarray([h, k, l]) / Q_norm
+    # q_hkl comes from the context (cell-aware via _q_hkl_unit in build_forward_context).
+    q_hkl = ctx.q_hkl
 
     n = len(population.positions_um)
     # Collapse the per-dislocation transform to M_d = Ud_d.T @ Us.T @ S.T @ Theta.
@@ -1465,7 +1595,10 @@ def Find_Hg_from_population(
     # exactly as the NumPy path and the reference disloc_identify.py do.
     # |b| and ν from the population (FCC/Al -> BURGERS_VECTOR / POISSON_RATIO ==
     # defaults, byte-identical; non-FCC -> cell-derived |b| + material ν).
+    # HCP random_dislocations: b_um_per is a per-dislocation (N,) array (⟨a⟩ vs ⟨c+a⟩).
+    # Cubic (b_um_per is None): uniform scalar → broadcast to (N,) inside find_hg_population.
+    b_eff = population.b_um_per if population.b_um_per is not None else population.b_um
     Hg = find_hg_population(
-        rl_eff * 1e6, M, offset, Ud, cos_rot, sin_rot, b=population.b_um, ny=population.ny
+        rl_eff * 1e6, M, offset, Ud, cos_rot, sin_rot, b=b_eff, ny=population.ny
     )
     return Hg, q_hkl

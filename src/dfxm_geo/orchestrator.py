@@ -35,7 +35,7 @@ from dfxm_geo.config import (
     _identification_config_to_toml_str,
     run_theta,
 )
-from dfxm_geo.constants import POISSON_RATIO
+from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
 from dfxm_geo.crystal.burgers import (
     burgers_vectors as _burgers_vectors,
 )
@@ -66,6 +66,9 @@ from dfxm_geo.crystal.slip_systems import (
     burgers_in_plane_int as _burgers_in_plane_int,
 )
 from dfxm_geo.crystal.slip_systems import (
+    burgers_magnitude_of as _burgers_magnitude_of,
+)
+from dfxm_geo.crystal.slip_systems import (
     plane_normals as _plane_normals,
 )
 from dfxm_geo.io.hdf5 import (
@@ -82,6 +85,7 @@ from dfxm_geo.io.hdf5 import (
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
 if TYPE_CHECKING:
+    from dfxm_geo.crystal.cell import UnitCell
     from dfxm_geo.crystal.oblique import CrystalMount
 
 # #16: module-level cache so repeated _lookup_and_load_kernel calls for the same
@@ -248,16 +252,28 @@ def _resolution_for_run(
     return _load_resolution(recip_run, geom_run, skip_hkl_check=True)
 
 
+def _mount_cell(config: SimulationConfig | IdentificationConfig) -> UnitCell | None:
+    """The resolved UnitCell when an oblique mount is present, else None (cubic q_hkl)."""
+    mount = config.geometry.mount
+    return mount.cell if mount is not None else None
+
+
 def _context_for_run(
     res: fm.ResolutionContext,
     run: _ReflectionRun,
+    cell: UnitCell | None = None,
 ) -> fm.ForwardContext:
     """Build a ``ForwardContext`` for a single ``ReflectionRun``.
 
     Wraps ``fm.build_forward_context`` with the run's Bragg angle, hkl, and
     omega so the orchestrator loop has a single call-site.
+
+    ``cell`` routes q_hkl through cell.B for non-cubic crystals
+    (``None`` → cubic q/|q|, M4 4.3b).  Pass ``_mount_cell(config)`` at
+    call sites that have a config; tests that only need the 2-arg form can
+    omit it.
     """
-    return fm.build_forward_context(run.theta, res, run.hkl, omega=run.omega)
+    return fm.build_forward_context(run.theta, res, run.hkl, omega=run.omega, cell=cell)
 
 
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
@@ -374,12 +390,13 @@ def _run_simulation_inner(
     # run's hkl and omega into the ForwardContext; single-reflection uses the
     # config-level hkl with omega=0 (the original code path).
     if reflection is not None:
-        ctx = _context_for_run(res, reflection)
+        ctx = _context_for_run(res, reflection, cell=_mount_cell(config))
     else:
         ctx = fm.build_forward_context(
             run_theta(config),
             res,
             config.reciprocal.hkl,
+            cell=_mount_cell(config),
         )
 
     # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
@@ -390,11 +407,24 @@ def _run_simulation_inner(
         w = config.crystal.wall
         assert w is not None
         S = SAMPLE_REMOUNT_OPTIONS[w.sample_remount]
+        # FU5: route the population's cell-aware Ud into the wall Find_Hg for
+        # non-cubic structures. FCC (mount None or resolved fcc) MUST pass
+        # Ud_override=None — the module-global FCC wall Ud is a DIFFERENT
+        # {111}⟨110⟩ system than population.Ud[0] (slip_systems("fcc")[0]), so
+        # routing FCC through population.Ud[0] would change the bytes. BCC/HCP
+        # walls were silently rendering with the FCC Ud before this fix; now they
+        # use the wall's single cell-aware system (population.Ud[0], broadcast
+        # across all dislocations by build_dislocation_population's wall branch).
+        _mount = config.geometry.mount
+        _wall_is_fcc = _structure_is_fcc(_mount)
+        _wall_Ud_override = None if _wall_is_fcc else population.Ud[0]
 
         def Hg_provider(z: float) -> tuple[np.ndarray, np.ndarray]:
             # population.b_um is BURGERS_VECTOR / population.ny is POISSON_RATIO
             # for FCC/Al (byte-identical to v2.x); the cell-derived |b| + material
-            # ν for non-FCC walls (M4 Stage 4.3a + I2).
+            # ν for non-FCC walls (M4 Stage 4.3a + I2). Ud_override is None for FCC
+            # (legacy module-global Ud — byte-identical) and the wall's cell-aware
+            # Ud for non-cubic (FU5).
             return fm.Find_Hg(
                 w.dis,
                 w.ndis,
@@ -408,6 +438,7 @@ def _run_simulation_inner(
                 z_offset_um=z,
                 b=population.b_um,
                 ny=population.ny,
+                Ud_override=_wall_Ud_override,
                 ctx=ctx,
             )
 
@@ -573,6 +604,7 @@ def run_postprocess(
         run_theta(config),
         res,
         config.reciprocal.hkl,
+        cell=_mount_cell(config),
     )
 
     phi_steps = config.scan.phi.steps or 1
@@ -801,10 +833,17 @@ def _identify_title(scan_mode: str, n_frames: int, scan: ScanConfig) -> str:
     return f"identify-{scan_mode} N_frames={n_frames}"
 
 
-def _q_unit(hkl: tuple[int, int, int] | list[int]) -> np.ndarray:
-    """Return the unit diffraction vector for hkl (float64, length 1)."""
-    q = np.asarray(hkl, dtype=float)
-    return q / np.linalg.norm(q)
+def _q_unit(hkl: tuple[int, int, int] | list[int], cell: UnitCell | None = None) -> np.ndarray:
+    """Return the unit diffraction vector for hkl (float64, length 1).
+
+    Cubic / no cell: ``q/|q|`` (Miller-as-Cartesian; B ∝ I → byte-identical to
+    the v2.x form). Non-cubic (HCP): ``norm(B·hkl)`` — the metric-correct
+    reciprocal direction in the crystal Cartesian frame (M4 4.3b). Delegates to
+    ``fm._q_hkl_unit`` so the single- and multi-reflection identify paths share
+    one q routing.
+    """
+    hkl3: tuple[int, int, int] = (int(hkl[0]), int(hkl[1]), int(hkl[2]))
+    return fm._q_hkl_unit(hkl3, cell)
 
 
 def _passes_invisibility(
@@ -857,9 +896,13 @@ def _iter_identification_single(
     # Structure-aware plane sweep + Burgers tables (resolved ONCE). FCC
     # (mount None or resolved fcc) → v2.x bit-identical path; BCC/custom →
     # registry-driven. See _resolve_identify_planes_and_burgers.
-    all_planes, _burgers_fn, _burgers_int_fn = _resolve_identify_planes_and_burgers(
-        config.geometry.mount
+    all_planes, _burgers_fn, _burgers_int_fn, _burgers_mag_fn = (
+        _resolve_identify_planes_and_burgers(config.geometry.mount)
     )
+    # Crystal cell for the Cartesian (HCP) frame; None or cubic → Miller path
+    # (byte-identical). M4 4.3b.
+    _cell = _mount_cell(config)
+    _is_cubic = _cell is None or _cell.is_cubic
     # Poisson ratio for the displacement field (M4 4.3a I2). Al/FCC → 0.334
     # (byte-identical to v2.x); a material/override changes the physics.
     _ny = _resolve_identify_ny(config.geometry.mount)
@@ -905,7 +948,13 @@ def _iter_identification_single(
                 else list(range(len(b_table)))
             )
             b_subset = b_table[b_indices]
-            n_arr_unnorm = np.asarray(plane, dtype=float)
+            # Plane normal: Miller-as-Cartesian for cubic (byte-identical),
+            # n̂ = norm(B·plane) for non-cubic (HCP) — the metric-correct normal.
+            if _is_cubic:
+                n_arr_unnorm = np.asarray(plane, dtype=float)
+            else:
+                assert _cell is not None
+                n_arr_unnorm = _cell.B @ np.asarray(plane, dtype=float)
             n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
             rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
             Ud_all = _ud_matrices(n_arr, rotated)
@@ -931,6 +980,7 @@ def _iter_identification_single(
                             )
                         ],
                         Theta_,
+                        b=_burgers_mag_fn(plane, b_idx),
                         ny=_ny,
                     )
 
@@ -1041,27 +1091,37 @@ def _resolve_identify_planes_and_burgers(
     list[tuple[int, int, int]],
     Callable[[tuple[int, int, int]], np.ndarray],
     Callable[[tuple[int, int, int], int], np.ndarray],
+    Callable[[tuple[int, int, int], int], float],
 ]:
-    """Resolve (plane sweep, unit-Burgers fn, integer-Burgers-label fn) for identify.
+    """Resolve (plane sweep, unit-Burgers fn, int-label fn, |b| fn) for identify.
 
     Shared by the three identify iterators so the FCC-vs-non-FCC branch lives in
     one place. Resolves the mount's structure/families ONCE (not per-plane).
 
-    Returns three things, indexed consistently by ``b_idx``:
+    Returns four things, indexed consistently by ``b_idx``:
     - ``planes``: the slip-plane sweep list.
     - ``burgers_fn(plane) -> (m, 3)``: per-vector UNIT-normalized Burgers (the
-      drop-in for the old ``_burgers_vectors(plane)`` — drives Ud + g·b).
+      drop-in for the old ``_burgers_vectors(plane)`` — drives Ud + g·b). For
+      non-cubic (HCP) these are CARTESIAN units (``norm(A·b_int)``), so the
+      downstream Ud + g·b are computed in the crystal Cartesian frame (M4 4.3b).
     - ``burgers_int_fn(plane, b_idx) -> (3,)``: the INTEGER (u, v, w) Burgers
       label for HDF5, aligned with ``burgers_fn`` row ``b_idx``.
+    - ``burgers_mag_fn(plane, b_idx) -> float``: the per-candidate |b| in µm fed
+      to ``find_hg_scene(b=...)``. FCC/cubic (incl. BCC) return the scalar
+      ``BURGERS_VECTOR`` (byte-identical — identify's default); HCP returns the
+      candidate's true |b| (⟨a⟩ = a vs ⟨c+a⟩ = √(a²+c²)).
 
     FCC (``mount is None`` OR ``resolved_structure_type == "fcc"``): EXACT v2.x
     behaviour — ``_ALL_111_PLANES`` + ``_burgers_vectors`` + the ``*√2`` integer
-    reconstruction. This path is byte-identical and must stay so.
+    reconstruction + the ``BURGERS_VECTOR`` default magnitude. This path is
+    byte-identical and must stay so.
 
-    Non-FCC (BCC, custom): ``plane_normals(structure, families)`` +
+    Non-FCC (BCC, custom, HCP): ``plane_normals(structure, families)`` +
     ``burgers_in_plane(structure, plane, families)`` + the registry integer
     Burgers (``burgers_in_plane_int``) — NOT ``*√2`` (that ⟨110⟩ assumption is
-    wrong for BCC ⟨111⟩).
+    wrong for BCC ⟨111⟩). Cubic (BCC) keeps the Miller-as-Cartesian units and
+    the ``BURGERS_VECTOR`` default magnitude (byte-identical); only non-cubic
+    (HCP) converts to Cartesian and computes the per-candidate |b|.
     """
     structure = mount.resolved_structure_type if mount is not None else "fcc"
     if structure == "fcc":
@@ -1078,23 +1138,47 @@ def _resolve_identify_planes_and_burgers(
                 dtype=np.int32,
             )
 
-        return _ALL_111_PLANES, _burgers_vectors, _fcc_int
+        def _fcc_mag(plane: tuple[int, int, int], b_idx: int) -> float:
+            # FCC identify uses find_hg_scene's default magnitude (byte-identical).
+            return BURGERS_VECTOR
+
+        return _ALL_111_PLANES, _burgers_vectors, _fcc_int, _fcc_mag
 
     # Non-FCC: registry-driven plane sweep + integer Burgers from the registry.
-    fams = list(mount.slip_families) if (mount is not None and mount.slip_families) else None
+    # ``mount`` is not None here (only mount=None resolves to "fcc" above).
+    assert mount is not None
+    cell = mount.cell
+    is_cubic = cell.is_cubic
+    fams = list(mount.slip_families) if mount.slip_families else None
     planes = _plane_normals(structure, families=fams)
 
     def _nonfcc_burgers(plane: tuple[int, int, int]) -> np.ndarray:
-        return _burgers_in_plane(structure, plane, families=fams)
+        units_miller = _burgers_in_plane(structure, plane, families=fams)  # (m, 3) ±units
+        if is_cubic:
+            # BCC: keep Miller-as-Cartesian units (byte-identical to 4.3a).
+            return units_miller
+        # HCP: convert the aligned integer Burgers to Cartesian and re-normalize.
+        ints = _burgers_in_plane_int(structure, plane, families=fams).astype(np.float64)  # (m, 3)
+        cart = (cell.A @ ints.T).T  # (m, 3) metres
+        return cart / np.linalg.norm(cart, axis=1, keepdims=True)
 
     def _nonfcc_int(plane: tuple[int, int, int], b_idx: int) -> np.ndarray:
         return _burgers_in_plane_int(structure, plane, families=fams)[b_idx].astype(np.int32)
 
-    return planes, _nonfcc_burgers, _nonfcc_int
+    def _nonfcc_mag(plane: tuple[int, int, int], b_idx: int) -> float:
+        if is_cubic:
+            # BCC identify kept the v2.x default magnitude (byte-identical).
+            return BURGERS_VECTOR
+        b_int = _burgers_in_plane_int(structure, plane, families=fams)[b_idx]
+        return _burgers_magnitude_of(
+            (int(b_int[0]), int(b_int[1]), int(b_int[2])), cell, fraction=1.0
+        )
+
+    return planes, _nonfcc_burgers, _nonfcc_int, _nonfcc_mag
 
 
-def _identify_structure_is_fcc(mount: CrystalMount | None) -> bool:
-    """True when the identify run uses the FCC byte-identical path (mount None or fcc)."""
+def _structure_is_fcc(mount: CrystalMount | None) -> bool:
+    """True when the run uses the FCC byte-identical path (mount None or fcc)."""
     return mount is None or mount.resolved_structure_type == "fcc"
 
 
@@ -1118,15 +1202,28 @@ def _draw_dislocation(
     planes: list[tuple[int, int, int]] | None = None,
     burgers_fn: Callable[[tuple[int, int, int]], np.ndarray] | None = None,
     burgers_int_fn: Callable[[tuple[int, int, int], int], np.ndarray] | None = None,
+    burgers_mag_fn: Callable[[tuple[int, int, int], int], float] | None = None,
+    cell: UnitCell | None = None,
 ) -> dict[str, Any]:
     """Draw a single random dislocation (slip plane, Burgers idx, angle, position).
 
-    Structure-aware via the optional (planes, burgers_fn, burgers_int_fn) triple
-    from ``_resolve_identify_planes_and_burgers``. ALL THREE default to the FCC
+    Structure-aware via the optional structure params
+    (planes, burgers_fn, burgers_int_fn, burgers_mag_fn, cell)
+    from ``_resolve_identify_planes_and_burgers``. All default to the FCC
     objects (``_ALL_111_PLANES`` / ``_burgers_vectors`` / the ``*√2`` reconstruction)
     so a bare ``_draw_dislocation(rng, pos)`` call is byte-identical to v2.x — the
     RNG draw ``rng.integers(0, len(planes))`` stays ``len(_ALL_111_PLANES)`` == 4
     and indexes into the same plane list, preserving the multi/z-scan stream.
+
+    ``burgers_mag_fn`` (M4 4.3b): when given, records the candidate's |b| (µm)
+    under ``"b_um"`` so the multi/zscan iterators can pass a per-dislocation |b|
+    array to ``find_hg_scene``. Defaults to ``BURGERS_VECTOR`` (byte-identical).
+
+    ``cell`` (M4 4.3b): when non-cubic (HCP), the plane normal n̂ = norm(B·plane)
+    and the Burgers units (already Cartesian from ``burgers_fn``) build the Ud in
+    the crystal Cartesian frame, and ``"b_gb"`` carries the Cartesian Burgers for
+    g·b. Cubic / None keeps the Miller path (byte-identical). The integer HDF5
+    label (``"b_vec"``) is unchanged in all paths.
     """
     if planes is None:
         planes = _ALL_111_PLANES
@@ -1139,28 +1236,41 @@ def _draw_dislocation(
     alpha = float(rng.uniform(0.0, 360.0))
     pos = (float(rng.normal(0.0, pos_std_um)), float(rng.normal(0.0, pos_std_um)), 0.0)
 
-    n = np.asarray(plane, dtype=float)
+    # Plane normal: Miller-as-Cartesian for cubic/None (byte-identical),
+    # n̂ = norm(B·plane) for non-cubic (HCP).
+    if cell is None or cell.is_cubic:
+        n = np.asarray(plane, dtype=float)
+    else:
+        n = cell.B @ np.asarray(plane, dtype=float)
     n_unit = n / np.linalg.norm(n)
     rotated = _rotated_t_vectors(n_unit, b_table[b_idx : b_idx + 1], np.array([alpha]))
     Ud = _ud_matrices(n_unit, rotated)[0, 0]
 
     # b_vec is the INTEGER Burgers (drives the HDF5 label via round() in
-    # _build_dislocation_sample_entry, and g·b which normalizes either way).
-    # FCC default: unit ⟨110⟩ * √2 (bit-identical). Non-FCC: registry integers.
+    # _build_dislocation_sample_entry). FCC default: unit ⟨110⟩ * √2
+    # (bit-identical). Non-FCC: registry integers.
     if burgers_int_fn is None:
         # FCC path: caller passes None to keep the v2.x float b_vec.
         b_vec = b_table[b_idx] * np.sqrt(2)
     else:
         b_vec = burgers_int_fn(plane, b_idx).astype(float)
 
-    return {
+    # b_gb drives g·b. Cubic: same as the integer/√2 b_vec (Miller is Cartesian
+    # there). Non-cubic (HCP): the Cartesian Burgers unit from burgers_fn — g·b
+    # normalizes both inputs, so the unit is sufficient and metric-correct.
+    b_gb = b_vec if (cell is None or cell.is_cubic) else b_table[b_idx]
+
+    out: dict[str, Any] = {
         "plane": plane,
         "b_idx": b_idx,
         "b_vec": b_vec,
+        "b_gb": b_gb,
         "alpha_deg": alpha,
         "pos_um": pos,
         "Ud": Ud,
     }
+    out["b_um"] = burgers_mag_fn(plane, b_idx) if burgers_mag_fn is not None else BURGERS_VECTOR
+    return out
 
 
 def _build_dislocation_sample_entry(d: dict[str, Any]) -> dict[str, Any]:
@@ -1213,13 +1323,17 @@ def _iter_identification_multi(
     # Structure-aware plane sweep + Burgers tables (resolved ONCE). FCC → the
     # v2.x objects, so the per-draw RNG stream stays byte-identical. See
     # _resolve_identify_planes_and_burgers / _draw_dislocation.
-    _planes, _burgers_fn, _burgers_int_fn = _resolve_identify_planes_and_burgers(
+    _planes, _burgers_fn, _burgers_int_fn, _burgers_mag_fn = _resolve_identify_planes_and_burgers(
         config.geometry.mount
     )
+    # Crystal cell for the Cartesian (HCP) frame; None or cubic → Miller path
+    # (byte-identical). M4 4.3b.
+    _cell = _mount_cell(config)
+    _is_cubic = _cell is None or _cell.is_cubic
     # FCC: pass burgers_int_fn=None so _draw_dislocation keeps b_vec as the v2.x
     # float array (unit * √2), not a newly constructed int->float array — byte-identical
     # to v2.x output. Non-FCC: registry integer Burgers.
-    _draw_int_fn = None if _identify_structure_is_fcc(config.geometry.mount) else _burgers_int_fn
+    _draw_int_fn = None if _structure_is_fcc(config.geometry.mount) else _burgers_int_fn
     # Poisson ratio for the displacement field (M4 4.3a I2). Al/FCC → 0.334
     # (byte-identical to v2.x); a material/override changes the physics.
     _ny = _resolve_identify_ny(config.geometry.mount)
@@ -1263,6 +1377,8 @@ def _iter_identification_multi(
                 planes=_planes,
                 burgers_fn=_burgers_fn,
                 burgers_int_fn=_draw_int_fn,
+                burgers_mag_fn=_burgers_mag_fn,
+                cell=_cell,
             )
             d2 = _draw_dislocation(
                 param_rng,
@@ -1270,6 +1386,8 @@ def _iter_identification_multi(
                 planes=_planes,
                 burgers_fn=_burgers_fn,
                 burgers_int_fn=_draw_int_fn,
+                burgers_mag_fn=_burgers_mag_fn,
+                cell=_cell,
             )
 
             # Combined-scene Hg (sum of both dislocations)
@@ -1288,12 +1406,15 @@ def _iter_identification_multi(
             # W2 dedup (v2.6.0): each dislocation's field is computed ONCE;
             # the combined scene is Σ(Fg_i − I) + I — bit-identical to the
             # old Fd_find_multi_dislocs_mixed + per-solo recompute path.
+            # M4 4.3b: per-dislocation |b| (cubic → uniform BURGERS_VECTOR,
+            # byte-identical; HCP → ⟨a⟩ vs ⟨c+a⟩).
             Hg_combined, solo_hgs = find_hg_scene(
                 rl_eff,
                 Us_,
                 specs,
                 Theta_,
                 per_dislocation=mc.render_per_dislocation,
+                b=np.array([d1["b_um"], d2["b_um"]]),
                 ny=_ny,
             )
 
@@ -1328,9 +1449,9 @@ def _iter_identification_multi(
             # Order matches the specs list (d1 at index 0, d2 at index 1),
             # which matches per-dislocation file naming (_dis0, _dis1).
             _thr_multi = config.crystal.invisibility_threshold_deg
-            _gb_cos_multi = np.array([_gb_cos(q_hkl, d["b_vec"]) for d in (d1, d2)])
+            _gb_cos_multi = np.array([_gb_cos(q_hkl, d["b_gb"]) for d in (d1, d2)])
             _gb_vis_multi = np.array(
-                [int(_gb_visible(q_hkl, d["b_vec"], _thr_multi)) for d in (d1, d2)],
+                [int(_gb_visible(q_hkl, d["b_gb"], _thr_multi)) for d in (d1, d2)],
                 dtype=np.int8,
             )
             yield ScanSpec(
@@ -1480,13 +1601,17 @@ def _iter_identification_zscan(
     # Structure-aware plane sweep + Burgers tables (resolved ONCE). FCC → v2.x
     # objects (byte-identical); BCC/custom → registry-driven. See
     # _resolve_identify_planes_and_burgers.
-    all_planes, _burgers_fn, _burgers_int_fn = _resolve_identify_planes_and_burgers(
-        config.geometry.mount
+    all_planes, _burgers_fn, _burgers_int_fn, _burgers_mag_fn = (
+        _resolve_identify_planes_and_burgers(config.geometry.mount)
     )
+    # Crystal cell for the Cartesian (HCP) frame; None or cubic → Miller path
+    # (byte-identical). M4 4.3b.
+    _cell = _mount_cell(config)
+    _is_cubic = _cell is None or _cell.is_cubic
     # FCC: pass burgers_int_fn=None to _draw_dislocation (secondary) so b_vec
     # stays the v2.x float array (unit * √2), not a newly constructed int->float array.
     # Non-FCC: registry integers.
-    _draw_int_fn = None if _identify_structure_is_fcc(config.geometry.mount) else _burgers_int_fn
+    _draw_int_fn = None if _structure_is_fcc(config.geometry.mount) else _burgers_int_fn
     # Poisson ratio for the displacement field (M4 4.3a I2). Al/FCC → 0.334
     # (byte-identical to v2.x); a material/override changes the physics.
     _ny = _resolve_identify_ny(config.geometry.mount)
@@ -1530,7 +1655,13 @@ def _iter_identification_zscan(
                 else list(range(len(b_table)))
             )
             b_subset = b_table[b_indices]
-            n_arr_unnorm = np.asarray(plane, dtype=float)
+            # Plane normal: Miller-as-Cartesian for cubic (byte-identical),
+            # n̂ = norm(B·plane) for non-cubic (HCP) — the metric-correct normal.
+            if _is_cubic:
+                n_arr_unnorm = np.asarray(plane, dtype=float)
+            else:
+                assert _cell is not None
+                n_arr_unnorm = _cell.B @ np.asarray(plane, dtype=float)
             n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
             rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
             Ud_all = _ud_matrices(n_arr, rotated)
@@ -1569,6 +1700,9 @@ def _iter_identification_zscan(
                     detectors: dict[
                         str, list[tuple[int, np.ndarray, float, float, float, fm.ForwardContext]]
                     ] = {}
+                    # Primary's |b| (cubic → BURGERS_VECTOR, byte-identical; HCP →
+                    # the candidate's true |b|). M4 4.3b.
+                    _b_primary_um = _burgers_mag_fn(plane, b_idx)
                     if zscan.include_secondary:
                         sec = _draw_dislocation(
                             secondary_rng,
@@ -1576,6 +1710,8 @@ def _iter_identification_zscan(
                             planes=all_planes,
                             burgers_fn=_burgers_fn,
                             burgers_int_fn=_draw_int_fn,
+                            burgers_mag_fn=_burgers_mag_fn,
+                            cell=_cell,
                         )
                         secondary_spec = MixedDislocSpec(
                             Ud_mix=sec["Ud"],
@@ -1588,12 +1724,15 @@ def _iter_identification_zscan(
                         # to be rendered without its position offset — drawn
                         # at pos_std_um=0.0 the offset is (0,0,0), so passing
                         # it through the spec is bit-identical.
+                        # M4 4.3b: per-dislocation |b| array (cubic → uniform
+                        # BURGERS_VECTOR, byte-identical; HCP → primary vs secondary).
                         Hg, solo_hgs = find_hg_scene(
                             rl_shifted,
                             Us_,
                             [primary_spec, secondary_spec],
                             Theta_,
                             per_dislocation=zscan.render_per_dislocation,
+                            b=np.array([_b_primary_um, sec["b_um"]]),
                             ny=_ny,
                         )
                         if zscan.render_per_dislocation:
@@ -1615,6 +1754,7 @@ def _iter_identification_zscan(
                             Us_,
                             [primary_spec],
                             Theta_,
+                            b=_b_primary_um,
                             ny=_ny,
                         )
 
@@ -1637,9 +1777,9 @@ def _iter_identification_zscan(
                         "gb_visible": np.int8(_gb_visible(q_hkl, _b_primary, _thr_z)),
                     }
                     if zscan.include_secondary and "secondary" in sample:
-                        # `sec` is the dict from _draw_dislocation; b_vec is the
-                        # physical Burgers direction (before integer rounding).
-                        _b_sec = sec["b_vec"]
+                        # `sec` is the dict from _draw_dislocation; b_gb is the
+                        # g·b query vector (Cartesian for HCP, Miller for cubic).
+                        _b_sec = sec["b_gb"]
                         _zscan_dfxm_geo["gb_cos_secondary"] = _gb_cos(q_hkl, _b_sec)
                         _zscan_dfxm_geo["gb_visible_secondary"] = np.int8(
                             _gb_visible(q_hkl, _b_sec, _thr_z)
@@ -1797,10 +1937,15 @@ def run_identification(
         results: list[dict[str, Any]] = []
         # All-reflections visibility: collect unit q for every reflection so
         # the sweep grid is IDENTICAL across all masters (spec §8).
-        all_vis_qs = [_q_unit(r.hkl) for r in runs]
+        # M4 4.3b: _q_unit now routes through cell.B for non-cubic (HCP) — the
+        # Cartesian reciprocal direction — and stays q/|q| for cubic
+        # (byte-identical). Single-reflection identify uses ctx.q_hkl (also
+        # cell-correct via build_forward_context).
+        _vis_cell = _mount_cell(config)
+        all_vis_qs = [_q_unit(r.hkl, _vis_cell) for r in runs]
         for idx, run in enumerate(runs, start=1):
             res_run = _resolution_for_run(config.reciprocal, config.geometry, run)
-            ctx_run = _context_for_run(res_run, run)
+            ctx_run = _context_for_run(res_run, run, cell=_mount_cell(config))
             sub_dir = output_dir / f"reflection_{idx:03d}"
             results.append(
                 _dispatch_identification(
@@ -1832,5 +1977,6 @@ def run_identification(
         run_theta(config),
         res,
         config.reciprocal.hkl,
+        cell=_mount_cell(config),
     )
     return _dispatch_identification(config, output_dir, ctx)

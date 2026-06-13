@@ -162,7 +162,7 @@ the C / E discriminators for `crystal_mode` / `identify_mode`.
 > shares the same configuration as `/1.1`. Only `/1.1` has them at
 > present. Tracked as a B+C follow-up.
 
-### Structure provenance attrs (M4 Stage 4.3a)
+### Structure provenance attrs (M4 Stage 4.3a/4.3b)
 
 For **structure-aware** runs (oblique geometry or an explicit `[crystal]
 structure_type` / `cif` / `space_group`), each `/N.1/` entry is extended
@@ -171,13 +171,20 @@ with the following attributes written by
 
 | Attr | Type | Example | Notes |
 | ---- | ---- | ------- | ----- |
-| `structure_type` | string | `"bcc"` | Resolved structure family (`"fcc"` or `"bcc"`) |
+| `structure_type` | string | `"bcc"` | Resolved structure family (`"fcc"`, `"bcc"`, or `"hcp"`) |
 | `poisson_ratio` | float64 | `0.29` | Resolved ν used in the displacement-field calculation |
 | `poisson_source` | string | `"KL"` | Citation tag: `"KL"` (Kaye & Laby), `"SW"` (Simmons & Wang), or `"override"` |
-| `burgers_magnitude_um` | float64 | `2.485e-4` | \|b\| in µm for the primary slip family |
+| `burgers_magnitude_um` | float64 | `2.485e-4` | \|b\| in µm for the primary slip family (⟨a⟩ for HCP; see note) |
 | `material` | string | `"Fe"` | Only present when `[crystal] material` was set |
-| `slip_families` | list[string] | `["{110}<111>"]` | Only present when `[crystal] slip_families` was set |
+| `slip_families` | list[string] | `["{110}<111>"]` | BCC/HCP: all active family names. Only present when `[crystal] slip_families` was set (BCC) or always present for HCP (lists the resolved family set) |
 | `space_group` | string | `"Im-3m"` | Only present when a space group was derived from CIF or set explicitly |
+| `c_over_a` | float64 | `1.587` | **HCP only** — c/a ratio from the cell parameters (`cell.c / cell.a`) |
+
+**HCP note on `burgers_magnitude_um`:** HCP has two Burgers-vector lengths
+(⟨a⟩ = a and ⟨c+a⟩ = √(a²+c²)). The `burgers_magnitude_um` attr records
+the ⟨a⟩ family magnitude (the first resolved family). Per-dislocation |b|
+values are not currently written to HDF5 attrs — they are carried in the
+sidecar `_vars.txt` for `random_dislocations` runs.
 
 **FCC simplified path:** when `mount` is `None` (the default for a symmetric
 FCC run without `[crystal] cif`, `structure_type`, or `space_group`), none of

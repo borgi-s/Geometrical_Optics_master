@@ -1,0 +1,314 @@
+"""M4 Stage 4.3b Task 10: FCC + BCC byte-identity regression gate.
+
+The FCC full-pipeline determinism test (seeded random_dislocations, MC kernel)
+already lives in ``tests/test_fcc_bit_identity.py``
+(``test_fcc_random_dislocations_forward_deterministic``).  This file covers the
+complementary cases that 4.3b adds or could break:
+
+  1. **BCC forward determinism** — run the BCC centered TOML (analytic backend,
+     no kernel needed) TWICE into separate tmp dirs; assert the detector image is
+     byte-identical (``np.array_equal``).  Exercises the per-dislocation |b|
+     array path introduced in Task 3 on the cubic side of the ``is_cubic``
+     branch guard.
+
+  2. **FCC slip-system order** — assert that ``slip_systems("fcc")`` returns
+     exactly the same (b, n, t) triples as ``_FCC_111_110_ORDERED``, in the
+     same order.  This is the algebraic bit-identity proof: the RNG draw order
+     (``rng.integers(0, 12)``) maps to the same dislocation geometry as before,
+     so any FCC random_dislocations run is byte-identical to the 4.3a/pre-4.3b
+     result.
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+
+import h5py
+import numpy as np
+import pytest
+
+import dfxm_geo.direct_space.forward_model as fm
+from dfxm_geo.crystal.slip_systems import (
+    _FCC_111_110_ORDERED,
+    slip_systems,
+)
+from dfxm_geo.data import configs_root
+from dfxm_geo.pipeline import (
+    CrystalConfig,
+    ScanConfig,
+    SimulationConfig,
+    WallCrystalConfig,
+    run_simulation,
+)
+
+# ---------------------------------------------------------------------------
+# Import the canonical BCC TOML helper from the existing BCC e2e suite so we
+# exercise exactly the same physics config that the DoD tests use.
+# ---------------------------------------------------------------------------
+from tests.test_bcc_e2e import _bcc_forward_toml
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _run_forward(tmp_path: Path, toml_text: str, name: str) -> np.ndarray:
+    """Write *toml_text* to a config file, run forward into *tmp_path/name*,
+    and return the detector image array.
+
+    Uses ``SimulationConfig.from_toml`` + ``run_simulation`` — the same
+    pattern as test_bcc_e2e — so the whole pipeline is exercised.
+    """
+    from dfxm_geo.pipeline import SimulationConfig, run_simulation
+
+    # tmp_path is already a unique directory created by pytest; place the
+    # config file directly in it and write HDF5 outputs to a sub-directory.
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    cfg_path = tmp_path / f"{name}.toml"
+    cfg_path.write_text(toml_text, encoding="utf-8")
+    cfg = SimulationConfig.from_toml(cfg_path)
+
+    out = tmp_path / "out"
+    run_simulation(cfg, out)
+
+    # Locate the per-scan detector h5.  The BCC TOML writes exactly one scan
+    # (scan0001) and one frame, matching test_bcc_e2e.test_bcc_forward_runs.
+    det_files = sorted((out / "scan0001").glob("dfxm_sim_detector_*.h5"))
+    assert det_files, f"no detector h5 found under {out / 'scan0001'}"
+    det_path = det_files[0]
+
+    with h5py.File(det_path, "r") as f:
+        return f["/entry_0000/dfxm_sim_detector/image"][...]  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_bcc_forward_deterministic(tmp_path: Path) -> None:
+    """A BCC centered forward run is byte-identical across two executions.
+
+    Runs the canonical BCC Fe (analytic backend, no kernel npz required) config
+    twice into separate output directories and asserts ``np.array_equal``.
+
+    This gates the per-dislocation |b| array introduced in Task 3: on the cubic
+    branch the uniform-scalar ``b`` shortcut must still produce an identical
+    result every call (no hidden state mutation, no floating-point ordering
+    surprise from the new array plumbing).
+
+    The BCC physics: |b| = a√3/2 for {110}<111>.  If the array path silently
+    mutated |b| between runs the images would differ.
+    """
+    toml = _bcc_forward_toml()
+    img_a = _run_forward(tmp_path / "run_a", toml, "bcc_fwd_a")
+    img_b = _run_forward(tmp_path / "run_b", toml, "bcc_fwd_b")
+
+    assert img_a.shape == img_b.shape, (
+        f"BCC forward produced different shapes: {img_a.shape} vs {img_b.shape}"
+    )
+    assert np.isfinite(img_a).all(), "BCC forward image contains non-finite values"
+    assert float(img_a.max()) > 0.0, "BCC forward image is all zeros — no contrast"
+    assert np.array_equal(img_a, img_b), (
+        "BCC forward is NOT byte-identical across two runs — "
+        f"max diff = {np.abs(img_a.astype(float) - img_b.astype(float)).max()}"
+    )
+
+
+def test_fcc_slip_order_unchanged() -> None:
+    """FCC slip-system order from the registry equals ``_FCC_111_110_ORDERED``.
+
+    This is the algebraic bit-identity proof for FCC after the HCP changes:
+    ``slip_systems("fcc")`` must return the SAME (b, n, t) triples in the SAME
+    order as the pinned ``_FCC_111_110_ORDERED`` table, because the
+    ``rng.integers(0, 12)`` draw in the population builder indexes into that
+    order.  If the order drifted, every FCC random_dislocations run would
+    produce a different dislocation geometry — breaking byte-identity without
+    any per-pixel diff showing up until an e2e comparison.
+
+    NOT marked slow: pure in-memory registry check, runs in <1 ms.
+    """
+    fcc_systems = slip_systems("fcc")
+    assert len(fcc_systems) == len(_FCC_111_110_ORDERED), (
+        f"slip_systems('fcc') returned {len(fcc_systems)} systems, "
+        f"expected {len(_FCC_111_110_ORDERED)} from _FCC_111_110_ORDERED"
+    )
+    for idx, (sys_, legacy) in enumerate(zip(fcc_systems, _FCC_111_110_ORDERED, strict=True)):
+        b_leg, n_leg, t_leg = legacy
+        assert sys_.b == b_leg, (
+            f"FCC slip system #{idx}: b={sys_.b} != legacy b={b_leg} — order drifted"
+        )
+        assert sys_.n == n_leg, (
+            f"FCC slip system #{idx}: n={sys_.n} != legacy n={n_leg} — order drifted"
+        )
+        assert sys_.t == t_leg, (
+            f"FCC slip system #{idx}: t={sys_.t} != legacy t={t_leg} — order drifted"
+        )
+
+
+# ---------------------------------------------------------------------------
+# FU5 (M4 Stage 4.3b follow-up): non-cubic wall forward uses the cell-aware Ud.
+# The byte-identity guard is the FCC wall: with the new Ud_override discriminator
+# an FCC wall (mount None OR resolved fcc) MUST keep Ud_override=None so it
+# renders with the legacy module-global FCC wall Ud — NOT population.Ud[0], which
+# is a DIFFERENT {111}⟨110⟩ system. These tests run an FCC (Al) wall on the
+# analytic backend (oblique geometry, no MC kernel needed) so they're CI-safe.
+# ---------------------------------------------------------------------------
+
+
+def _fcc_wall_oblique_cfg() -> SimulationConfig:
+    """A minimal FCC (Al) wall forward: oblique geometry, analytic backend.
+
+    Reuses the al_oblique_figure3 oblique mount/reflection (cubic, no
+    structure_type -> resolves to fcc) but swaps the dislocation layout to a
+    small wall (ndis=3). Single frame (rocking peak), no kernel required.
+    """
+    cfg = SimulationConfig.from_toml(configs_root() / "al_oblique_figure3.toml")
+    return replace(
+        cfg,
+        crystal=CrystalConfig(
+            mode="wall",
+            wall=WallCrystalConfig(dis=4.0, ndis=3, sample_remount="S1"),
+        ),
+        scan=ScanConfig(),  # single frame at the rocking peak
+        io=replace(cfg.io, write_strain_provenance=False, include_perfect_crystal=False),
+    )
+
+
+def _wall_detector_frame(out_dir: Path) -> np.ndarray:
+    """Read the single wall-forward detector frame (float64) from the per-scan h5."""
+    det = out_dir / "scan0001" / "dfxm_sim_detector_0000.h5"
+    assert det.is_file(), f"no detector file written under {out_dir}"
+    with h5py.File(det, "r") as f:
+        return f["/entry_0000/dfxm_sim_detector/image"][0].astype(np.float64)
+
+
+@pytest.mark.slow
+def test_fcc_wall_forward_deterministic(tmp_path: Path) -> None:
+    """An FCC (Al) wall forward is byte-identical across two executions.
+
+    FU5 byte-identity gate: the new ``Ud_override`` plumbing must NOT change the
+    FCC wall output. An FCC wall (mount resolves to fcc) takes
+    ``Ud_override=None`` so ``Find_Hg`` uses the legacy module-global FCC wall
+    ``Ud`` — exactly as before FU5. Two runs of the same config must produce
+    byte-identical detector frames.
+    """
+    img_a = _wall_detector_frame_run(tmp_path / "run_a")
+    img_b = _wall_detector_frame_run(tmp_path / "run_b")
+
+    assert img_a.shape == img_b.shape, (
+        f"FCC wall produced different shapes: {img_a.shape} vs {img_b.shape}"
+    )
+    assert np.isfinite(img_a).all(), "FCC wall image contains non-finite values"
+    assert float(img_a.max()) > 0.0, "FCC wall image is all zeros — no contrast"
+    assert np.array_equal(img_a, img_b), (
+        "FCC wall forward is NOT byte-identical across two runs — "
+        f"max diff = {np.abs(img_a - img_b).max()}"
+    )
+
+
+def _wall_detector_frame_run(out_dir: Path) -> np.ndarray:
+    run_simulation(_fcc_wall_oblique_cfg(), out_dir)
+    return _wall_detector_frame(out_dir)
+
+
+@pytest.mark.slow
+def test_fcc_wall_uses_module_global_ud_not_population(tmp_path: Path, monkeypatch) -> None:
+    """An FCC wall passes ``Ud_override=None`` so Find_Hg uses the FCC module Ud.
+
+    The code-level byte-identity proof for FU5's FCC branch: capture the
+    ``Ud_override`` kwarg reaching ``Find_Hg``. For an FCC wall it must be
+    ``None`` (legacy module-global FCC wall Ud). Asserting it is NOT
+    ``population.Ud[0]`` (= ``slip_systems("fcc")[0]``, a DIFFERENT {111}⟨110⟩
+    system) guards against a regression that would silently change FCC bytes.
+
+    Uses an oblique mount that resolves to fcc (``resolved_structure_type == "fcc"``
+    arm of ``_structure_is_fcc``). The ``mount is None`` arm is covered by
+    ``test_fcc_simplified_wall_ud_override_is_none`` below.
+    """
+    captured: dict[str, object] = {}
+    original = fm.Find_Hg
+
+    def _capturing(*args, Ud_override=None, **kwargs):
+        captured["Ud_override"] = Ud_override
+        return original(*args, Ud_override=Ud_override, **kwargs)
+
+    monkeypatch.setattr(fm, "Find_Hg", _capturing)
+
+    run_simulation(_fcc_wall_oblique_cfg(), tmp_path / "out")
+
+    assert "Ud_override" in captured, "Find_Hg was never called (wall provider not used?)"
+    assert captured["Ud_override"] is None, (
+        f"FCC wall passed Ud_override={captured['Ud_override']!r}; expected None "
+        "(the legacy module-global FCC wall Ud) — routing FCC through "
+        "population.Ud[0] would break byte-identity"
+    )
+
+
+@pytest.mark.slow
+def test_fcc_simplified_wall_ud_override_is_none(tmp_path: Path, monkeypatch) -> None:
+    """A simplified-default (mount=None) FCC wall passes ``Ud_override=None``.
+
+    Covers the ``mount is None`` arm of ``_structure_is_fcc`` in the wall
+    discriminator. Simplified geometry produces ``config.geometry.mount is None``;
+    the discriminator must still route to ``Ud_override=None`` (legacy module-global
+    FCC wall Ud — byte-identical to v2.x), not ``population.Ud[0]``.
+
+    The capturing wrapper calls through so the full render executes; the assertion
+    is on the value captured at the last ``Find_Hg`` call (all wall Hg_provider
+    calls share the same ``_wall_Ud_override`` decided once before the render loop).
+    """
+    # Minimal simplified-geometry FCC wall: no [geometry] block → mount is None.
+    # Single frame at rocking peak (scan.phi value = 0), analytic backend,
+    # small ndis=3 to keep the render fast.
+    cfg_toml = (
+        "[reciprocal]\n"
+        "hkl = [-1, 1, -1]\n"
+        "keV = 17.0\n"
+        'backend = "analytic"\n'
+        "beamstop = false\n"
+        "\n"
+        "[crystal]\n"
+        'mode = "wall"\n'
+        "\n"
+        "[crystal.wall]\n"
+        "dis = 4.0\n"
+        "ndis = 3\n"
+        'sample_remount = "S1"\n'
+        "\n"
+        "[scan.phi]\n"
+        "value = 0.0\n"
+        "\n"
+        "[io]\n"
+        "include_perfect_crystal = false\n"
+        "write_strain_provenance = false\n"
+        "\n"
+        "[postprocess]\n"
+        "enabled = false\n"
+    )
+    cfg_path = tmp_path / "fcc_simplified_wall.toml"
+    cfg_path.write_text(cfg_toml, encoding="utf-8")
+    cfg = SimulationConfig.from_toml(cfg_path)
+    assert cfg.geometry.mount is None, (
+        "config.geometry.mount should be None for simplified-default geometry"
+    )
+
+    captured: dict[str, object] = {}
+    original = fm.Find_Hg
+
+    def _capturing(*args, Ud_override=None, **kwargs):
+        captured["Ud_override"] = Ud_override
+        return original(*args, Ud_override=Ud_override, **kwargs)
+
+    monkeypatch.setattr(fm, "Find_Hg", _capturing)
+
+    run_simulation(cfg, tmp_path / "out")
+
+    assert "Ud_override" in captured, "Find_Hg was never called (wall Hg_provider not used?)"
+    assert captured["Ud_override"] is None, (
+        f"Simplified-default FCC wall passed Ud_override={captured['Ud_override']!r}; "
+        "expected None (mount is None → _structure_is_fcc=True → legacy module-global "
+        "FCC wall Ud). Routing through population.Ud[0] would break byte-identity."
+    )
