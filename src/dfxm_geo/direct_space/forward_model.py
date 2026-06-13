@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numba import njit
 
-from dfxm_geo.constants import BURGERS_VECTOR
+from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
 from dfxm_geo.crystal.slip_systems import SlipSystem, burgers_magnitude, slip_systems
@@ -208,6 +208,7 @@ def Find_Hg(
     remount_name: str = "S1",
     z_offset_um: float = 0.0,
     b: float = BURGERS_VECTOR,
+    ny: float = POISSON_RATIO,
     ctx: "ForwardContext",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the displacement gradient field Hg and reciprocal vector q_hkl.
@@ -232,6 +233,10 @@ def Find_Hg(
         b: Burgers vector magnitude (µm). Default ``BURGERS_VECTOR`` (FCC, the
             v2.x wall value — byte-identical). Non-FCC walls pass the
             cell-derived |b| (M4 Stage 4.3a).
+        ny: Isotropic Poisson ratio. Default ``POISSON_RATIO`` (0.334, Al —
+            byte-identical to v2.x). A non-Al material/override passes the
+            resolved ν so the wall displacement field uses the correct elasticity
+            (M4 Stage 4.3a I2).
         ctx: Required ForwardContext; geometry (rl/Theta/theta_0) and kernel-path
             provenance are sourced from it (#16 Slice 5 — no module globals).
 
@@ -273,9 +278,15 @@ def Find_Hg(
     # the BURGERS_VECTOR object unchanged for FCC. If FCC ever switches to a
     # cell-derived |b|, revisit this (the existing FCC cache filename would be missed).
     b_suffix = "" if b == BURGERS_VECTOR else f"_b{round(b * 1e7)}"
+    # ν-aware cache key (M4 Stage 4.3a I2). ν enters the Fg physics. For the Al
+    # default (ny == POISSON_RATIO) the suffix is EMPTY — v2.x filename
+    # byte-identical, existing caches/goldens still hit. A material/override ν
+    # (e.g. Fe 0.29) gets a distinct cache so it can never load a stale-ν Fg even
+    # when |b| happens to coincide with the FCC default.
+    ny_suffix = "" if ny == POISSON_RATIO else f"_ny{round(ny * 1e4)}"
     Fg_path = str(
         Fg_dir
-        / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}{}{}.npy".format(
+        / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}{}{}{}.npy".format(
             str(dis).replace(".", ""),
             int(psize * 1e9),
             int(zl_rms * 2.35e9),
@@ -284,6 +295,7 @@ def Find_Hg(
             remount_name,
             z_suffix,
             b_suffix,
+            ny_suffix,
         )
     )
 
@@ -295,7 +307,7 @@ def Find_Hg(
         else ctx.geometry.rl
     )
     Theta_ = ctx.geometry.Theta
-    Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta_, dis, ndis, Fg_path, b=b, S=S)
+    Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta_, dis, ndis, Fg_path, b=b, ny=ny, S=S)
 
     if not os.path.exists(Fg_path.replace(".npy", "_vars.txt")):
         _lkp = ctx.resolution.loaded_kernel_path
@@ -1073,6 +1085,12 @@ class DislocationPopulation:
     # ``burgers_magnitude``. Threaded into the Hg kernels by
     # ``Find_Hg_from_population`` / ``_find_hg_from_population_numpy``.
     b_um: float = BURGERS_VECTOR
+    # Isotropic Poisson ratio ν for this population (M4 Stage 4.3a I2). Default
+    # ``POISSON_RATIO`` (0.334, Al) — byte-identical to v2.x for mount=None AND
+    # for any mount resolving to ν=0.334 (FCC/Al, material unset). A material /
+    # override that changes ν (e.g. BCC Fe → 0.29) alters the displacement field
+    # (intended). Threaded into the Hg kernels alongside ``b_um``.
+    ny: float = POISSON_RATIO
 
 
 def _ud_matrix_from_bnt(
@@ -1099,17 +1117,22 @@ def _ud_matrix_from_bnt(
 
 def _resolve_structure_systems_b(
     mount: "CrystalMount | None",
-) -> tuple[str, list[SlipSystem], float]:
-    """Resolve (structure, slip_systems, |b| in µm) for the population builder.
+) -> tuple[str, list[SlipSystem], float, float]:
+    """Resolve (structure, slip_systems, |b| in µm, ν) for the population builder.
 
     M4 Stage 4.3a (Task 8): the dislocation slip systems and Burgers magnitude
     come from the SAME ``[crystal]`` mount the resolution kernel was built from.
+    Stage 4.3a I2 adds the resolved Poisson ratio ν to the same resolution so it
+    reaches the displacement kernel (previously ν was provenance-only).
 
     - ``mount is None`` (the default simplified-geometry FCC path) resolves to
       ``structure="fcc"``, the 12 ``slip_systems("fcc")`` (ORDER-identical to the
-      legacy ``_SLIP_SYSTEM_111``), and ``|b| = BURGERS_VECTOR`` — **byte-identical
-      to v2.x**.
-    - Otherwise the resolved structure / slip families / cell come from the mount.
+      legacy ``_SLIP_SYSTEM_111``), ``|b| = BURGERS_VECTOR``, and
+      ``ν = POISSON_RATIO`` (0.334) — **byte-identical to v2.x**.
+    - Otherwise the resolved structure / slip families / cell / ν come from the
+      mount. ``mount.resolved_poisson_ratio`` equals ``POISSON_RATIO`` (0.334)
+      for an Al/FCC mount with no material/override, so that case is ALSO
+      byte-identical; only a material/override that changes ν alters the physics.
 
     FCC keeps the historical calibrated constant (2.862e-4) for v2.x bit-identity;
     the cell-derived a/√2 differs at the 4th sig fig. Non-FCC structures derive
@@ -1119,7 +1142,7 @@ def _resolve_structure_systems_b(
     (per the Task 6 review note) so callers can loop without re-resolving.
     """
     if mount is None:
-        return "fcc", slip_systems("fcc"), BURGERS_VECTOR
+        return "fcc", slip_systems("fcc"), BURGERS_VECTOR, POISSON_RATIO
     structure = mount.resolved_structure_type
     families = list(mount.slip_families) if mount.slip_families else None
     systems = slip_systems(structure, families=families)
@@ -1131,7 +1154,8 @@ def _resolve_structure_systems_b(
         if structure == "fcc"
         else burgers_magnitude(structure, systems[0].family, mount.cell)
     )
-    return structure, systems, b_um
+    ny = mount.resolved_poisson_ratio
+    return structure, systems, b_um, ny
 
 
 def build_dislocation_population(
@@ -1155,9 +1179,11 @@ def build_dislocation_population(
     geometry FCC path) resolves to ``"fcc"`` + ``BURGERS_VECTOR`` — byte-identical
     to v2.x. All modes (centered / wall / random_dislocations) receive the
     structure-resolved ``b_um`` so a non-FCC mount correctly propagates |b|
-    into the Hg kernels.
+    into the Hg kernels. The resolved Poisson ratio ``ny`` rides on the
+    population the same way (I2): FCC/Al ν=0.334 is byte-identical, a material/
+    override that changes ν alters the displacement field.
     """
-    structure, systems, b_um = _resolve_structure_systems_b(mount)
+    structure, systems, b_um, ny = _resolve_structure_systems_b(mount)
 
     if crystal.mode == "centered":
         c = crystal.centered
@@ -1169,7 +1195,7 @@ def build_dislocation_population(
         # this is BURGERS_VECTOR — byte-identical to v2.x. For non-FCC mounts
         # (e.g. BCC) it is the cell-derived magnitude so the Hg kernel uses
         # the correct |b|.
-        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None, b_um=b_um)
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None, b_um=b_um, ny=ny)
 
     if crystal.mode == "wall":
         w = crystal.wall
@@ -1186,7 +1212,7 @@ def build_dislocation_population(
         s0 = systems[0]
         Ud_single = _ud_matrix_from_bnt(s0.b, s0.n, s0.t)
         Ud = np.broadcast_to(Ud_single, (w.ndis, 3, 3)).copy()
-        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None, b_um=b_um)
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None, b_um=b_um, ny=ny)
 
     if crystal.mode == "random_dislocations":
         rd = crystal.random_dislocations
@@ -1276,7 +1302,9 @@ def build_dislocation_population(
             "burgers_magnitude_um": float(b_um),
             "dislocations": sidecar_dislocations,
         }
-        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=sidecar, b_um=b_um)
+        return DislocationPopulation(
+            positions_um=positions, Ud=Ud, sidecar=sidecar, b_um=b_um, ny=ny
+        )
 
     raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
 
@@ -1357,9 +1385,11 @@ def _find_hg_from_population_numpy(
     # Fd_find_mixed(rl * 1e6, ...). Omitting this made |rd| 1e6x too small and
     # the 1/r field 1e6x too large (sub-project C regression).
     # Returns shape (X, 3, 3) with identity already added (Fg, not Fdd).
-    # |b| from the population (FCC -> BURGERS_VECTOR == default, byte-identical;
-    # non-FCC -> cell-derived).
-    Fg = Fd_find_multi_dislocs_mixed(rl_eff * 1e6, Us_, crystals, Theta_, b=population.b_um, S=S)
+    # |b| and ν from the population (FCC/Al -> BURGERS_VECTOR / POISSON_RATIO ==
+    # defaults, byte-identical; non-FCC -> cell-derived |b| + material ν).
+    Fg = Fd_find_multi_dislocs_mixed(
+        rl_eff * 1e6, Us_, crystals, Theta_, b=population.b_um, ny=population.ny, S=S
+    )
 
     # Convert Fg → Hg using the same convention as load_or_generate_Hg:
     #   Hg = transpose(Fg^-1) - I
@@ -1433,7 +1463,9 @@ def Find_Hg_from_population(
 
     # rl is in metres; the field formula expects micrometres (b in µm) — *1e6,
     # exactly as the NumPy path and the reference disloc_identify.py do.
-    # |b| from the population (FCC -> BURGERS_VECTOR == default, byte-identical;
-    # non-FCC -> cell-derived).
-    Hg = find_hg_population(rl_eff * 1e6, M, offset, Ud, cos_rot, sin_rot, b=population.b_um)
+    # |b| and ν from the population (FCC/Al -> BURGERS_VECTOR / POISSON_RATIO ==
+    # defaults, byte-identical; non-FCC -> cell-derived |b| + material ν).
+    Hg = find_hg_population(
+        rl_eff * 1e6, M, offset, Ud, cos_rot, sin_rot, b=population.b_um, ny=population.ny
+    )
     return Hg, q_hkl

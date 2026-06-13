@@ -39,6 +39,18 @@ class TestCubicBitIdentity:
             a=MG_A, b=MG_A, c=MG_C, alpha_deg=90.0, beta_deg=90.0, gamma_deg=120.0
         ).is_cubic
 
+    def test_cubic_q_hkl_shortcut_equals_B_dot_G(self):
+        """Spec §3.5: for a cubic cell the forward path's q/|q| (B_0=I form)
+        equals the metric-tensor B·G/|B·G|, so the cubic q_hkl shortcut is valid
+        for BCC (a 2.8665 Å Fe cell here). Holds because B ∝ I for cubic."""
+        cell = UnitCell.cubic(2.8665e-10)  # Fe BCC
+        for hkl in [(1, 1, 0), (2, 0, 0), (2, 1, 1), (-1, 1, -1)]:
+            g = np.asarray(hkl, dtype=float)
+            q_shortcut = g / np.linalg.norm(g)  # forward path's B_0=I form
+            Bg = cell.B @ g
+            q_metric = Bg / np.linalg.norm(Bg)
+            assert np.allclose(q_shortcut, q_metric, atol=1e-15)
+
 
 class TestHexagonalDSpacing:
     def test_matches_textbook_formula(self):

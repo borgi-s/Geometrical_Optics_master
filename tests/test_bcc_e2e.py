@@ -223,6 +223,97 @@ def test_bcc_identify_has_bcc_slip_labels(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+def test_bcc_fe_forward_uses_poisson_029(tmp_path: Path, monkeypatch) -> None:
+    """M4 4.3a I2: a BCC Fe forward threads ν=0.29 into the displacement kernel.
+
+    Captures the ``ny`` reaching ``find_hg_population`` (the centered-mode Hg
+    engine) and asserts it is Fe's 0.29 — NOT the Al default 0.334. Before the
+    fix, every Fd_find/find_hg_* used POISSON_RATIO regardless of material, so
+    BCC Fe silently computed strain with Al's ν while recording 0.29.
+    """
+    import dfxm_geo.crystal.dislocations as disl
+
+    captured: dict[str, float] = {}
+    original = disl.find_hg_population
+
+    def _capturing(*args, ny=0.334, **kwargs):
+        captured["ny"] = ny
+        return original(*args, ny=ny, **kwargs)
+
+    monkeypatch.setattr(disl, "find_hg_population", _capturing)
+
+    cfg_path = tmp_path / "bcc_forward.toml"
+    cfg_path.write_text(_bcc_forward_toml(), encoding="utf-8")
+    cfg = SimulationConfig.from_toml(cfg_path)
+    assert cfg.geometry.mount is not None
+    assert cfg.geometry.mount.resolved_poisson_ratio == 0.29  # precondition: Fe ν
+
+    run_simulation(cfg, tmp_path / "out")
+
+    assert "ny" in captured, "find_hg_population was never called"
+    assert captured["ny"] == 0.29, (
+        f"BCC Fe forward used ν={captured['ny']}, expected Fe's 0.29 (not the Al default)"
+    )
+
+
+def test_fcc_default_forward_uses_poisson_0334(tmp_path: Path, monkeypatch) -> None:
+    """FCC simplified-default forward keeps ν=0.334 (Al) reaching the kernel.
+
+    The byte-identity guard for I2: with no mount (simplified geometry) the
+    Poisson ratio must stay POISSON_RATIO (0.334), so FCC output is unchanged.
+    """
+    import dfxm_geo.crystal.dislocations as disl
+    from dfxm_geo.constants import POISSON_RATIO
+
+    captured: dict[str, float] = {}
+    original = disl.find_hg_population
+
+    def _capturing(*args, ny=POISSON_RATIO, **kwargs):
+        captured["ny"] = ny
+        return original(*args, ny=ny, **kwargs)
+
+    monkeypatch.setattr(disl, "find_hg_population", _capturing)
+
+    # Minimal FCC simplified-geometry centered forward (mount=None path).
+    cfg_toml = (
+        "[reciprocal]\n"
+        "hkl = [-1, 1, -1]\n"
+        "keV = 17.0\n"
+        'backend = "analytic"\n'
+        "beamstop = false\n"
+        "\n"
+        "[crystal]\n"
+        'mode = "centered"\n'
+        "\n"
+        "[crystal.centered]\n"
+        "b = [1, -1, 0]\n"
+        "n = [1, 1, 1]\n"
+        "t = [1, 1, -2]\n"
+        "\n"
+        "[scan.phi]\n"
+        "value = 0.0\n"
+        "\n"
+        "[io]\n"
+        "include_perfect_crystal = false\n"
+        "write_strain_provenance = false\n"
+        "\n"
+        "[postprocess]\n"
+        "enabled = false\n"
+    )
+    cfg_path = tmp_path / "fcc_forward.toml"
+    cfg_path.write_text(cfg_toml, encoding="utf-8")
+    cfg = SimulationConfig.from_toml(cfg_path)
+    assert cfg.geometry.mount is None  # simplified-default FCC path
+
+    run_simulation(cfg, tmp_path / "out")
+
+    assert "ny" in captured, "find_hg_population was never called"
+    assert captured["ny"] == POISSON_RATIO, (
+        f"FCC default forward used ν={captured['ny']}, expected the Al default {POISSON_RATIO}"
+    )
+
+
+@pytest.mark.slow
 def test_bcc_via_fe_cif(tmp_path: Path) -> None:
     """BCC derived from a minimal Fe Im-3m CIF (no explicit structure_type).
 

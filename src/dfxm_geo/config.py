@@ -531,6 +531,27 @@ def _build_geometry_config(
     mode, eta = _parse_geometry_block(raw.get("geometry"), allow_missing_eta=multi_reflection)
     if mode == "simplified":
         crystal_raw = raw.get("crystal") or {}
+        # M4 Stage 4.3a: structure-aware [crystal] keys are carried ONLY on the
+        # oblique mount (simplified mode discards it -> mount=None -> FCC). Silently
+        # computing FCC for a "structure_type=bcc" request is the bug this guards:
+        # raise loudly instead of dropping the keys. (Plain cell/cif/space_group
+        # keys are still accepted in simplified mode — see the branch below.)
+        _structure_keys = (
+            "structure_type",
+            "material",
+            "poisson_ratio",
+            "slip_families",
+            "slip_system",
+        )
+        _present = [k for k in _structure_keys if k in crystal_raw]
+        if _present:
+            raise ValueError(
+                f'[crystal] {_present} require [geometry] mode = "oblique": the '
+                "structure family / material / Poisson ratio / slip systems are "
+                "carried on the oblique crystal mount, which simplified geometry "
+                "discards (the run would silently resolve to FCC). Set "
+                '[geometry] mode = "oblique" (with an eta) to use these keys.'
+            )
         # A "lattice" or "cif" key signals an explicit bootstrap-style mount;
         # parse it (which may surface mount errors simplified mode previously
         # ignored) so non-cubic cells cannot slip through the cubic-only path.

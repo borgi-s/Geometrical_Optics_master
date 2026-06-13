@@ -35,6 +35,7 @@ from dfxm_geo.config import (
     _identification_config_to_toml_str,
     run_theta,
 )
+from dfxm_geo.constants import POISSON_RATIO
 from dfxm_geo.crystal.burgers import (
     burgers_vectors as _burgers_vectors,
 )
@@ -391,8 +392,9 @@ def _run_simulation_inner(
         S = SAMPLE_REMOUNT_OPTIONS[w.sample_remount]
 
         def Hg_provider(z: float) -> tuple[np.ndarray, np.ndarray]:
-            # population.b_um is BURGERS_VECTOR for FCC (byte-identical to v2.x)
-            # and the cell-derived |b| for non-FCC walls (M4 Stage 4.3a).
+            # population.b_um is BURGERS_VECTOR / population.ny is POISSON_RATIO
+            # for FCC/Al (byte-identical to v2.x); the cell-derived |b| + material
+            # ν for non-FCC walls (M4 Stage 4.3a + I2).
             return fm.Find_Hg(
                 w.dis,
                 w.ndis,
@@ -405,6 +407,7 @@ def _run_simulation_inner(
                 remount_name=w.sample_remount,
                 z_offset_um=z,
                 b=population.b_um,
+                ny=population.ny,
                 ctx=ctx,
             )
 
@@ -857,6 +860,9 @@ def _iter_identification_single(
     all_planes, _burgers_fn, _burgers_int_fn = _resolve_identify_planes_and_burgers(
         config.geometry.mount
     )
+    # Poisson ratio for the displacement field (M4 4.3a I2). Al/FCC → 0.334
+    # (byte-identical to v2.x); a material/override changes the physics.
+    _ny = _resolve_identify_ny(config.geometry.mount)
     planes = all_planes if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
 
     angles_deg = np.arange(
@@ -925,6 +931,7 @@ def _iter_identification_single(
                             )
                         ],
                         Theta_,
+                        ny=_ny,
                     )
 
                     args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan, ctx)
@@ -1091,6 +1098,19 @@ def _identify_structure_is_fcc(mount: CrystalMount | None) -> bool:
     return mount is None or mount.resolved_structure_type == "fcc"
 
 
+def _resolve_identify_ny(mount: CrystalMount | None) -> float:
+    """Resolve the Poisson ratio ν for the identify displacement field (M4 4.3a I2).
+
+    ``mount is None`` (simplified-default) → ``POISSON_RATIO`` (0.334, Al), the
+    v2.x default — byte-identical. A mount resolving to ν=0.334 (FCC/Al, material
+    unset) ALSO yields the default, so that path stays byte-identical too; only a
+    material/override that changes ν (e.g. BCC Fe → 0.29) alters the field.
+    Mirrors the forward path's ``_resolve_structure_systems_b`` ν resolution so
+    forward and identify use the same elasticity for the same mount.
+    """
+    return POISSON_RATIO if mount is None else mount.resolved_poisson_ratio
+
+
 def _draw_dislocation(
     rng: np.random.Generator,
     pos_std_um: float,
@@ -1200,6 +1220,9 @@ def _iter_identification_multi(
     # float array (unit * √2), not a newly constructed int->float array — byte-identical
     # to v2.x output. Non-FCC: registry integer Burgers.
     _draw_int_fn = None if _identify_structure_is_fcc(config.geometry.mount) else _burgers_int_fn
+    # Poisson ratio for the displacement field (M4 4.3a I2). Al/FCC → 0.334
+    # (byte-identical to v2.x); a material/override changes the physics.
+    _ny = _resolve_identify_ny(config.geometry.mount)
 
     # Source geometry + instrument from ctx (oblique-safe).
     Us_ = ctx.instrument.Us
@@ -1271,6 +1294,7 @@ def _iter_identification_multi(
                 specs,
                 Theta_,
                 per_dislocation=mc.render_per_dislocation,
+                ny=_ny,
             )
 
             combined_args, positioners = _scan_frames_args(
@@ -1463,6 +1487,9 @@ def _iter_identification_zscan(
     # stays the v2.x float array (unit * √2), not a newly constructed int->float array.
     # Non-FCC: registry integers.
     _draw_int_fn = None if _identify_structure_is_fcc(config.geometry.mount) else _burgers_int_fn
+    # Poisson ratio for the displacement field (M4 4.3a I2). Al/FCC → 0.334
+    # (byte-identical to v2.x); a material/override changes the physics.
+    _ny = _resolve_identify_ny(config.geometry.mount)
     planes = all_planes if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
     angles_deg = np.arange(
         crystal_cfg.angle_start_deg,
@@ -1567,6 +1594,7 @@ def _iter_identification_zscan(
                             [primary_spec, secondary_spec],
                             Theta_,
                             per_dislocation=zscan.render_per_dislocation,
+                            ny=_ny,
                         )
                         if zscan.render_per_dislocation:
                             # Primary + secondary each rendered alone (noiseless
@@ -1587,6 +1615,7 @@ def _iter_identification_zscan(
                             Us_,
                             [primary_spec],
                             Theta_,
+                            ny=_ny,
                         )
 
                     args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan, ctx)

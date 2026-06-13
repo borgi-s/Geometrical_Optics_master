@@ -192,6 +192,36 @@ def test_burgers_magnitude_unknown_family_raises():
         burgers_magnitude("fcc", "{110}<111>", al)
 
 
+def test_burgers_magnitude_literal_custom_family_uses_fraction_one():
+    """C1: a literal custom family (register_custom) uses fraction 1.0 — the user
+    supplied the actual integer Burgers vector, so |b| = |A·b_int| (no ½ halving),
+    and the family need NOT appear in _BURGERS_FRACTION."""
+    from dfxm_geo.crystal.slip_systems import register_custom
+
+    a = 3.0e-10
+    register_custom("custom:btest", [{"plane": (1, 1, 0), "burgers": (1, -1, 1)}])
+    cell = UnitCell.cubic(a)
+    # b_int = (1,-1,1) → |A·b_int| = a·√3; literal → fraction 1.0 (no ½).
+    expected_um = a * np.sqrt(3) * 1e6
+    assert burgers_magnitude("custom:btest", "custom0", cell) == pytest.approx(
+        expected_um, rel=1e-12
+    )
+
+
+def test_burgers_magnitude_nonliteral_missing_fraction_still_raises():
+    """The loud 'forgotten KNOWN family' error is preserved for enumerated
+    (non-literal) families absent from _BURGERS_FRACTION."""
+    import dfxm_geo.crystal.slip_systems as ss
+
+    # Temporarily drop the BCC {110}<111> fraction to simulate a forgotten entry.
+    saved = ss._BURGERS_FRACTION.pop("{110}<111>")
+    try:
+        with pytest.raises(ValueError, match="lattice-translation fraction"):
+            burgers_magnitude("bcc", "{110}<111>", UnitCell.cubic(2.8665e-10))
+    finally:
+        ss._BURGERS_FRACTION["{110}<111>"] = saved
+
+
 # ---------------------------------------------------------------------------
 # Task 3: derive_structure_type
 # ---------------------------------------------------------------------------
