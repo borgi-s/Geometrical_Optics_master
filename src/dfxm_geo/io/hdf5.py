@@ -583,15 +583,20 @@ def structure_provenance_attrs(mount: CrystalMount) -> dict[str, Any]:
     keeping those outputs byte-identical to v2.5.x.
 
     Attrs emitted:
-      ``structure_type``      — resolved structure family ("fcc"/"bcc"/…)
+      ``structure_type``      — resolved structure family ("fcc"/"bcc"/"hcp"/…)
       ``poisson_ratio``       — resolved ν (float)
       ``poisson_source``      — citation tag ("SW"/"KL"/"override"/…)
       ``burgers_magnitude_um``— |b| in µm for the primary slip family
       ``material``            — Poisson-table material key (omitted if None)
-      ``slip_families``       — list of family names (omitted if None)
+      ``slip_families``       — list of family names (omitted if None for
+                                cubic; ALWAYS emitted for HCP — falls back
+                                to the full registry list when not configured)
+      ``c_over_a``            — c/a ratio (HCP only)
+      ``space_group``         — space group string (CIF route only, if known)
     """
     from dfxm_geo.constants import BURGERS_VECTOR
     from dfxm_geo.crystal.elasticity import poisson_source as _poisson_source
+    from dfxm_geo.crystal.slip_systems import _REGISTRY
     from dfxm_geo.crystal.slip_systems import burgers_magnitude as _b_mag
     from dfxm_geo.crystal.slip_systems import slip_systems as _slip_sys
 
@@ -632,6 +637,18 @@ def structure_provenance_attrs(mount: CrystalMount) -> dict[str, Any]:
         attrs["slip_families"] = list(mount.slip_families)
     if mount.space_group is not None:
         attrs["space_group"] = mount.space_group
+
+    # HCP-only provenance: c/a ratio and the resolved family-name list.
+    # Cubic (FCC/BCC) runs are NOT changed — no new attrs for them.
+    if structure == "hcp":
+        cell = mount.cell
+        attrs["c_over_a"] = float(cell.c / cell.a)
+        # slip_families already emitted above when mount.slip_families is set;
+        # for HCP we always want the full resolved list so fall back to
+        # the registry when the mount didn't pin a subset.
+        if mount.slip_families is None:
+            attrs["slip_families"] = [f.name for f in _REGISTRY["hcp"]]
+
     return attrs
 
 
