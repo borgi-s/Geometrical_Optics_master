@@ -21,13 +21,38 @@ def _canon(v):
     return v
 
 
+# The hand-authored v2.x FCC slip table (forward_model._SLIP_SYSTEM_111), kept
+# here verbatim as the bit-identity oracle. slip_systems("fcc") must be
+# ORDER-identical to this (b, n, t) sequence so random_dislocations RNG draws
+# + the wall first-system stay byte-identical to v2.x. The table itself was
+# deleted from forward_model.py in M4 Stage 4.3a Task 8.
+_LEGACY_FCC_SLIP_111 = (
+    ((1, -1, 0), (1, 1, 1), (1, 1, -2)),
+    ((-1, 0, 1), (1, 1, 1), (-1, 2, -1)),
+    ((0, 1, -1), (1, 1, 1), (-2, 1, 1)),
+    ((1, 1, 0), (1, -1, 1), (1, -1, -2)),
+    ((-1, 0, 1), (1, -1, 1), (-1, -2, -1)),
+    ((0, -1, -1), (1, -1, 1), (-2, -1, 1)),
+    ((0, 1, -1), (-1, 1, 1), (-2, -1, -1)),
+    ((1, 0, 1), (-1, 1, 1), (1, 2, -1)),
+    ((1, 1, 0), (-1, 1, 1), (-1, 1, -2)),
+    ((0, 1, 1), (1, 1, -1), (2, -1, 1)),
+    ((1, -1, 0), (1, 1, -1), (-1, -1, -2)),
+    ((1, 0, 1), (1, 1, -1), (1, -2, -1)),
+)
+
+
 def test_fcc_counts_and_geometry():
     sys = slip_systems("fcc")
     assert len(sys) == 12
     assert len({_canon(s.n) for s in sys}) == 4  # 4 distinct {111} planes
     for s in sys:
         assert np.dot(s.b, s.n) == 0  # glide: Burgers in plane
-        assert np.allclose(np.cross(s.n, s.b), s.t)  # t = n x b
+        # t collinear with n x b (UP TO SIGN). The FCC table is the legacy
+        # _SLIP_SYSTEM_111 verbatim, whose `t` is the physical line direction —
+        # sometimes -(n x b). _ud_matrix_from_bnt is sign-invariant in t, so the
+        # Ud (the only thing forward output depends on) is identical either way.
+        assert np.allclose(np.cross(np.cross(s.n, s.b), s.t), 0.0)  # t ∥ n x b
 
 
 def test_bcc_default_is_110_plus_112():
@@ -45,13 +70,31 @@ def test_bcc_single_family_selection():
 
 
 def test_fcc_registry_equals_legacy_slip_table():
-    """The enumerator must reproduce the hand-written _SLIP_SYSTEM_111 set
-    (up to sign) BEFORE that table is deleted (later task)."""
-    from dfxm_geo.direct_space.forward_model import _SLIP_SYSTEM_111
-
-    legacy = {(_canon(b), _canon(n)) for b, n, _t in _SLIP_SYSTEM_111}
+    """The registry must reproduce the hand-written legacy FCC slip set
+    (up to sign) — the {111}<110> family is complete (nothing dropped)."""
+    legacy = {(_canon(b), _canon(n)) for b, n, _t in _LEGACY_FCC_SLIP_111}
     reg = {(_canon(s.b), _canon(s.n)) for s in slip_systems("fcc")}
     assert reg == legacy
+
+
+def test_fcc_slip_systems_ordered_equals_legacy():
+    """slip_systems('fcc') must be ORDER-identical to the legacy _SLIP_SYSTEM_111
+    (b,n,t) so random_dislocations RNG draws + wall first-system stay bit-identical."""
+    got = slip_systems("fcc")
+    assert tuple((s.b, s.n, s.t) for s in got) == _LEGACY_FCC_SLIP_111
+
+
+def test_fcc_ordered_table_is_complete_111_110_family():
+    """The explicit ordered FCC table must SET-equal the symmetry enumerator
+    output of SlipFamily('{111}<110>', (1,1,1), (1,1,0)) — proving nothing was
+    dropped relative to the full {111}<110> glide family."""
+    from dfxm_geo.crystal.slip_systems import SlipFamily, _enumerate_family
+
+    enumerated = _enumerate_family(SlipFamily("{111}<110>", (1, 1, 1), (1, 1, 0)))
+    enum_set = {(_canon(s.b), _canon(s.n)) for s in enumerated}
+    table_set = {(_canon(b), _canon(n)) for b, n, _t in _LEGACY_FCC_SLIP_111}
+    assert table_set == enum_set
+    assert len(_LEGACY_FCC_SLIP_111) == len(enumerated) == 12
 
 
 def test_plane_normals_distinct():

@@ -323,9 +323,13 @@ def _run_simulation_inner(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Build dislocation population (dispatches on crystal.mode).
+    # M4 Stage 4.3a: the slip systems + |b| come from the SAME [crystal] mount
+    # the kernel was built from. In simplified geometry (the default FCC path)
+    # config.geometry.mount is None -> build_dislocation_population resolves to
+    # "fcc" + BURGERS_VECTOR (byte-identical to v2.x).
     fov_lateral_um = fm.Npixels * fm.psize * 1e6  # m -> um
     population = fm.build_dislocation_population(
-        config.crystal, fov_lateral_um=fov_lateral_um, rng=None
+        config.crystal, fov_lateral_um=fov_lateral_um, rng=None, mount=config.geometry.mount
     )
 
     # Write sidecar BEFORE forward kernel so a forward crash still leaves
@@ -375,6 +379,8 @@ def _run_simulation_inner(
         S = SAMPLE_REMOUNT_OPTIONS[w.sample_remount]
 
         def Hg_provider(z: float) -> tuple[np.ndarray, np.ndarray]:
+            # population.b_um is BURGERS_VECTOR for FCC (byte-identical to v2.x)
+            # and the cell-derived |b| for non-FCC walls (M4 Stage 4.3a).
             return fm.Find_Hg(
                 w.dis,
                 w.ndis,
@@ -386,6 +392,7 @@ def _run_simulation_inner(
                 S=S,
                 remount_name=w.sample_remount,
                 z_offset_um=z,
+                b=population.b_um,
                 ctx=ctx,
             )
 

@@ -21,11 +21,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numba import njit
 
+from dfxm_geo.constants import BURGERS_VECTOR
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
+from dfxm_geo.crystal.slip_systems import burgers_magnitude, slip_systems
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
 if TYPE_CHECKING:
+    from dfxm_geo.crystal.oblique import CrystalMount
     from dfxm_geo.pipeline import CrystalConfig, ReciprocalConfig, ScanConfig
     from dfxm_geo.reciprocal_space.analytic_resolution import AnalyticResolution
 
@@ -104,33 +107,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # Sub-project C: random_dislocations placement constants.
 _MAX_REJECTION_TRIES = 10_000
 
-# The full 12 FCC slip systems on the {111}/<110> family used to draw random
-# orientations for random_dislocations mode. Each entry is (b, n, t) with
-# b.n=0 (Burgers in the glide plane) and t parallel to n x b (line direction).
-# All four distinct {111} plane normals are covered, three <110> Burgers
-# vectors per plane (4 planes x 3 = 12 systems). The first six entries are the
-# original v1.2.0 sampling subset (planes (1,1,1) and (1,-1,1)), retained
-# verbatim; the last six complete planes (-1,1,1) and (1,1,-1).
-_SLIP_SYSTEM_111: tuple[
-    tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]], ...
-] = (
-    # Plane (1, 1, 1)
-    ((1, -1, 0), (1, 1, 1), (1, 1, -2)),
-    ((-1, 0, 1), (1, 1, 1), (-1, 2, -1)),
-    ((0, 1, -1), (1, 1, 1), (-2, 1, 1)),
-    # Plane (1, -1, 1)
-    ((1, 1, 0), (1, -1, 1), (1, -1, -2)),
-    ((-1, 0, 1), (1, -1, 1), (-1, -2, -1)),
-    ((0, -1, -1), (1, -1, 1), (-2, -1, 1)),
-    # Plane (-1, 1, 1)
-    ((0, 1, -1), (-1, 1, 1), (-2, -1, -1)),
-    ((1, 0, 1), (-1, 1, 1), (1, 2, -1)),
-    ((1, 1, 0), (-1, 1, 1), (-1, 1, -2)),
-    # Plane (1, 1, -1)
-    ((0, 1, 1), (1, 1, -1), (2, -1, 1)),
-    ((1, -1, 0), (1, 1, -1), (-1, -1, -2)),
-    ((1, 0, 1), (1, 1, -1), (1, -2, -1)),
-)
+# The 12 FCC slip systems used to draw random orientations (and the wall
+# first-system) now come from the registry: `slip_systems("fcc")`, which is
+# ORDER-identical to the deleted hand-authored `_SLIP_SYSTEM_111` table so the
+# random_dislocations RNG draw + wall mode stay byte-identical (M4 Stage 4.3a
+# Task 8; ordered-equality guarded by tests/test_slip_systems.py).
 
 fast_inverse2(
     np.random.default_rng().random(size=(100, 3, 3))
@@ -226,6 +207,7 @@ def Find_Hg(
     S: np.ndarray = _S_IDENTITY,
     remount_name: str = "S1",
     z_offset_um: float = 0.0,
+    b: float = BURGERS_VECTOR,
     ctx: "ForwardContext",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the displacement gradient field Hg and reciprocal vector q_hkl.
@@ -247,6 +229,9 @@ def Find_Hg(
             ``Z_shift(z_offset_um)`` and the cache filename gains a
             ``_z{round(z_offset_um*1000)}nm`` suffix so each z layer has its
             own Fg cache. When zero, behaviour is identical to v1.2.0.
+        b: Burgers vector magnitude (µm). Default ``BURGERS_VECTOR`` (FCC, the
+            v2.x wall value — byte-identical). Non-FCC walls pass the
+            cell-derived |b| (M4 Stage 4.3a).
         ctx: Required ForwardContext; geometry (rl/Theta/theta_0) and kernel-path
             provenance are sourced from it (#16 Slice 5 — no module globals).
 
@@ -279,9 +264,15 @@ def Find_Hg(
     # z-aware cache filename. When z_offset_um == 0.0, identical to v1.2.0
     # filename — non-z scans hit the same cache file as before.
     z_suffix = "" if z_offset_um == 0.0 else f"_z{round(z_offset_um * 1000)}nm"
+    # |b|-aware cache key (M4 Stage 4.3a). |b| enters the Fg physics but the
+    # legacy filename omitted it. For FCC (b == BURGERS_VECTOR) the suffix is
+    # EMPTY so the v2.x filename is byte-identical and existing caches/goldens
+    # still hit. A non-FCC wall (different |b|) gets a distinct cache, so it
+    # can never collide with the FCC cache.
+    b_suffix = "" if b == BURGERS_VECTOR else f"_b{round(b * 1e7)}"
     Fg_path = str(
         Fg_dir
-        / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}{}.npy".format(
+        / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}{}{}.npy".format(
             str(dis).replace(".", ""),
             int(psize * 1e9),
             int(zl_rms * 2.35e9),
@@ -289,6 +280,7 @@ def Find_Hg(
             Nsub,
             remount_name,
             z_suffix,
+            b_suffix,
         )
     )
 
@@ -300,7 +292,7 @@ def Find_Hg(
         else ctx.geometry.rl
     )
     Theta_ = ctx.geometry.Theta
-    Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta_, dis, ndis, Fg_path, S=S)
+    Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta_, dis, ndis, Fg_path, b=b, S=S)
 
     if not os.path.exists(Fg_path.replace(".npy", "_vars.txt")):
         _lkp = ctx.resolution.loaded_kernel_path
@@ -1072,6 +1064,12 @@ class DislocationPopulation:
     Ud: np.ndarray
     sidecar: dict | None
     rotation_deg: np.ndarray | None = None
+    # Burgers magnitude |b| in micrometres for this population (M4 Stage 4.3a).
+    # FCC keeps the historical calibrated constant ``BURGERS_VECTOR`` (2.862e-4)
+    # for v2.x bit-identity; non-FCC structures derive it from the cell via
+    # ``burgers_magnitude``. Threaded into the Hg kernels by
+    # ``Find_Hg_from_population`` / ``_find_hg_from_population_numpy``.
+    b_um: float = BURGERS_VECTOR
 
 
 def _ud_matrix_from_bnt(
@@ -1096,22 +1094,74 @@ def _ud_matrix_from_bnt(
     return Ud
 
 
+def _resolve_structure_systems_b(
+    mount: "CrystalMount | None",
+) -> tuple[str, list, float]:
+    """Resolve (structure, slip_systems, |b| in µm) for the population builder.
+
+    M4 Stage 4.3a (Task 8): the dislocation slip systems and Burgers magnitude
+    come from the SAME ``[crystal]`` mount the resolution kernel was built from.
+
+    - ``mount is None`` (the default simplified-geometry FCC path) resolves to
+      ``structure="fcc"``, the 12 ``slip_systems("fcc")`` (ORDER-identical to the
+      legacy ``_SLIP_SYSTEM_111``), and ``|b| = BURGERS_VECTOR`` — **byte-identical
+      to v2.x**.
+    - Otherwise the resolved structure / slip families / cell come from the mount.
+
+    FCC keeps the historical calibrated constant (2.862e-4) for v2.x bit-identity;
+    the cell-derived a/√2 differs at the 4th sig fig. Non-FCC structures derive
+    |b| from the cell via ``burgers_magnitude``.
+
+    Reads ``mount.resolved_structure_type`` ONCE and resolves the slip list ONCE
+    (per the Task 6 review note) so callers can loop without re-resolving.
+    """
+    if mount is None:
+        return "fcc", slip_systems("fcc"), BURGERS_VECTOR
+    structure = mount.resolved_structure_type
+    families = list(mount.slip_families) if mount.slip_families else None
+    systems = slip_systems(structure, families=families)
+    # FCC keeps the historical calibrated constant (2.862e-4) for v2.x
+    # bit-identity; cell-derived a/√2 differs at the 4th sig fig. Non-FCC
+    # derives |b| from the cell.
+    b_um = (
+        BURGERS_VECTOR
+        if structure == "fcc"
+        else burgers_magnitude(structure, systems[0].family, mount.cell)
+    )
+    return structure, systems, b_um
+
+
 def build_dislocation_population(
     crystal: "CrystalConfig",
     fov_lateral_um: float,
     rng: np.random.Generator | None,
+    *,
+    mount: "CrystalMount | None" = None,
 ) -> DislocationPopulation:
     """Dispatch on crystal.mode and realize the dislocation population.
 
     Centered: 1 dislocation at origin with explicit (b, n, t).
-    Wall: existing dis-spaced grid; positions evenly spaced along y at z=0.
-    Random_dislocations: implemented in Task 8.
+    Wall: existing dis-spaced grid; positions evenly spaced along y at z=0,
+        all sharing the structure's first slip system.
+    Random_dislocations: N dislocations placed by a 2D Gaussian, each drawn a
+        uniform-random slip system from the structure's registry.
+
+    ``mount`` (M4 Stage 4.3a): the resolved ``CrystalMount`` whose
+    ``resolved_structure_type`` / ``slip_families`` / ``cell`` drive the slip
+    systems and Burgers magnitude. ``None`` (the default, used by the simplified
+    geometry FCC path) resolves to ``"fcc"`` + ``BURGERS_VECTOR`` — byte-identical
+    to v2.x. The centered mode is unaffected (it carries its own explicit
+    (b, n, t) and keeps ``BURGERS_VECTOR``).
     """
+    structure, systems, b_um = _resolve_structure_systems_b(mount)
+
     if crystal.mode == "centered":
         c = crystal.centered
         assert c is not None  # __post_init__ guarantees
         positions = np.zeros((1, 3), dtype=np.float64)
         Ud = _ud_matrix_from_bnt(c.b, c.n, c.t)[np.newaxis, :, :]  # (1, 3, 3)
+        # Centered carries an explicit (b, n, t) only — keep the historical
+        # |b| = BURGERS_VECTOR (the centered config has no structure/cell info).
         return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None)
 
     if crystal.mode == "wall":
@@ -1122,11 +1172,14 @@ def build_dislocation_population(
         ys = (np.arange(w.ndis) - (w.ndis - 1) / 2.0) * w.dis
         positions = np.zeros((w.ndis, 3), dtype=np.float64)
         positions[:, 1] = ys
-        # All dislocations in a wall share the same (b, n, t) — the canonical
-        # {111}/<-110>/<11-2> slip system for the Borgi/Purdue layout.
-        Ud_single = _ud_matrix_from_bnt((1, -1, 0), (1, 1, 1), (1, 1, -2))
+        # All dislocations in a wall share the structure's FIRST slip system.
+        # For FCC this is slip_systems("fcc")[0] == the legacy
+        # {111}/<-110>/<11-2> system (the Borgi/Purdue layout), so the wall
+        # population Ud stays byte-identical to v2.x.
+        s0 = systems[0]
+        Ud_single = _ud_matrix_from_bnt(s0.b, s0.n, s0.t)
         Ud = np.broadcast_to(Ud_single, (w.ndis, 3, 3)).copy()
-        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None)
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None, b_um=b_um)
 
     if crystal.mode == "random_dislocations":
         rd = crystal.random_dislocations
@@ -1182,12 +1235,16 @@ def build_dislocation_population(
                     f"ndis={rd.ndis} - configuration may be impossible."
                 )
 
-        # Draw slip-system per dislocation (uniform over {111} family).
-        slip_indices = rng.integers(0, len(_SLIP_SYSTEM_111), size=rd.ndis)
+        # Draw slip-system per dislocation (uniform over the structure's
+        # registry). For FCC `systems` == the 12 slip_systems("fcc"), which is
+        # ORDER-identical to the legacy _SLIP_SYSTEM_111, so `rng.integers(0, 12)`
+        # picks the SAME (b, n, t) per dislocation as v2.x — byte-identical draw.
+        slip_indices = rng.integers(0, len(systems), size=rd.ndis)
         Ud = np.zeros((rd.ndis, 3, 3), dtype=np.float64)
         sidecar_dislocations: list[dict] = []
         for i in range(rd.ndis):
-            b, n, t = _SLIP_SYSTEM_111[slip_indices[i]]
+            s = systems[slip_indices[i]]
+            b, n, t = s.b, s.n, s.t
             Ud[i] = _ud_matrix_from_bnt(b, n, t)
             sidecar_dislocations.append(
                 {
@@ -1208,9 +1265,11 @@ def build_dislocation_population(
             "min_distance_um": rd.min_distance,
             "seed": resolved_seed,
             "seed_source": seed_source,
+            "structure_type": structure,
+            "burgers_magnitude_um": float(b_um),
             "dislocations": sidecar_dislocations,
         }
-        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=sidecar)
+        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=sidecar, b_um=b_um)
 
     raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
 
@@ -1291,7 +1350,9 @@ def _find_hg_from_population_numpy(
     # Fd_find_mixed(rl * 1e6, ...). Omitting this made |rd| 1e6x too small and
     # the 1/r field 1e6x too large (sub-project C regression).
     # Returns shape (X, 3, 3) with identity already added (Fg, not Fdd).
-    Fg = Fd_find_multi_dislocs_mixed(rl_eff * 1e6, Us_, crystals, Theta_, S=S)
+    # |b| from the population (FCC -> BURGERS_VECTOR == default, byte-identical;
+    # non-FCC -> cell-derived).
+    Fg = Fd_find_multi_dislocs_mixed(rl_eff * 1e6, Us_, crystals, Theta_, b=population.b_um, S=S)
 
     # Convert Fg → Hg using the same convention as load_or_generate_Hg:
     #   Hg = transpose(Fg^-1) - I
@@ -1365,5 +1426,7 @@ def Find_Hg_from_population(
 
     # rl is in metres; the field formula expects micrometres (b in µm) — *1e6,
     # exactly as the NumPy path and the reference disloc_identify.py do.
-    Hg = find_hg_population(rl_eff * 1e6, M, offset, Ud, cos_rot, sin_rot)
+    # |b| from the population (FCC -> BURGERS_VECTOR == default, byte-identical;
+    # non-FCC -> cell-derived).
+    Hg = find_hg_population(rl_eff * 1e6, M, offset, Ud, cos_rot, sin_rot, b=population.b_um)
     return Hg, q_hkl

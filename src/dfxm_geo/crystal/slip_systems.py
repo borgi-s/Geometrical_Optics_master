@@ -47,6 +47,39 @@ _REGISTRY: dict[str, tuple[SlipFamily, ...]] = {
     ),
 }
 
+# Explicit ORDERED FCC {111}<110> slip table — the hand-authored v2.x sequence
+# (forward_model._SLIP_SYSTEM_111, deleted in M4 Stage 4.3a Task 8). The
+# symmetry enumerator (`_enumerate_family`) sorts planes/Burgers
+# lexicographically, which does NOT match this order. The ORDER is load-bearing:
+# `random_dislocations` draws `rng.integers(0, 12)` into this list, so the
+# sequence determines which (b, n, t) each dislocation gets, and the wall mode
+# uses entry [0] as its single slip system. Returning the symmetry enumeration
+# instead would silently change every FCC random/wall forward image. The set
+# (b, n, t up to sign) is identical to the enumerator output — asserted in
+# tests (`test_fcc_ordered_table_is_complete_111_110_family`,
+# `test_fcc_registry_equals_legacy_slip_table`) and guarded at module import
+# below — so nothing is dropped; only the order is pinned for bit-identity.
+_FCC_111_110_ORDERED: tuple[
+    tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]], ...
+] = (
+    # Plane (1, 1, 1)
+    ((1, -1, 0), (1, 1, 1), (1, 1, -2)),
+    ((-1, 0, 1), (1, 1, 1), (-1, 2, -1)),
+    ((0, 1, -1), (1, 1, 1), (-2, 1, 1)),
+    # Plane (1, -1, 1)
+    ((1, 1, 0), (1, -1, 1), (1, -1, -2)),
+    ((-1, 0, 1), (1, -1, 1), (-1, -2, -1)),
+    ((0, -1, -1), (1, -1, 1), (-2, -1, 1)),
+    # Plane (-1, 1, 1)
+    ((0, 1, -1), (-1, 1, 1), (-2, -1, -1)),
+    ((1, 0, 1), (-1, 1, 1), (1, 2, -1)),
+    ((1, 1, 0), (-1, 1, 1), (-1, 1, -2)),
+    # Plane (1, 1, -1)
+    ((0, 1, 1), (1, 1, -1), (2, -1, 1)),
+    ((1, -1, 0), (1, 1, -1), (-1, -1, -2)),
+    ((1, 0, 1), (1, 1, -1), (1, -2, -1)),
+)
+
 
 def _variants(rep: tuple[int, int, int]) -> set[tuple[int, int, int]]:
     """All distinct sign+permutation variants of a Miller family rep."""
@@ -67,14 +100,14 @@ def _canon(v: tuple[int, int, int]) -> tuple[int, int, int]:
     return v
 
 
-def _enumerate_family(fam: SlipFamily) -> list[SlipSystem]:
-    if fam.literal:
-        # Literal families: yield exactly one system from the stored (b, n) pair,
-        # with no symmetry-orbit expansion. The b.n==0 check was done at registration.
-        n = fam.plane_family
-        b = fam.burgers_family
-        t = cast("tuple[int, int, int]", tuple(int(x) for x in np.cross(n, b)))
-        return [SlipSystem(b=b, n=n, t=t, family=fam.name)]
+def _enumerate_orbit(fam: SlipFamily) -> list[SlipSystem]:
+    """Symmetry-orbit enumeration: lexicographic plane/Burgers expansion.
+
+    The generic glide-system generator. Order is the deterministic
+    ``sorted(planes) x sorted(burgers)`` sequence — fine for BCC (no legacy to
+    match) but NOT the v2.x FCC order, which `_enumerate_family` overrides for
+    bit-identity.
+    """
     planes = {_canon(p) for p in _variants(fam.plane_family)}
     burgers = _variants(fam.burgers_family)
     seen: set[tuple[tuple[int, int, int], tuple[int, int, int]]] = set()
@@ -90,6 +123,44 @@ def _enumerate_family(fam: SlipFamily) -> list[SlipSystem]:
             t = cast("tuple[int, int, int]", tuple(int(x) for x in np.cross(n, b)))
             systems.append(SlipSystem(b=b, n=n, t=t, family=fam.name))
     return systems
+
+
+def _enumerate_family(fam: SlipFamily) -> list[SlipSystem]:
+    if fam.literal:
+        # Literal families: yield exactly one system from the stored (b, n) pair,
+        # with no symmetry-orbit expansion. The b.n==0 check was done at registration.
+        n = fam.plane_family
+        b = fam.burgers_family
+        t = cast("tuple[int, int, int]", tuple(int(x) for x in np.cross(n, b)))
+        return [SlipSystem(b=b, n=n, t=t, family=fam.name)]
+    if (
+        fam.name == "{111}<110>"
+        and fam.plane_family == (1, 1, 1)
+        and fam.burgers_family == (1, 1, 0)
+    ):
+        # FCC {111}<110>: return the explicit ORDERED table, not the lexicographic
+        # symmetry enumeration, so the v2.x random/wall draw order is preserved
+        # bit-for-bit (see _FCC_111_110_ORDERED). Set-completeness vs the
+        # enumerator is guarded at import (the assertion below this function).
+        return [SlipSystem(b=b, n=n, t=t, family=fam.name) for b, n, t in _FCC_111_110_ORDERED]
+    return _enumerate_orbit(fam)
+
+
+def _assert_fcc_ordered_table_complete() -> None:
+    """Guard (run at import): the explicit ordered FCC table must SET-equal the
+    full {111}<110> symmetry orbit, so pinning the order never drops a system."""
+    orbit = _enumerate_orbit(SlipFamily("{111}<110>", (1, 1, 1), (1, 1, 0)))
+    orbit_set = {(_canon(s.b), _canon(s.n)) for s in orbit}
+    table_set = {(_canon(b), _canon(n)) for b, n, _t in _FCC_111_110_ORDERED}
+    if orbit_set != table_set or len(_FCC_111_110_ORDERED) != len(orbit):
+        raise AssertionError(  # pragma: no cover - defensive import-time guard
+            "_FCC_111_110_ORDERED desynced from the {111}<110> symmetry orbit: "
+            f"table has {len(_FCC_111_110_ORDERED)} systems {sorted(table_set)}, "
+            f"orbit has {len(orbit)} {sorted(orbit_set)}."
+        )
+
+
+_assert_fcc_ordered_table_complete()
 
 
 def _families_for(structure: str, families: list[str] | None) -> tuple[SlipFamily, ...]:

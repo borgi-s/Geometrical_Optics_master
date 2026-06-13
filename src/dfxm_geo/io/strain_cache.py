@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from dfxm_geo.constants import BURGERS_VECTOR
 from dfxm_geo.crystal.dislocations import Fd_find
 from dfxm_geo.crystal.rotations import fast_inverse2
 
@@ -19,6 +20,7 @@ def load_or_generate_Hg(
     ndis: int,
     file_path: str | None = None,
     *,
+    b: float = BURGERS_VECTOR,
     S: np.ndarray = _S_IDENTITY,
 ) -> np.ndarray:
     """Return the displacement gradient field Hg, loading from disk if cached.
@@ -33,6 +35,13 @@ def load_or_generate_Hg(
     (Purdue 2024 paper). When `S = identity` (default), the call matches the
     pre-port behaviour bit-for-bit; with `S != identity`, the strain field is
     computed in a remounted-sample frame.
+
+    ``b`` is the Burgers magnitude (µm); default ``BURGERS_VECTOR`` (FCC, the
+    v2.x value — byte-identical). Non-FCC walls pass the cell-derived |b|
+    (M4 Stage 4.3a). Note ``b`` participates in the Fg PHYSICS but NOT the cache
+    filename, so a non-default ``b`` must be paired with a distinct
+    ``file_path`` (the wall path already keys the filename on structure-bearing
+    params) to avoid loading a stale-|b| cache.
     """
     expected_n = rl.shape[1]
     Fg: np.ndarray | None = None

@@ -125,6 +125,24 @@ class TestBuildDislocationPopulationWall:
         np.testing.assert_array_equal(pop_a.positions_um, pop_b.positions_um)
         np.testing.assert_array_equal(pop_a.Ud, pop_b.Ud)
 
+    def test_wall_first_system_is_legacy_slip_zero(self) -> None:
+        """M4 Stage 4.3a Task 8 (Hazard A): the FCC wall first-system Ud must
+        equal _ud_matrix_from_bnt((1,-1,0),(1,1,1),(1,1,-2)) == the legacy
+        _SLIP_SYSTEM_111[0] == slip_systems('fcc')[0]."""
+        from dfxm_geo.crystal.slip_systems import slip_systems
+        from dfxm_geo.direct_space.forward_model import _ud_matrix_from_bnt
+
+        crystal = CrystalConfig(
+            mode="wall",
+            wall=WallCrystalConfig(dis=4.0, ndis=5, sample_remount="S1"),
+        )
+        pop = build_dislocation_population(crystal, fov_lateral_um=20.4, rng=None)
+        expected = _ud_matrix_from_bnt((1, -1, 0), (1, 1, 1), (1, 1, -2))
+        for i in range(5):
+            np.testing.assert_array_equal(pop.Ud[i], expected)
+        s0 = slip_systems("fcc")[0]
+        np.testing.assert_array_equal(expected, _ud_matrix_from_bnt(s0.b, s0.n, s0.t))
+
 
 class TestBuildDislocationPopulationRandomDislocations:
     def _config(self, **kwargs) -> CrystalConfig:
@@ -208,3 +226,45 @@ class TestBuildDislocationPopulationRandomDislocations:
         pop = build_dislocation_population(crystal, fov_lateral_um=20.4, rng=None)
         assert pop.sidecar["seed_source"] == "entropy"
         assert isinstance(pop.sidecar["seed"], int)
+
+    def test_fcc_random_draw_byte_identical_to_legacy_slip_table(self) -> None:
+        """M4 Stage 4.3a Task 8 (Hazard A): the registry-driven FCC draw must
+        reproduce the EXACT per-dislocation (b, n, t) sequence the deleted
+        _SLIP_SYSTEM_111 table produced. We replay the legacy logic
+        (rng.integers(0, 12) then index the hand-authored table) against a fresh
+        rng with the same seed and assert the realized Ud sequence + sidecar
+        (b, n, t) labels match byte-for-byte. If the registry order ever drifts
+        from the legacy order, FCC random_dislocations output silently changes."""
+        from dfxm_geo.direct_space.forward_model import _ud_matrix_from_bnt
+
+        # The hand-authored v2.x FCC slip table, verbatim (deleted from src).
+        legacy_table = (
+            ((1, -1, 0), (1, 1, 1), (1, 1, -2)),
+            ((-1, 0, 1), (1, 1, 1), (-1, 2, -1)),
+            ((0, 1, -1), (1, 1, 1), (-2, 1, 1)),
+            ((1, 1, 0), (1, -1, 1), (1, -1, -2)),
+            ((-1, 0, 1), (1, -1, 1), (-1, -2, -1)),
+            ((0, -1, -1), (1, -1, 1), (-2, -1, 1)),
+            ((0, 1, -1), (-1, 1, 1), (-2, -1, -1)),
+            ((1, 0, 1), (-1, 1, 1), (1, 2, -1)),
+            ((1, 1, 0), (-1, 1, 1), (-1, 1, -2)),
+            ((0, 1, 1), (1, 1, -1), (2, -1, 1)),
+            ((1, -1, 0), (1, 1, -1), (-1, -1, -2)),
+            ((1, 0, 1), (1, 1, -1), (1, -2, -1)),
+        )
+        ndis, seed = 16, 2024
+        crystal = self._config(ndis=ndis, sigma=5.0, seed=seed)
+        pop = build_dislocation_population(
+            crystal, fov_lateral_um=20.4, rng=np.random.default_rng(seed)
+        )
+        # Replay the legacy draw: positions consume rng first (2 normals per
+        # dislocation), THEN the slip indices — same order as the production code.
+        replay = np.random.default_rng(seed)
+        _ = replay.normal(loc=0.0, scale=5.0, size=(ndis, 2))  # positions (no min_distance)
+        legacy_indices = replay.integers(0, len(legacy_table), size=ndis)
+        for i in range(ndis):
+            b, n, t = legacy_table[legacy_indices[i]]
+            np.testing.assert_array_equal(pop.Ud[i], _ud_matrix_from_bnt(b, n, t))
+            assert pop.sidecar["dislocations"][i]["b"] == list(b)
+            assert pop.sidecar["dislocations"][i]["n"] == list(n)
+            assert pop.sidecar["dislocations"][i]["t"] == list(t)
