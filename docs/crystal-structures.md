@@ -145,10 +145,13 @@ mount_y = [0,  1, 0]
 mount_z = [0,  0, 1]
 ```
 
-In Cartesian coordinates the real-space directions `A·[2,-1,0]` and `A·[0,1,0]`
-are orthogonal for a hexagonal cell (both lie in the basal plane, 120° apart;
-their `B·m` reciprocal directions are orthogonal). This mount is used in all
-HCP examples and tests.
+The mount validator checks orthogonality of the **reciprocal-lattice**
+directions `B·m` (the plane normals): `B·[2,-1,0]` and `B·[0,1,0]` are mutually
+orthogonal for a hexagonal cell. Both Miller vectors lie in the basal plane
+(zero `l`); the third direction `[0,0,1]` maps to the c*-axis, completing an
+orthogonal frame. (The real-space `A·m` directions are *not* checked and are
+not orthogonal here — `A·[2,-1,0]` and `A·[0,1,0]` subtend ~139°.) This mount
+is used in all HCP examples and tests.
 
 #### HCP requires oblique geometry
 
