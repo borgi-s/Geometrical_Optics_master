@@ -36,9 +36,10 @@ def load_or_generate_Hg(
     pre-port behaviour bit-for-bit; with `S != identity`, the strain field is
     computed in a remounted-sample frame.
 
-    ``b`` is the Burgers magnitude (µm); default ``BURGERS_VECTOR`` (FCC, the
-    v2.x value — byte-identical). Non-FCC walls pass the cell-derived |b|
-    (M4 Stage 4.3a). Note ``b`` participates in the Fg PHYSICS but NOT the cache
+    ``b`` is the Burgers magnitude (Âµm); default ``BURGERS_VECTOR`` (FCC, the
+    v2.x value â€” byte-identical). Non-FCC walls pass the cell-derived |b|
+    (M4 Stage 4.3a). ``b`` is forwarded to ``Fd_find`` where it linearly
+    scales the displacement gradient (physics). It does NOT enter the cache
     filename, so a non-default ``b`` must be paired with a distinct
     ``file_path`` (the wall path already keys the filename on structure-bearing
     params) to avoid loading a stale-|b| cache.
@@ -67,7 +68,7 @@ def load_or_generate_Hg(
             Fg = np.zeros([expected_n, 3, 3])
             Fg += np.identity(Fg.shape[1])
         else:
-            Fg = Fd_find(rl * 1e6, Ud, Us, Theta, dis, ndis, S=S)
+            Fg = Fd_find(rl * 1e6, Ud, Us, Theta, dis, ndis, b=b, S=S)
         if file_path is not None:
             np.save(file_path, Fg)
             print(f"Saved Fg to {file_path.rsplit('/', 1)[-1]}")

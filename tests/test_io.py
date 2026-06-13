@@ -272,3 +272,58 @@ class TestLoadOrGenerateHgSampleRemount:
             S=S2,
         )
         assert not np.allclose(Hg_I, Hg_S2)
+
+
+class TestLoadOrGenerateHgBParam:
+    """The b kwarg must be forwarded to Fd_find (regression for the missing b=b bug)."""
+
+    def test_b_forwarded_to_Fd_find(self, rotation_matrices, monkeypatch) -> None:
+        """Monkeypatch Fd_find to capture the b it receives and verify forwarding."""
+        import dfxm_geo.io.strain_cache as sc
+        from dfxm_geo.constants import BURGERS_VECTOR
+
+        captured: dict[str, float] = {}
+
+        original_Fd_find = sc.Fd_find
+
+        def fake_Fd_find(rl, Ud, Us, Theta, dis, ndis, b=BURGERS_VECTOR, **kwargs):
+            captured["b"] = b
+            return original_Fd_find(rl, Ud, Us, Theta, dis, ndis, b=b, **kwargs)
+
+        monkeypatch.setattr(sc, "Fd_find", fake_Fd_find)
+
+        Ud, Us, Theta = rotation_matrices
+        rng = np.random.default_rng(42)
+        rl = rng.normal(size=(3, 20)) * 1e-6
+        custom_b = 9.999e-4  # deliberately non-default
+
+        sc.load_or_generate_Hg(rl, Ud, Us, Theta, dis=1.0, ndis=1, b=custom_b)
+
+        assert "b" in captured, "Fd_find was never called"
+        assert captured["b"] == custom_b, (
+            f"load_or_generate_Hg did not forward b to Fd_find: "
+            f"expected {custom_b}, got {captured['b']}"
+        )
+
+    def test_distinct_b_values_yield_distinct_Hg(self, rotation_matrices, tmp_path) -> None:
+        """Two distinct b magnitudes must produce different Hg arrays."""
+        from dfxm_geo.io.strain_cache import load_or_generate_Hg
+
+        Ud, Us, Theta = rotation_matrices
+        rng = np.random.default_rng(7)
+        rl = rng.normal(size=(3, 16)) * 1e-6
+
+        b_fcc = 2.862e-4  # typical FCC Al |b| in µm
+        b_bcc = 2.476e-4  # typical BCC Fe |b| in µm
+
+        Hg_fcc = load_or_generate_Hg(
+            rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=str(tmp_path / "fg_fcc.npy"), b=b_fcc
+        )
+        Hg_bcc = load_or_generate_Hg(
+            rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=str(tmp_path / "fg_bcc.npy"), b=b_bcc
+        )
+
+        assert not np.allclose(Hg_fcc, Hg_bcc), (
+            "Different b values must produce different Hg; "
+            "if they are equal, b is not being forwarded to Fd_find"
+        )
