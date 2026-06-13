@@ -167,14 +167,14 @@ the C / E discriminators for `crystal_mode` / `identify_mode`.
 For **structure-aware** runs (oblique geometry or an explicit `[crystal]
 structure_type` / `cif` / `space_group`), each `/N.1/` entry is extended
 with the following attributes written by
-`dfxm_geo.io.hdf5.build_structure_provenance_attrs`:
+`dfxm_geo.io.hdf5.structure_provenance_attrs`:
 
 | Attr | Type | Example | Notes |
 | ---- | ---- | ------- | ----- |
 | `structure_type` | string | `"bcc"` | Resolved structure family (`"fcc"` or `"bcc"`) |
 | `poisson_ratio` | float64 | `0.29` | Resolved ν used in the displacement-field calculation |
 | `poisson_source` | string | `"KL"` | Citation tag: `"KL"` (Kaye & Laby), `"SW"` (Simmons & Wang), or `"override"` |
-| `burgers_magnitude_um` | float64 | `2.483e-4` | \|b\| in µm for the primary slip family |
+| `burgers_magnitude_um` | float64 | `2.485e-4` | \|b\| in µm for the primary slip family |
 | `material` | string | `"Fe"` | Only present when `[crystal] material` was set |
 | `slip_families` | list[string] | `["{110}<111>"]` | Only present when `[crystal] slip_families` was set |
 | `space_group` | string | `"Im-3m"` | Only present when a space group was derived from CIF or set explicitly |

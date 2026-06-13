@@ -22,8 +22,8 @@ Space-group-to-structure mapping:
 
 | Bravais lattice | Representative space groups | Derived type |
 |---|---|---|
-| F-cubic | Fm-3m, F4/mmm, … | `"fcc"` |
-| I-cubic | Im-3m, I4/mmm, … | `"bcc"` |
+| F-cubic | Fm-3m, F4-3m, … | `"fcc"` |
+| I-cubic | Im-3m, I4-3m, … | `"bcc"` |
 | P-hexagonal | P6₃/mmc, P6/mmm, … | `"hcp"` (4.3b — raises if used) |
 
 Contradicting the space group is an error:
@@ -204,8 +204,8 @@ where the lattice-translation fraction is 1/2 for both ⟨110⟩_fcc and ⟨111�
 
 | Family | Burgers direction | Formula | Example (α-Fe, a = 2.87 Å) |
 |---|---|---|---|
-| {110}⟨111⟩ | ½⟨111⟩ | a√3/2 | 2.483 × 10⁻⁴ µm |
-| {112}⟨111⟩ | ½⟨111⟩ | a√3/2 | 2.483 × 10⁻⁴ µm |
+| {110}⟨111⟩ | ½⟨111⟩ | a√3/2 | 2.485 × 10⁻⁴ µm |
+| {112}⟨111⟩ | ½⟨111⟩ | a√3/2 | 2.485 × 10⁻⁴ µm |
 
 Both BCC families share the same Burgers direction family ⟨111⟩, so they give
 the same |b|.
@@ -258,12 +258,12 @@ following additional attributes:
 | `structure_type` | string | `"bcc"` | Resolved structure family |
 | `poisson_ratio` | float64 | `0.29` | Resolved ν |
 | `poisson_source` | string | `"KL"` | `"KL"`, `"SW"`, or `"override"` |
-| `burgers_magnitude_um` | float64 | `2.483e-4` | \|b\| in µm for the primary slip family |
+| `burgers_magnitude_um` | float64 | `2.485e-4` | \|b\| in µm for the primary slip family |
 | `material` | string | `"Fe"` | Only present if `[crystal] material` was set |
 | `slip_families` | list[string] | `["{110}<111>"]` | Only present if `slip_families` was set |
 | `space_group` | string | `"Im-3m"` | Only present if derived from a space group or CIF |
 
-These attrs are written by `dfxm_geo.io.hdf5.build_structure_provenance_attrs`
+These attrs are written by `dfxm_geo.io.hdf5.structure_provenance_attrs`
 and are appended to the same `/N.1/` attrs that carry `scan_mode`,
 `scanned_axes`, and `crystal_mode` (see `docs/output-format.md`).
 
