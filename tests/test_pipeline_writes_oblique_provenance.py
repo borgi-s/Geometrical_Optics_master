@@ -199,6 +199,11 @@ def test_oblique_provenance_attrs(tmp_path: Path, _fm_stub: fm.ForwardContext) -
         np.testing.assert_array_equal(attrs["mount_y"], [0, 1, 0])
         np.testing.assert_array_equal(attrs["mount_z"], [0, 0, 1])
 
+        # Oblique FCC runs (mount is not None) MUST emit structure-family provenance.
+        assert attrs["structure_type"] == "fcc", "oblique FCC run must emit structure_type='fcc'"
+        assert "poisson_ratio" in attrs, "oblique FCC run must emit poisson_ratio"
+        assert "burgers_magnitude_um" in attrs, "oblique FCC run must emit burgers_magnitude_um"
+
 
 def test_fcc_simplified_no_structure_attrs(tmp_path: Path, _fm_stub: fm.ForwardContext) -> None:
     """FCC simplified path (mount=None) writes NO structure_type / poisson attrs.

@@ -590,13 +590,10 @@ def structure_provenance_attrs(mount: CrystalMount) -> dict[str, Any]:
       ``material``            — Poisson-table material key (omitted if None)
       ``slip_families``       — list of family names (omitted if None)
     """
+    from dfxm_geo.constants import BURGERS_VECTOR
     from dfxm_geo.crystal.elasticity import poisson_source as _poisson_source
-    from dfxm_geo.crystal.slip_systems import (
-        burgers_magnitude as _b_mag,
-    )
-    from dfxm_geo.crystal.slip_systems import (
-        slip_systems as _slip_sys,
-    )
+    from dfxm_geo.crystal.slip_systems import burgers_magnitude as _b_mag
+    from dfxm_geo.crystal.slip_systems import slip_systems as _slip_sys
 
     structure = mount.resolved_structure_type
     nu = mount.resolved_poisson_ratio
@@ -609,11 +606,15 @@ def structure_provenance_attrs(mount: CrystalMount) -> dict[str, Any]:
     if families:
         primary_family = families[0]
     else:
-        # Fall back to first registered family for this structure.
+        # Fall back to first registered family for this structure — registry-driven,
+        # not a hardcoded FCC literal, so BCC / HCP structures resolve correctly.
         systems = _slip_sys(structure)
-        primary_family = systems[0].family if systems else "{111}<110>"
-
-    from dfxm_geo.constants import BURGERS_VECTOR
+        if not systems:
+            raise ValueError(
+                f"No slip systems registered for structure {structure!r}; "
+                "cannot derive primary family for burgers_magnitude_um."
+            )
+        primary_family = systems[0].family
 
     # Preserve the historical calibrated FCC constant for bit-identity
     # (forward_model does the same; cell-derived a/√2 differs at 4th sig fig).

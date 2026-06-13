@@ -50,9 +50,25 @@ def plot_slip_plane_3d(
     n = np.asarray(slip_plane_normal, dtype=float)
     fig = go.Figure()
 
-    # The plane (z = (-n_x x - n_y y) / n_z within a (-1, 1) box).
-    xx, yy = np.meshgrid(np.linspace(-1, 1, 21), np.linspace(-1, 1, 21))
-    zz = (-n[0] * xx - n[1] * yy) / n[2]
+    # The plane within a (-1, 1) box.  Solve for the coordinate axis whose
+    # component of n has the largest magnitude to avoid divide-by-zero for
+    # normals like (1, 1, 0)/√2 (BCC {110} planes have n[2] == 0).
+    #
+    # Convention: label the three axes 0/1/2 (x/y/z).  k is the "dependent"
+    # axis; the other two are meshed over [-1, 1].  The plane equation is:
+    #   n[0]*coords[0] + n[1]*coords[1] + n[2]*coords[2] = 0
+    # so  coords[k] = -sum_{j != k} n[j]*coords[j] / n[k].
+    k = int(np.argmax(np.abs(n)))  # axis to solve for (largest |n_k| → no div-by-zero)
+    j0, j1 = [ax for ax in (0, 1, 2) if ax != k]  # the two free axes
+
+    u = np.linspace(-1, 1, 21)
+    uu, vv = np.meshgrid(u, u)
+    ww = -(n[j0] * uu + n[j1] * vv) / n[k]
+
+    # Assign the three coordinate grids by axis index.
+    coord_map: dict[int, np.ndarray] = {j0: uu, j1: vv, k: ww}
+    xx, yy, zz = coord_map[0], coord_map[1], coord_map[2]
+
     fig.add_trace(
         go.Surface(
             z=zz,
