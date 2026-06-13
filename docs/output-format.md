@@ -162,6 +162,29 @@ the C / E discriminators for `crystal_mode` / `identify_mode`.
 > shares the same configuration as `/1.1`. Only `/1.1` has them at
 > present. Tracked as a B+C follow-up.
 
+### Structure provenance attrs (M4 Stage 4.3a)
+
+For **structure-aware** runs (oblique geometry or an explicit `[crystal]
+structure_type` / `cif` / `space_group`), each `/N.1/` entry is extended
+with the following attributes written by
+`dfxm_geo.io.hdf5.build_structure_provenance_attrs`:
+
+| Attr | Type | Example | Notes |
+| ---- | ---- | ------- | ----- |
+| `structure_type` | string | `"bcc"` | Resolved structure family (`"fcc"` or `"bcc"`) |
+| `poisson_ratio` | float64 | `0.29` | Resolved ν used in the displacement-field calculation |
+| `poisson_source` | string | `"KL"` | Citation tag: `"KL"` (Kaye & Laby), `"SW"` (Simmons & Wang), or `"override"` |
+| `burgers_magnitude_um` | float64 | `2.483e-4` | \|b\| in µm for the primary slip family |
+| `material` | string | `"Fe"` | Only present when `[crystal] material` was set |
+| `slip_families` | list[string] | `["{110}<111>"]` | Only present when `[crystal] slip_families` was set |
+| `space_group` | string | `"Im-3m"` | Only present when a space group was derived from CIF or set explicitly |
+
+**FCC simplified path:** when `mount` is `None` (the default for a symmetric
+FCC run without `[crystal] cif`, `structure_type`, or `space_group`), none of
+these attrs are written. Outputs from this path remain byte-identical to v2.5.x.
+See `docs/crystal-structures.md` for the full provenance rules and the
+resolution precedence for `structure_type` and `poisson_ratio`.
+
 ## Per-mode `sample/` layouts
 
 The `/N.1/sample/` group's contents depend on which pipeline wrote the
