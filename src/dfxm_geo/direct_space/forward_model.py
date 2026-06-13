@@ -24,7 +24,12 @@ from numba import njit
 from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
 from dfxm_geo.crystal.rotations import fast_inverse2
-from dfxm_geo.crystal.slip_systems import SlipSystem, burgers_magnitude, slip_systems
+from dfxm_geo.crystal.slip_systems import (
+    SlipSystem,
+    burgers_magnitude,
+    burgers_magnitude_of,
+    slip_systems,
+)
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
 if TYPE_CHECKING:
@@ -1111,6 +1116,10 @@ class DislocationPopulation:
     # override that changes ν (e.g. BCC Fe → 0.29) alters the displacement field
     # (intended). Threaded into the Hg kernels alongside ``b_um``.
     ny: float = POISSON_RATIO
+    # Per-dislocation Burgers magnitude (µm), HCP only (⟨a⟩ vs ⟨c+a⟩ differ).
+    # None → uniform ``b_um`` for the whole population (FCC/BCC/centered/wall) →
+    # byte-identical scalar path.  Shape (N,) when set.
+    b_um_per: np.ndarray | None = None
 
 
 def _ud_matrix_from_bnt(
@@ -1237,18 +1246,29 @@ def build_dislocation_population(
     override that changes ν alters the displacement field.
     """
     structure, systems, b_um, ny = _resolve_structure_systems_b(mount)
+    cell = mount.cell if mount is not None else None
 
     if crystal.mode == "centered":
         c = crystal.centered
         assert c is not None  # __post_init__ guarantees
         positions = np.zeros((1, 3), dtype=np.float64)
-        Ud = _ud_matrix_from_bnt(c.b, c.n, c.t)[np.newaxis, :, :]  # (1, 3, 3)
+        if cell is None or cell.is_cubic:
+            Ud = _ud_matrix_from_bnt(c.b, c.n, c.t)[np.newaxis, :, :]  # (1, 3, 3)
+        else:
+            Ud = _ud_matrix_from_bnt_cell(c.b, c.n, cell, t_int=c.t)[np.newaxis, :, :]
         # Centered carries an explicit (b, n, t) only; |b| comes from the
         # structure-resolved b_um (same as wall/random). For FCC (or mount=None)
-        # this is BURGERS_VECTOR — byte-identical to v2.x. For non-FCC mounts
+        # this is BURGERS_VECTOR — byte-identical to v2.x. For non-FCC cubic mounts
         # (e.g. BCC) it is the cell-derived magnitude so the Hg kernel uses
-        # the correct |b|.
-        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None, b_um=b_um, ny=ny)
+        # the correct |b|. For HCP the user-supplied b direction sets the exact |b|.
+        b_centered = (
+            b_um
+            if (cell is None or cell.is_cubic)
+            else burgers_magnitude_of(c.b, cell, fraction=1.0)
+        )
+        return DislocationPopulation(
+            positions_um=positions, Ud=Ud, sidecar=None, b_um=b_centered, ny=ny
+        )
 
     if crystal.mode == "wall":
         w = crystal.wall
@@ -1263,9 +1283,20 @@ def build_dislocation_population(
         # {111}/<-110>/<11-2> system (the Borgi/Purdue layout), so the wall
         # population Ud stays byte-identical to v2.x.
         s0 = systems[0]
-        Ud_single = _ud_matrix_from_bnt(s0.b, s0.n, s0.t)
+        if cell is None or cell.is_cubic:
+            Ud_single = _ud_matrix_from_bnt(s0.b, s0.n, s0.t)
+        else:
+            Ud_single = _ud_matrix_from_bnt_cell(s0.b, s0.n, cell, t_int=s0.t)
         Ud = np.broadcast_to(Ud_single, (w.ndis, 3, 3)).copy()
-        return DislocationPopulation(positions_um=positions, Ud=Ud, sidecar=None, b_um=b_um, ny=ny)
+        # |b| for the wall's single system (HCP: that system's family magnitude).
+        b_wall = (
+            b_um
+            if (cell is None or cell.is_cubic)
+            else burgers_magnitude_of(s0.b, cell, fraction=1.0)
+        )
+        return DislocationPopulation(
+            positions_um=positions, Ud=Ud, sidecar=None, b_um=b_wall, ny=ny
+        )
 
     if crystal.mode == "random_dislocations":
         rd = crystal.random_dislocations
@@ -1327,11 +1358,18 @@ def build_dislocation_population(
         # picks the SAME (b, n, t) per dislocation as v2.x — byte-identical draw.
         slip_indices = rng.integers(0, len(systems), size=rd.ndis)
         Ud = np.zeros((rd.ndis, 3, 3), dtype=np.float64)
+        is_cubic = cell is None or cell.is_cubic
+        b_per: np.ndarray | None = None if is_cubic else np.empty(rd.ndis, dtype=np.float64)
         sidecar_dislocations: list[dict] = []
         for i in range(rd.ndis):
             s = systems[slip_indices[i]]
             b, n, t = s.b, s.n, s.t
-            Ud[i] = _ud_matrix_from_bnt(b, n, t)
+            if is_cubic:
+                Ud[i] = _ud_matrix_from_bnt(b, n, t)
+            else:
+                assert cell is not None  # guarded by is_cubic = cell is None or cell.is_cubic
+                Ud[i] = _ud_matrix_from_bnt_cell(b, n, cell, t_int=t)
+                b_per[i] = burgers_magnitude_of(b, cell, fraction=1.0)  # type: ignore[index]
             sidecar_dislocations.append(
                 {
                     "index": i,
@@ -1341,6 +1379,7 @@ def build_dislocation_population(
                     "b": list(b),
                     "n": list(n),
                     "t": list(t),
+                    "family": s.family,
                 }
             )
 
@@ -1356,7 +1395,7 @@ def build_dislocation_population(
             "dislocations": sidecar_dislocations,
         }
         return DislocationPopulation(
-            positions_um=positions, Ud=Ud, sidecar=sidecar, b_um=b_um, ny=ny
+            positions_um=positions, Ud=Ud, sidecar=sidecar, b_um=b_um, ny=ny, b_um_per=b_per
         )
 
     raise AssertionError(f"unreachable crystal.mode={crystal.mode!r}")  # pragma: no cover
@@ -1443,8 +1482,11 @@ def _find_hg_from_population_numpy(
     # Returns shape (X, 3, 3) with identity already added (Fg, not Fdd).
     # |b| and ν from the population (FCC/Al -> BURGERS_VECTOR / POISSON_RATIO ==
     # defaults, byte-identical; non-FCC -> cell-derived |b| + material ν).
+    # HCP random_dislocations: b_um_per is a per-dislocation (N,) array (⟨a⟩ vs ⟨c+a⟩).
+    # Cubic (b_um_per is None): uniform scalar → broadcast inside Fd_find_multi_dislocs_mixed.
+    b_eff = population.b_um_per if population.b_um_per is not None else population.b_um
     Fg = Fd_find_multi_dislocs_mixed(
-        rl_eff * 1e6, Us_, crystals, Theta_, b=population.b_um, ny=population.ny, S=S
+        rl_eff * 1e6, Us_, crystals, Theta_, b=b_eff, ny=population.ny, S=S
     )
 
     # Convert Fg → Hg using the same convention as load_or_generate_Hg:
@@ -1523,7 +1565,10 @@ def Find_Hg_from_population(
     # exactly as the NumPy path and the reference disloc_identify.py do.
     # |b| and ν from the population (FCC/Al -> BURGERS_VECTOR / POISSON_RATIO ==
     # defaults, byte-identical; non-FCC -> cell-derived |b| + material ν).
+    # HCP random_dislocations: b_um_per is a per-dislocation (N,) array (⟨a⟩ vs ⟨c+a⟩).
+    # Cubic (b_um_per is None): uniform scalar → broadcast to (N,) inside find_hg_population.
+    b_eff = population.b_um_per if population.b_um_per is not None else population.b_um
     Hg = find_hg_population(
-        rl_eff * 1e6, M, offset, Ud, cos_rot, sin_rot, b=population.b_um, ny=population.ny
+        rl_eff * 1e6, M, offset, Ud, cos_rot, sin_rot, b=b_eff, ny=population.ny
     )
     return Hg, q_hkl
