@@ -1368,8 +1368,9 @@ def build_dislocation_population(
                 Ud[i] = _ud_matrix_from_bnt(b, n, t)
             else:
                 assert cell is not None  # guarded by is_cubic = cell is None or cell.is_cubic
+                assert b_per is not None  # is_cubic False -> b_per allocated above
                 Ud[i] = _ud_matrix_from_bnt_cell(b, n, cell, t_int=t)
-                b_per[i] = burgers_magnitude_of(b, cell, fraction=1.0)  # type: ignore[index]
+                b_per[i] = burgers_magnitude_of(b, cell, fraction=1.0)
             sidecar_dislocations.append(
                 {
                     "index": i,
