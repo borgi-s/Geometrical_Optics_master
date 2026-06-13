@@ -1371,18 +1371,26 @@ def build_dislocation_population(
                 assert b_per is not None  # is_cubic False -> b_per allocated above
                 Ud[i] = _ud_matrix_from_bnt_cell(b, n, cell, t_int=t)
                 b_per[i] = burgers_magnitude_of(b, cell, fraction=1.0)
-            sidecar_dislocations.append(
-                {
-                    "index": i,
-                    "x_um": float(positions[i, 0]),
-                    "y_um": float(positions[i, 1]),
-                    "z_um": float(positions[i, 2]),
-                    "b": list(b),
-                    "n": list(n),
-                    "t": list(t),
-                    "family": s.family,
-                }
-            )
+            entry: dict = {
+                "index": i,
+                "x_um": float(positions[i, 0]),
+                "y_um": float(positions[i, 1]),
+                "z_um": float(positions[i, 2]),
+                "b": list(b),
+                "n": list(n),
+                "t": list(t),
+                "family": s.family,
+            }
+            if not is_cubic:
+                # For non-cubic (HCP) crystals the integer t (= n×b) is only a
+                # deterministic placeholder; the physical line direction is the
+                # Cartesian Ud third column, and |b| varies per dislocation
+                # (⟨a⟩ vs ⟨c+a⟩). Record both for honest provenance. Cubic
+                # sidecars keep the legacy keys/order byte-identically.
+                assert b_per is not None  # is_cubic False -> b_per allocated above
+                entry["t_cartesian"] = Ud[i][:, 2].tolist()
+                entry["burgers_magnitude_um"] = float(b_per[i])
+            sidecar_dislocations.append(entry)
 
         sidecar = {
             "ndis": rd.ndis,
