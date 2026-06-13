@@ -115,31 +115,39 @@ def test_population_numpy_oracle_honours_rotation_deg() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# #9 — _SLIP_SYSTEM_111 covers all 12 FCC slip systems
+# #9 — slip_systems("fcc") covers all 12 FCC slip systems
+# (M4 Stage 4.3a Task 8: re-anchored from the deleted fm._SLIP_SYSTEM_111 onto
+#  the registry; the FCC table is now slip_systems("fcc"), order-identical.)
 # --------------------------------------------------------------------------- #
 def test_slip_system_table_has_twelve_systems() -> None:
     """FCC has 12 slip systems: 4 {111} planes x 3 <110> Burgers each."""
-    assert len(fm._SLIP_SYSTEM_111) == 12
+    from dfxm_geo.crystal.slip_systems import slip_systems
+
+    assert len(slip_systems("fcc")) == 12
 
 
 def test_slip_system_table_spans_four_distinct_planes() -> None:
     """The 12 systems must span all 4 distinct {111} plane normals."""
-    planes = {tuple(n) for _, n, _ in fm._SLIP_SYSTEM_111}
+    from dfxm_geo.crystal.slip_systems import slip_systems
+
+    planes = {tuple(s.n) for s in slip_systems("fcc")}
     assert len(planes) == 4
 
 
 def test_every_slip_system_is_glide_orthogonal() -> None:
     """Every (b, n) pair must satisfy b.n == 0 (Burgers lies in the glide
     plane) and t must be (anti)parallel to n x b (a valid line direction)."""
-    for b, n, t in fm._SLIP_SYSTEM_111:
-        b_arr = np.array(b, dtype=np.float64)
-        n_arr = np.array(n, dtype=np.float64)
-        t_arr = np.array(t, dtype=np.float64)
-        assert int(np.dot(b_arr, n_arr)) == 0, f"b.n != 0 for b={b}, n={n}"
+    from dfxm_geo.crystal.slip_systems import slip_systems
+
+    for s in slip_systems("fcc"):
+        b_arr = np.array(s.b, dtype=np.float64)
+        n_arr = np.array(s.n, dtype=np.float64)
+        t_arr = np.array(s.t, dtype=np.float64)
+        assert int(np.dot(b_arr, n_arr)) == 0, f"b.n != 0 for b={s.b}, n={s.n}"
         cross = np.cross(n_arr, b_arr)
         # t parallel or antiparallel to n x b.
         assert np.allclose(np.cross(cross, t_arr), 0.0), (
-            f"t={t} is not collinear with n x b for b={b}, n={n}"
+            f"t={s.t} is not collinear with n x b for b={s.b}, n={s.n}"
         )
 
 

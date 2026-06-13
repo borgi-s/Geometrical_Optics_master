@@ -82,6 +82,12 @@ _CRYSTAL_MOUNT_KEYS: frozenset[str] = frozenset(
         "mount_x",
         "mount_y",
         "mount_z",
+        # M4 Stage 4.3a: structure/material metadata + user slip-system hatch.
+        "structure_type",
+        "material",
+        "poisson_ratio",
+        "slip_families",
+        "slip_system",  # [[crystal.slip_system]] array-of-tables (user escape hatch)
     }
 )
 
@@ -525,6 +531,27 @@ def _build_geometry_config(
     mode, eta = _parse_geometry_block(raw.get("geometry"), allow_missing_eta=multi_reflection)
     if mode == "simplified":
         crystal_raw = raw.get("crystal") or {}
+        # M4 Stage 4.3a: structure-aware [crystal] keys are carried ONLY on the
+        # oblique mount (simplified mode discards it -> mount=None -> FCC). Silently
+        # computing FCC for a "structure_type=bcc" request is the bug this guards:
+        # raise loudly instead of dropping the keys. (Plain cell/cif/space_group
+        # keys are still accepted in simplified mode — see the branch below.)
+        _structure_keys = (
+            "structure_type",
+            "material",
+            "poisson_ratio",
+            "slip_families",
+            "slip_system",
+        )
+        _present = [k for k in _structure_keys if k in crystal_raw]
+        if _present:
+            raise ValueError(
+                f'[crystal] {_present} require [geometry] mode = "oblique": the '
+                "structure family / material / Poisson ratio / slip systems are "
+                "carried on the oblique crystal mount, which simplified geometry "
+                "discards (the run would silently resolve to FCC). Set "
+                '[geometry] mode = "oblique" (with an eta) to use these keys.'
+            )
         # A "lattice" or "cif" key signals an explicit bootstrap-style mount;
         # parse it (which may surface mount errors simplified mode previously
         # ignored) so non-cubic cells cannot slip through the cubic-only path.
@@ -794,12 +821,32 @@ class IdentificationConfig:
                 "zscan.render_per_dislocation=True requires include_secondary=True "
                 "(nothing to separate from a single primary dislocation)"
             )
-        # Validate the slip plane against the {111} family (also used in 'multi'
-        # mode as the starting / fallback plane).
-        try:
-            _burgers_vectors(self.crystal.slip_plane_normal)
-        except ValueError as exc:
-            raise ValueError(str(exc)) from exc
+        # Validate the slip plane against the crystal's slip families.
+        # With an oblique mount (geometry.mount is set), use the registry-driven
+        # plane_normals for the resolved structure (fcc/bcc/custom) so BCC and
+        # user-defined structures are accepted. Without a mount (simplified mode,
+        # no [crystal] mount block), fall back to the legacy FCC-only check so
+        # existing identify configs remain backward-compatible.
+        mount = self.geometry.mount
+        if mount is not None:
+            from dfxm_geo.crystal.slip_systems import plane_normals
+
+            structure = mount.resolved_structure_type
+            valid_planes = plane_normals(
+                structure, families=None
+            )  # families=None: accept any plane valid for the structure (accept-more). Tasks 8/9 may tighten to families=mount.slip_families once Burgers lookup honors it.
+            from dfxm_geo.crystal.slip_systems import _canon as _ss_canon
+
+            if _ss_canon(self.crystal.slip_plane_normal) not in valid_planes:
+                raise ValueError(
+                    f"slip_plane_normal {self.crystal.slip_plane_normal!r} is not a valid "
+                    f"slip plane for structure {structure!r}; valid: {valid_planes}"
+                )
+        else:
+            try:
+                _burgers_vectors(self.crystal.slip_plane_normal)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
 
 
 def load_identification_config(path: Path) -> IdentificationConfig:

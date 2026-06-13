@@ -135,13 +135,16 @@ class TestFindHgSampleRemount:
     ) -> None:
         """The Fg cache filename includes _remount{name} and S kwarg arrives."""
         import dfxm_geo.direct_space.forward_model as fm
+        from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
         from dfxm_geo.crystal.remount import S2
 
         captured: dict = {}
 
-        def fake_load(rl, Ud, Us, Theta, dis, ndis, file_path=None, *, S=None):
+        def fake_load(rl, Ud, Us, Theta, dis, ndis, file_path=None, *, b=None, ny=None, S=None):
             captured["file_path"] = file_path
             captured["S"] = S
+            captured["b"] = b
+            captured["ny"] = ny
             # Return a plausibly-shaped Fg-derived Hg
             return np.zeros((rl.shape[1], 3, 3))
 
@@ -160,6 +163,10 @@ class TestFindHgSampleRemount:
         assert captured["file_path"] is not None
         assert "_remountS2.npy" in captured["file_path"]
         np.testing.assert_array_equal(captured["S"], S2)
+        # Default |b| is the FCC calibrated constant (byte-identical to v2.x).
+        assert captured["b"] == BURGERS_VECTOR
+        # Default ν is the Al POISSON_RATIO (byte-identical to v2.x).
+        assert captured["ny"] == POISSON_RATIO
 
     def test_find_hg_default_uses_S1_filename(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Omitting S / remount_name defaults to identity / 'S1'."""
@@ -167,9 +174,11 @@ class TestFindHgSampleRemount:
 
         captured: dict = {}
 
-        def fake_load(rl, Ud, Us, Theta, dis, ndis, file_path=None, *, S=None):
+        def fake_load(rl, Ud, Us, Theta, dis, ndis, file_path=None, *, b=None, ny=None, S=None):
             captured["file_path"] = file_path
             captured["S"] = S
+            captured["b"] = b
+            captured["ny"] = ny
             return np.zeros((rl.shape[1], 3, 3))
 
         monkeypatch.setattr("dfxm_geo.direct_space.forward_model.load_or_generate_Hg", fake_load)

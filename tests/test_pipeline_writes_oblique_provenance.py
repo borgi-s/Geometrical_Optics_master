@@ -198,3 +198,134 @@ def test_oblique_provenance_attrs(tmp_path: Path, _fm_stub: fm.ForwardContext) -
         np.testing.assert_array_equal(attrs["mount_x"], [1, 0, 0])
         np.testing.assert_array_equal(attrs["mount_y"], [0, 1, 0])
         np.testing.assert_array_equal(attrs["mount_z"], [0, 0, 1])
+
+        # Oblique FCC runs (mount is not None) MUST emit structure-family provenance.
+        assert attrs["structure_type"] == "fcc", "oblique FCC run must emit structure_type='fcc'"
+        assert "poisson_ratio" in attrs, "oblique FCC run must emit poisson_ratio"
+        assert "burgers_magnitude_um" in attrs, "oblique FCC run must emit burgers_magnitude_um"
+
+
+def test_fcc_simplified_no_structure_attrs(tmp_path: Path, _fm_stub: fm.ForwardContext) -> None:
+    """FCC simplified path (mount=None) writes NO structure_type / poisson attrs.
+
+    Byte-identity gate: existing FCC outputs are unchanged.
+    """
+    out = tmp_path / "dfxm_geo.h5"
+    frames = _single_frame()
+
+    write_simulation_h5(
+        out,
+        Hg=_TINY_HG,
+        q_hkl=_TINY_Q,
+        frames=frames,
+        include_perfect_crystal=False,
+        sample_dis=None,
+        sample_ndis=1,
+        sample_remount="N/A",
+        config_toml="",
+        cli="test",
+        ctx=_fm_stub,
+        # mount=None (default) → simplified FCC path
+    )
+
+    with h5py.File(out, "r") as f:
+        attrs = dict(f["/1.1"].attrs)
+        # Structure attrs MUST NOT appear in FCC simplified output.
+        for key in ("structure_type", "poisson_ratio", "poisson_source", "burgers_magnitude_um"):
+            assert key not in attrs, f"unexpected attr {key!r} on FCC simplified /1.1"
+
+
+def test_bcc_structure_attrs_written(tmp_path: Path, _fm_stub: fm.ForwardContext) -> None:
+    """BCC structure-aware run writes structure_type, poisson_ratio/source, burgers_magnitude_um."""
+    out = tmp_path / "dfxm_geo.h5"
+    frames = _single_frame()
+
+    # Fe BCC, {110}<111> family, a=2.866 Å
+    bcc_mount = CrystalMount(
+        lattice="cubic",
+        a=2.866e-10,
+        mount_x=(1, 0, 0),
+        mount_y=(0, 1, 0),
+        mount_z=(0, 0, 1),
+        structure_type="bcc",
+        material="Fe",
+        slip_families=("{110}<111>",),
+    )
+
+    write_simulation_h5(
+        out,
+        Hg=_TINY_HG,
+        q_hkl=_TINY_Q,
+        frames=frames,
+        include_perfect_crystal=False,
+        sample_dis=None,
+        sample_ndis=1,
+        sample_remount="N/A",
+        config_toml="",
+        cli="test",
+        geometry_mode="oblique",
+        eta=0.0,
+        mount=bcc_mount,
+        ctx=_fm_stub,
+    )
+
+    with h5py.File(out, "r") as f:
+        attrs = f["/1.1"].attrs
+
+        # Structure provenance attrs must be present.
+        assert attrs["structure_type"] == "bcc"
+        assert np.isclose(float(attrs["poisson_ratio"]), 0.29, atol=1e-6)
+        assert attrs["poisson_source"] == "KL"
+        # slip_families round-trips as a list of strings.
+        sf = list(attrs["slip_families"])
+        assert "{110}<111>" in sf
+        # burgers_magnitude_um: BCC Fe {110}<111> |b| = a√3/2 ≈ 0.2476 µm
+        b_um = float(attrs["burgers_magnitude_um"])
+        expected_b = 2.866e-4 * np.sqrt(3) / 2  # a in µm * sqrt(3)/2
+        assert np.isclose(b_um, expected_b, rtol=1e-4), f"got {b_um}, expected {expected_b}"
+        # material is present.
+        assert attrs["material"] == "Fe"
+
+
+def test_bcc_mount_fcc_structure_type_no_structure_attrs(
+    tmp_path: Path, _fm_stub: fm.ForwardContext
+) -> None:
+    """A mount with structure_type=None and material=None still emits structure attrs
+    when mount is not None (oblique run), but structure_type defaults to 'fcc'."""
+    out = tmp_path / "dfxm_geo.h5"
+    frames = _single_frame()
+
+    # Oblique run with a mount but no explicit structure metadata.
+    plain_mount = CrystalMount(
+        lattice="cubic",
+        a=4.0495e-10,
+        mount_x=(1, 0, 0),
+        mount_y=(0, 1, 0),
+        mount_z=(0, 0, 1),
+        # structure_type=None, material=None → defaults to fcc / Al poisson
+    )
+
+    write_simulation_h5(
+        out,
+        Hg=_TINY_HG,
+        q_hkl=_TINY_Q,
+        frames=frames,
+        include_perfect_crystal=False,
+        sample_dis=None,
+        sample_ndis=1,
+        sample_remount="N/A",
+        config_toml="",
+        cli="test",
+        geometry_mode="oblique",
+        eta=0.1,
+        mount=plain_mount,
+        ctx=_fm_stub,
+    )
+
+    with h5py.File(out, "r") as f:
+        attrs = f["/1.1"].attrs
+        # mount is not None → structure attrs are written (even for an FCC-defaulted mount).
+        assert "structure_type" in attrs
+        assert attrs["structure_type"] == "fcc"
+        assert "poisson_ratio" in attrs
+        assert "poisson_source" in attrs

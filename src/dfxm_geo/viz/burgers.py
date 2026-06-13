@@ -26,7 +26,11 @@ def plot_slip_plane_3d(
 
     Args:
         slip_plane_normal: shape (3,) — the slip-plane normal `n`.
-        burgers: shape (n_burgers, 3) — Burgers vectors (typically 6).
+        burgers: shape (n_burgers, 3) — Burgers vectors plotted at their natural
+            length.  Pass integer-Miller directions (e.g. ``[-1, 1, 0]`` for FCC
+            ⟨110⟩, ``[1, 1, 1]`` for BCC ⟨111⟩) so the display length equals
+            the integer norm (``√2`` / ``√3`` respectively).  Unit-normalised
+            inputs are also accepted — in that case plotted lengths are ≈1.
         rotated_vectors: shape (n_angles, n_burgers, 3) — rotated t-vectors.
 
     Returns:
@@ -46,9 +50,25 @@ def plot_slip_plane_3d(
     n = np.asarray(slip_plane_normal, dtype=float)
     fig = go.Figure()
 
-    # The plane (z = (-n_x x - n_y y) / n_z within a (-1, 1) box).
-    xx, yy = np.meshgrid(np.linspace(-1, 1, 21), np.linspace(-1, 1, 21))
-    zz = (-n[0] * xx - n[1] * yy) / n[2]
+    # The plane within a (-1, 1) box.  Solve for the coordinate axis whose
+    # component of n has the largest magnitude to avoid divide-by-zero for
+    # normals like (1, 1, 0)/√2 (BCC {110} planes have n[2] == 0).
+    #
+    # Convention: label the three axes 0/1/2 (x/y/z).  k is the "dependent"
+    # axis; the other two are meshed over [-1, 1].  The plane equation is:
+    #   n[0]*coords[0] + n[1]*coords[1] + n[2]*coords[2] = 0
+    # so  coords[k] = -sum_{j != k} n[j]*coords[j] / n[k].
+    k = int(np.argmax(np.abs(n)))  # axis to solve for (largest |n_k| → no div-by-zero)
+    j0, j1 = [ax for ax in (0, 1, 2) if ax != k]  # the two free axes
+
+    u = np.linspace(-1, 1, 21)
+    uu, vv = np.meshgrid(u, u)
+    ww = -(n[j0] * uu + n[j1] * vv) / n[k]
+
+    # Assign the three coordinate grids by axis index.
+    coord_map: dict[int, np.ndarray] = {j0: uu, j1: vv, k: ww}
+    xx, yy, zz = coord_map[0], coord_map[1], coord_map[2]
+
     fig.add_trace(
         go.Surface(
             z=zz,
@@ -60,9 +80,12 @@ def plot_slip_plane_3d(
         )
     )
 
-    # Burgers vectors (red) — branch convention scales by sqrt(2) for display.
-    b_scaled = burgers * np.sqrt(2)
-    for i, b_vec in enumerate(b_scaled):
+    # Burgers vectors (red) — plotted at their natural length.
+    # The caller controls the display scale by choosing whether to pass
+    # integer-Miller vectors (|FCC ⟨110⟩| = √2, |BCC ⟨111⟩| = √3) or
+    # unit-normalised directions.  The old hard-coded ``* √2`` assumed FCC
+    # ⟨110⟩ unit inputs; using integer inputs generalises to any structure.
+    for i, b_vec in enumerate(burgers):
         fig.add_trace(
             go.Scatter3d(
                 x=[0, b_vec[0]],

@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from dfxm_geo.constants import BURGERS_VECTOR, POISSON_RATIO
 from dfxm_geo.crystal.dislocations import Fd_find
 from dfxm_geo.crystal.rotations import fast_inverse2
 
@@ -19,6 +20,8 @@ def load_or_generate_Hg(
     ndis: int,
     file_path: str | None = None,
     *,
+    b: float = BURGERS_VECTOR,
+    ny: float = POISSON_RATIO,
     S: np.ndarray = _S_IDENTITY,
 ) -> np.ndarray:
     """Return the displacement gradient field Hg, loading from disk if cached.
@@ -33,6 +36,19 @@ def load_or_generate_Hg(
     (Purdue 2024 paper). When `S = identity` (default), the call matches the
     pre-port behaviour bit-for-bit; with `S != identity`, the strain field is
     computed in a remounted-sample frame.
+
+    ``b`` is the Burgers magnitude (µm); default ``BURGERS_VECTOR`` (FCC, the
+    v2.x value — byte-identical). Non-FCC walls pass the cell-derived |b|
+    (M4 Stage 4.3a). ``b`` is forwarded to ``Fd_find`` where it linearly
+    scales the displacement gradient (physics). ``b`` does NOT enter the cache
+    filename HERE, so a non-default ``b`` must be paired with a distinct
+    ``file_path`` (the wall path keys ``b`` into the cache filename in
+    ``Find_Hg`` via its ``_b...`` suffix) to avoid loading a stale-|b| cache.
+
+    ``ny`` is the isotropic Poisson ratio; default ``POISSON_RATIO`` (0.334, Al
+    — byte-identical to v2.x). Like ``b`` it is forwarded to ``Fd_find`` (physics)
+    and does NOT enter the cache filename here; ``Find_Hg`` keys a non-default ``ny``
+    into the filename via its ``_ny...`` suffix.
     """
     expected_n = rl.shape[1]
     Fg: np.ndarray | None = None
@@ -58,7 +74,7 @@ def load_or_generate_Hg(
             Fg = np.zeros([expected_n, 3, 3])
             Fg += np.identity(Fg.shape[1])
         else:
-            Fg = Fd_find(rl * 1e6, Ud, Us, Theta, dis, ndis, S=S)
+            Fg = Fd_find(rl * 1e6, Ud, Us, Theta, dis, ndis, b=b, ny=ny, S=S)
         if file_path is not None:
             np.save(file_path, Fg)
             print(f"Saved Fg to {file_path.rsplit('/', 1)[-1]}")

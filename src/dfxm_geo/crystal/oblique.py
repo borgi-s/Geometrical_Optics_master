@@ -29,6 +29,13 @@ class CrystalMount:
     reduces to the historical "Miller indices as directions" reading).
     The three directions must be mutually orthogonal in Cartesian space.
     Default for Al per paper §6.1: (1,0,0)/(0,1,0)/(0,0,1).
+
+    M4 Stage 4.3a metadata (all optional, default None → FCC/Al back-compat):
+    ``structure_type`` ("fcc"/"bcc"/...), ``material`` (Poisson-table key),
+    ``poisson_ratio`` (ν override), ``slip_families`` (subset of the structure's
+    families). Use ``resolved_structure_type`` (space-group authoritative, else
+    explicit, else "fcc") and ``resolved_poisson_ratio`` (override > material >
+    0.334) to read the resolved values.
     """
 
     lattice: Literal[
@@ -46,12 +53,17 @@ class CrystalMount:
     alpha_deg: float | None = None
     beta_deg: float | None = None
     gamma_deg: float | None = None
-    mount_x: tuple[int, int, int]
-    mount_y: tuple[int, int, int]
-    mount_z: tuple[int, int, int]
+    mount_x: tuple[int, int, int] = (1, 0, 0)
+    mount_y: tuple[int, int, int] = (0, 1, 0)
+    mount_z: tuple[int, int, int] = (0, 0, 1)
     # M4 Stage 4.2: optional space group (canonical H-M after __post_init__).
     # None = no symmetry knowledge; extinction filtering is opt-in.
     space_group: str | None = None
+    # M4 Stage 4.3a: material/structure metadata (all default None → fully back-compat).
+    structure_type: str | None = None
+    material: str | None = None
+    poisson_ratio: float | None = None
+    slip_families: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.lattice not in _LATTICE_SYSTEMS:
@@ -115,6 +127,24 @@ class CrystalMount:
             canonical = check_space_group_lattice(self.space_group, self.lattice)
             object.__setattr__(self, "space_group", canonical)
 
+        # M4 Stage 4.3a: normalise slip_families list→tuple (TOML delivers lists).
+        if self.slip_families is not None and not isinstance(self.slip_families, tuple):
+            object.__setattr__(self, "slip_families", tuple(self.slip_families))
+
+        # Validate structure_type vs space_group consistency only when structure_type
+        # is explicitly provided (raises on contradiction). When structure_type is None
+        # there is nothing to validate — the default 'fcc' resolution is deferred to
+        # the resolved_structure_type property call.
+        if self.structure_type is not None:
+            from dfxm_geo.crystal.slip_systems import derive_structure_type
+
+            # Validation only: raises if explicit structure_type contradicts the space group (return discarded).
+            derive_structure_type(
+                structure_type=self.structure_type,
+                space_group=self.space_group,
+                lattice=self.lattice,
+            )
+
     @cached_property
     def cell(self) -> UnitCell:
         """The six-parameter unit cell (constrained params filled per lattice)."""
@@ -157,6 +187,24 @@ class CrystalMount:
             u = B @ np.array(m, dtype=float)
             cols.append(u / np.linalg.norm(u))
         return np.column_stack(cols)
+
+    @property
+    def resolved_structure_type(self) -> str:
+        """Structure family resolved from space_group > structure_type > 'fcc' default."""
+        from dfxm_geo.crystal.slip_systems import derive_structure_type
+
+        return derive_structure_type(
+            structure_type=self.structure_type,
+            space_group=self.space_group,
+            lattice=self.lattice,
+        )
+
+    @property
+    def resolved_poisson_ratio(self) -> float:
+        """Isotropic Poisson ratio: poisson_ratio override > material table > 0.334 (Al)."""
+        from dfxm_geo.crystal.elasticity import poisson_ratio
+
+        return poisson_ratio(override=self.poisson_ratio, material=self.material)
 
 
 def _R_x(angle: float) -> np.ndarray:

@@ -575,6 +575,66 @@ def _scan_title_from_frames(frames: ScanFrames, phi_steps: int, chi_steps: int) 
     )
 
 
+def structure_provenance_attrs(mount: CrystalMount) -> dict[str, Any]:
+    """Structure-family provenance attrs for a non-trivial CrystalMount.
+
+    Written ONLY when ``mount is not None`` (i.e. oblique / structure-aware
+    runs).  FCC simplified-default runs (``mount=None``) skip this entirely,
+    keeping those outputs byte-identical to v2.5.x.
+
+    Attrs emitted:
+      ``structure_type``      — resolved structure family ("fcc"/"bcc"/…)
+      ``poisson_ratio``       — resolved ν (float)
+      ``poisson_source``      — citation tag ("SW"/"KL"/"override"/…)
+      ``burgers_magnitude_um``— |b| in µm for the primary slip family
+      ``material``            — Poisson-table material key (omitted if None)
+      ``slip_families``       — list of family names (omitted if None)
+    """
+    from dfxm_geo.constants import BURGERS_VECTOR
+    from dfxm_geo.crystal.elasticity import poisson_source as _poisson_source
+    from dfxm_geo.crystal.slip_systems import burgers_magnitude as _b_mag
+    from dfxm_geo.crystal.slip_systems import slip_systems as _slip_sys
+
+    structure = mount.resolved_structure_type
+    nu = mount.resolved_poisson_ratio
+    source = _poisson_source(override=mount.poisson_ratio, material=mount.material)
+
+    # Primary slip family: first family in the registry for this structure.
+    # Used to derive the canonical |b| for provenance (the same family
+    # picked by forward_model.resolve_structure for a None slip_families mount).
+    families: tuple[str, ...] | None = mount.slip_families
+    if families:
+        primary_family = families[0]
+    else:
+        # Fall back to first registered family for this structure — registry-driven,
+        # not a hardcoded FCC literal, so BCC / HCP structures resolve correctly.
+        systems = _slip_sys(structure)
+        if not systems:
+            raise ValueError(
+                f"No slip systems registered for structure {structure!r}; "
+                "cannot derive primary family for burgers_magnitude_um."
+            )
+        primary_family = systems[0].family
+
+    # Preserve the historical calibrated FCC constant for bit-identity
+    # (forward_model does the same; cell-derived a/√2 differs at 4th sig fig).
+    b_um = BURGERS_VECTOR if structure == "fcc" else _b_mag(structure, primary_family, mount.cell)
+
+    attrs: dict[str, Any] = {
+        "structure_type": structure,
+        "poisson_ratio": float(nu),
+        "poisson_source": source,
+        "burgers_magnitude_um": float(b_um),
+    }
+    if mount.material is not None:
+        attrs["material"] = mount.material
+    if mount.slip_families is not None:
+        attrs["slip_families"] = list(mount.slip_families)
+    if mount.space_group is not None:
+        attrs["space_group"] = mount.space_group
+    return attrs
+
+
 def geometry_provenance_attrs(
     *,
     geometry_mode: str,
@@ -588,6 +648,12 @@ def geometry_provenance_attrs(
     BOTH write_simulation_h5 and write_identification_h5. eta=0 /
     "simplified" reproduces the v2.2.0 forward behaviour; mount=None
     defaults to the Al identity mount.
+
+    When ``mount is not None`` (oblique / structure-aware run), the dict is
+    extended with structure-family provenance (``structure_type``,
+    ``poisson_ratio``, ``poisson_source``, ``burgers_magnitude_um``, and
+    optionally ``material`` / ``slip_families``).  FCC simplified runs
+    (``mount=None``) emit NO structure attrs — byte-identical gate.
     """
     resolved: CrystalMount
     if mount is not None:
@@ -596,7 +662,7 @@ def geometry_provenance_attrs(
         from dfxm_geo.reciprocal_space.kernel import _DEFAULT_AL_CRYSTAL
 
         resolved = _DEFAULT_AL_CRYSTAL
-    return {
+    base: dict[str, Any] = {
         "geometry_mode": geometry_mode,
         "eta": float(eta),
         "theta": float(theta_0),
@@ -606,6 +672,12 @@ def geometry_provenance_attrs(
         "mount_y": np.array(resolved.mount_y, dtype=np.int64),
         "mount_z": np.array(resolved.mount_z, dtype=np.int64),
     }
+    # Structure-family provenance: only when the caller supplied a mount
+    # (structure-aware run).  FCC simplified path (mount=None) writes no
+    # structure attrs — byte-identical to v2.5.x outputs.
+    if mount is not None:
+        base.update(structure_provenance_attrs(mount))
+    return base
 
 
 def write_identification_h5(

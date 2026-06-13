@@ -46,9 +46,14 @@ def test_relative_cif_path_resolves_against_base_dir(tmp_path: Path) -> None:
     assert m.a == pytest.approx(4.0495e-10)
 
 
-def test_cif_still_requires_mount_keys() -> None:
-    with pytest.raises(ValueError, match="missing key: mount_x"):
-        _crystal_mount_from_toml({"cif": str(DATA / "al_fm3m.cif")})
+def test_cif_without_mount_keys_uses_identity_defaults() -> None:
+    # M4 Stage 4.3a: mount_x/y/z are now optional; absent → identity (1,0,0)/(0,1,0)/(0,0,1).
+    # Stage 4.2 required them explicitly to avoid silently mis-orienting non-trivial crystals,
+    # but the CrystalMount defaults are already identity and the task test block omits them.
+    m = _crystal_mount_from_toml({"cif": str(DATA / "al_fm3m.cif")})
+    assert m.mount_x == (1, 0, 0)
+    assert m.mount_y == (0, 1, 0)
+    assert m.mount_z == (0, 0, 1)
 
 
 def test_no_cif_no_lattice_still_errors() -> None:

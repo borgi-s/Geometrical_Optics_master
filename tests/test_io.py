@@ -272,3 +272,129 @@ class TestLoadOrGenerateHgSampleRemount:
             S=S2,
         )
         assert not np.allclose(Hg_I, Hg_S2)
+
+
+class TestLoadOrGenerateHgBParam:
+    """The b kwarg must be forwarded to Fd_find (regression for the missing b=b bug)."""
+
+    def test_b_forwarded_to_Fd_find(self, rotation_matrices, monkeypatch) -> None:
+        """Monkeypatch Fd_find to capture the b it receives and verify forwarding."""
+        import dfxm_geo.io.strain_cache as sc
+        from dfxm_geo.constants import BURGERS_VECTOR
+
+        captured: dict[str, float] = {}
+
+        original_Fd_find = sc.Fd_find
+
+        def fake_Fd_find(rl, Ud, Us, Theta, dis, ndis, b=BURGERS_VECTOR, **kwargs):
+            captured["b"] = b
+            return original_Fd_find(rl, Ud, Us, Theta, dis, ndis, b=b, **kwargs)
+
+        monkeypatch.setattr(sc, "Fd_find", fake_Fd_find)
+
+        Ud, Us, Theta = rotation_matrices
+        rng = np.random.default_rng(42)
+        rl = rng.normal(size=(3, 20)) * 1e-6
+        custom_b = 9.999e-4  # deliberately non-default
+
+        sc.load_or_generate_Hg(rl, Ud, Us, Theta, dis=1.0, ndis=1, b=custom_b)
+
+        assert "b" in captured, "Fd_find was never called"
+        assert captured["b"] == custom_b, (
+            f"load_or_generate_Hg did not forward b to Fd_find: "
+            f"expected {custom_b}, got {captured['b']}"
+        )
+
+    def test_distinct_b_values_yield_distinct_Hg(self, rotation_matrices, tmp_path) -> None:
+        """Two distinct b magnitudes must produce different Hg arrays."""
+        from dfxm_geo.io.strain_cache import load_or_generate_Hg
+
+        Ud, Us, Theta = rotation_matrices
+        rng = np.random.default_rng(7)
+        rl = rng.normal(size=(3, 16)) * 1e-6
+
+        b_fcc = 2.862e-4  # typical FCC Al |b| in µm
+        b_bcc = 2.476e-4  # typical BCC Fe |b| in µm
+
+        Hg_fcc = load_or_generate_Hg(
+            rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=str(tmp_path / "fg_fcc.npy"), b=b_fcc
+        )
+        Hg_bcc = load_or_generate_Hg(
+            rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=str(tmp_path / "fg_bcc.npy"), b=b_bcc
+        )
+
+        assert not np.allclose(Hg_fcc, Hg_bcc), (
+            "Different b values must produce different Hg; "
+            "if they are equal, b is not being forwarded to Fd_find"
+        )
+
+
+class TestLoadOrGenerateHgNyParam:
+    """The ny (Poisson) kwarg must reach Fd_find (M4 4.3a I2 regression)."""
+
+    def test_ny_forwarded_to_Fd_find(self, rotation_matrices, monkeypatch) -> None:
+        """Monkeypatch Fd_find to capture the ny it receives and verify forwarding."""
+        import dfxm_geo.io.strain_cache as sc
+        from dfxm_geo.constants import POISSON_RATIO
+
+        captured: dict[str, float] = {}
+        original_Fd_find = sc.Fd_find
+
+        def fake_Fd_find(rl, Ud, Us, Theta, dis, ndis, *, ny=POISSON_RATIO, **kwargs):
+            captured["ny"] = ny
+            return original_Fd_find(rl, Ud, Us, Theta, dis, ndis, ny=ny, **kwargs)
+
+        monkeypatch.setattr(sc, "Fd_find", fake_Fd_find)
+
+        Ud, Us, Theta = rotation_matrices
+        rng = np.random.default_rng(42)
+        rl = rng.normal(size=(3, 20)) * 1e-6
+        custom_ny = 0.29  # BCC Fe, deliberately non-default
+
+        sc.load_or_generate_Hg(rl, Ud, Us, Theta, dis=1.0, ndis=1, ny=custom_ny)
+
+        assert "ny" in captured, "Fd_find was never called"
+        assert captured["ny"] == custom_ny, (
+            f"load_or_generate_Hg did not forward ny to Fd_find: "
+            f"expected {custom_ny}, got {captured['ny']}"
+        )
+
+    def test_default_ny_is_poisson_ratio(self, rotation_matrices, monkeypatch) -> None:
+        """Omitting ny forwards POISSON_RATIO (0.334, Al) — the byte-identical default."""
+        import dfxm_geo.io.strain_cache as sc
+        from dfxm_geo.constants import POISSON_RATIO
+
+        captured: dict[str, float] = {}
+        original_Fd_find = sc.Fd_find
+
+        def fake_Fd_find(rl, Ud, Us, Theta, dis, ndis, *, ny=POISSON_RATIO, **kwargs):
+            captured["ny"] = ny
+            return original_Fd_find(rl, Ud, Us, Theta, dis, ndis, ny=ny, **kwargs)
+
+        monkeypatch.setattr(sc, "Fd_find", fake_Fd_find)
+        Ud, Us, Theta = rotation_matrices
+        rng = np.random.default_rng(1)
+        rl = rng.normal(size=(3, 12)) * 1e-6
+
+        sc.load_or_generate_Hg(rl, Ud, Us, Theta, dis=1.0, ndis=1)
+
+        assert captured["ny"] == POISSON_RATIO
+
+    def test_distinct_ny_values_yield_distinct_Hg(self, rotation_matrices, tmp_path) -> None:
+        """Two distinct Poisson ratios must produce different Hg arrays."""
+        from dfxm_geo.io.strain_cache import load_or_generate_Hg
+
+        Ud, Us, Theta = rotation_matrices
+        rng = np.random.default_rng(7)
+        rl = rng.normal(size=(3, 16)) * 1e-6
+
+        Hg_al = load_or_generate_Hg(
+            rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=str(tmp_path / "fg_al.npy"), ny=0.334
+        )
+        Hg_fe = load_or_generate_Hg(
+            rl, Ud, Us, Theta, dis=1.0, ndis=1, file_path=str(tmp_path / "fg_fe.npy"), ny=0.29
+        )
+        assert not np.allclose(Hg_al, Hg_fe), (
+            "Different ny values must produce different Hg; "
+            "if they are equal, ny is not being forwarded to Fd_find"
+        )

@@ -99,3 +99,19 @@ def test_ud_matrices_columns_are_basis():
     for j in range(6):
         np.testing.assert_allclose(Ud[0, j, :, 2], rotated[0, j], atol=1e-12)
         np.testing.assert_allclose(Ud[0, j, :, 1], n, atol=1e-12)
+
+
+def test_burgers_vectors_fcc_bit_identical_after_registry():
+    """burgers_vectors stays bit-identical for the four {111} planes."""
+    for plane, basis in [
+        ((1, 1, 1), [[-1, 1, 0], [1, 0, -1], [0, 1, -1]]),
+        ((1, -1, 1), [[1, 1, 0], [1, 0, -1], [0, 1, 1]]),
+        ((1, 1, -1), [[1, -1, 0], [1, 0, 1], [0, -1, -1]]),
+        ((-1, 1, 1), [[-1, -1, 0], [-1, 0, -1], [0, 1, -1]]),
+    ]:
+        b = np.array(basis, float)
+        want = np.vstack([b, -b]) / np.sqrt(2)
+        got = burgers_vectors(plane)
+        gs = sorted(tuple(np.round(v, 9)) for v in got)
+        ws = sorted(tuple(np.round(v, 9)) for v in want)
+        assert np.allclose(gs, ws)
