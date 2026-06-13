@@ -23,6 +23,9 @@ from dfxm_geo.crystal.slip_systems import burgers_in_plane
 # index-based selection (e.g. b_vector_indices = [0]) continues to select the
 # same physical Burgers vector before and after the refactor.
 # Values are bit-identical to the old `_BASIS_TABLE / sqrt(2)` table.
+# NOTE: Do NOT extend this table with BCC/HCP entries — add them to the
+# registry in slip_systems.py. Task 9 makes the orchestrator structure-aware
+# and will supersede this shim entirely.
 _ORDERED_BASES: dict[tuple[int, int, int], np.ndarray] = {
     (1, 1, 1): np.array([[-1, 1, 0], [1, 0, -1], [0, 1, -1]], dtype=float) / np.sqrt(2),
     (1, -1, 1): np.array([[1, 1, 0], [1, 0, -1], [0, 1, 1]], dtype=float) / np.sqrt(2),
