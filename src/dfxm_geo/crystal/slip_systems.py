@@ -19,8 +19,6 @@ from typing import cast
 
 import numpy as np
 
-from dfxm_geo.crystal.cell import UnitCell  # noqa: F401  consumed in Task 2 burgers_magnitude
-
 
 @dataclass(frozen=True)
 class SlipFamily:

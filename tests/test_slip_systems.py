@@ -33,6 +33,7 @@ def test_bcc_default_is_110_plus_112():
     assert len({_canon(s.n) for s in sys}) == 18  # 6 {110} + 12 {112}
     for s in sys:
         assert np.dot(s.b, s.n) == 0
+        assert np.allclose(np.cross(s.n, s.b), s.t)
 
 
 def test_bcc_single_family_selection():
@@ -58,3 +59,8 @@ def test_plane_normals_distinct():
 def test_unknown_structure_raises():
     with pytest.raises(ValueError, match="unknown structure"):
         slip_systems("diamond")
+
+
+def test_unknown_family_raises():
+    with pytest.raises(ValueError, match="not defined"):
+        slip_systems("fcc", families=["{110}<111>"])
