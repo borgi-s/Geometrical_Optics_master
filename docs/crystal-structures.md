@@ -463,11 +463,18 @@ explicitly.
 simulations — attempting to use it with `structure_type = "hcp"` raises an
 error. Use `mode = "oblique"` with an orthonormal mount (see the HCP section).
 
-**Non-cubic `wall` mode is not yet frame-correct (pre-existing, affects BCC and HCP).** The
-forward `wall` population builder (`Find_Hg`) uses a hardcoded FCC-frame orientation matrix
-`Ud` derived from the legacy `_SLIP_SYSTEM_111` table. The per-population, cell-aware `Ud`
-builder (`_ud_matrix_from_bnt_cell`) is only consumed by the `centered` and
-`random_dislocations` forward paths via `Find_Hg_from_population`. As a result, a BCC or HCP
-forward run with `mode = "wall"` will render with the wrong dislocation frame — silently, with
-no error. **Use `centered` or `random_dislocations` for non-cubic crystals.** Extending the
-wall path to be cell-aware is a known follow-up for a future release.
+**Non-cubic `wall` mode is now frame-correct (BCC and HCP).** The forward `wall` path
+(`Find_Hg`) accepts an optional `Ud_override`: for a non-cubic (BCC/HCP) wall the orchestrator
+passes the population's cell-aware `Ud` (`population.Ud[0]`, built by
+`_ud_matrix_from_bnt_cell` from the structure's first slip system), so a `mode = "wall"` forward
+renders in the correct crystal frame just like `centered` and `random_dislocations`. FCC walls
+keep `Ud_override = None`, which uses the legacy module-global FCC wall `Ud` — byte-identical to
+v2.x (note that the legacy FCC wall `Ud` is a *different* {111}⟨110⟩ system than
+`slip_systems("fcc")[0]`, which is why FCC must NOT be routed through `population.Ud[0]`).
+
+> **Fg-cache caveat (deferred repo-audit #1).** The `Find_Hg` Fg cache filename is keyed by
+> `dis/psize/zl_rms/Npixels/Nsub/remount/z/b/ν` — NOT by `Ud` or `theta_0`. For FCC the wall
+> `Ud` is constant so this is safe; for non-cubic the `b`/`ν` suffixes differentiate
+> structures/materials in practice. Now that the wall `Ud` is structure-dependent, a future
+> non-FCC run with the same `b`/`ν`/`theta` but a *different* `Ud` would collide on the cache
+> key. Making the Fg cache key geometry/structure-aware is tracked as a separate follow-up.

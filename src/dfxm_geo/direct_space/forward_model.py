@@ -215,6 +215,7 @@ def Find_Hg(
     z_offset_um: float = 0.0,
     b: float = BURGERS_VECTOR,
     ny: float = POISSON_RATIO,
+    Ud_override: np.ndarray | None = None,
     ctx: "ForwardContext",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the displacement gradient field Hg and reciprocal vector q_hkl.
@@ -243,6 +244,15 @@ def Find_Hg(
             byte-identical to v2.x). A non-Al material/override passes the
             resolved ν so the wall displacement field uses the correct elasticity
             (M4 Stage 4.3a I2).
+        Ud_override: Dislocation→grain rotation. ``None`` uses the legacy FCC wall
+            ``Ud`` module global (byte-identical — FCC unchanged). Non-cubic
+            (BCC/HCP) walls pass the population's cell-aware ``Ud`` so the wall
+            renders in the correct crystal frame (M4 Stage 4.3b follow-up FU5).
+            ``Us`` stays the shared module/instrument ``Us`` (structure-independent
+            sample/grain frame setup). NOTE: the legacy module-global ``Ud`` is a
+            DIFFERENT {111}⟨110⟩ system than ``slip_systems("fcc")[0]``, so FCC
+            walls MUST keep ``None`` here to stay byte-identical — do not route FCC
+            through ``population.Ud[0]``.
         ctx: Required ForwardContext; geometry (rl/Theta/theta_0) and kernel-path
             provenance are sourced from it (#16 Slice 5 — no module globals).
 
@@ -314,7 +324,18 @@ def Find_Hg(
         else ctx.geometry.rl
     )
     Theta_ = ctx.geometry.Theta
-    Hg = load_or_generate_Hg(rl_eff, Ud, Us, Theta_, dis, ndis, Fg_path, b=b, ny=ny, S=S)
+    # Effective dislocation→grain rotation: the module-global FCC wall ``Ud`` when
+    # no override is given (byte-identical — FCC unchanged), else the population's
+    # cell-aware ``Ud`` for a non-cubic (BCC/HCP) wall (FU5).
+    Ud_eff = Ud if Ud_override is None else Ud_override
+    # NOTE (deferred repo-audit #1): the Fg cache filename is keyed by
+    # dis/psize/zl_rms/Npixels/Nsub/remount/z/b/ny — NOT by Ud or theta_0. For FCC
+    # the Ud is constant so this is safe; for non-FCC the b/ny suffixes
+    # differentiate structures/materials in practice. With FU5, ``Ud`` is now
+    # structure-dependent, so a future non-FCC run with the SAME b/ny/theta but a
+    # DIFFERENT Ud would collide on the cache key — covered by the deferred
+    # geometry/structure-aware cache-key fix (repo-audit #1), not here.
+    Hg = load_or_generate_Hg(rl_eff, Ud_eff, Us, Theta_, dis, ndis, Fg_path, b=b, ny=ny, S=S)
 
     if not os.path.exists(Fg_path.replace(".npy", "_vars.txt")):
         _lkp = ctx.resolution.loaded_kernel_path
@@ -325,7 +346,7 @@ def Find_Hg(
             "theta_0 [rad]": ctx.geometry.theta_0,
             "Npixels": Npixels,
             "Nsub": Nsub,
-            "Ud": Ud.tolist(),
+            "Ud": Ud_eff.tolist(),
             "Us": Us.tolist(),
             "Theta": Theta_.tolist(),
             "ndis": ndis,

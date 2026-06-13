@@ -21,15 +21,25 @@ complementary cases that 4.3b adds or could break:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
 
+import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.crystal.slip_systems import (
     _FCC_111_110_ORDERED,
     slip_systems,
+)
+from dfxm_geo.data import configs_root
+from dfxm_geo.pipeline import (
+    CrystalConfig,
+    ScanConfig,
+    SimulationConfig,
+    WallCrystalConfig,
+    run_simulation,
 )
 
 # ---------------------------------------------------------------------------
@@ -136,3 +146,98 @@ def test_fcc_slip_order_unchanged() -> None:
         assert sys_.t == t_leg, (
             f"FCC slip system #{idx}: t={sys_.t} != legacy t={t_leg} — order drifted"
         )
+
+
+# ---------------------------------------------------------------------------
+# FU5 (M4 Stage 4.3b follow-up): non-cubic wall forward uses the cell-aware Ud.
+# The byte-identity guard is the FCC wall: with the new Ud_override discriminator
+# an FCC wall (mount None OR resolved fcc) MUST keep Ud_override=None so it
+# renders with the legacy module-global FCC wall Ud — NOT population.Ud[0], which
+# is a DIFFERENT {111}⟨110⟩ system. These tests run an FCC (Al) wall on the
+# analytic backend (oblique geometry, no MC kernel needed) so they're CI-safe.
+# ---------------------------------------------------------------------------
+
+
+def _fcc_wall_oblique_cfg() -> SimulationConfig:
+    """A minimal FCC (Al) wall forward: oblique geometry, analytic backend.
+
+    Reuses the al_oblique_figure3 oblique mount/reflection (cubic, no
+    structure_type -> resolves to fcc) but swaps the dislocation layout to a
+    small wall (ndis=3). Single frame (rocking peak), no kernel required.
+    """
+    cfg = SimulationConfig.from_toml(configs_root() / "al_oblique_figure3.toml")
+    return replace(
+        cfg,
+        crystal=CrystalConfig(
+            mode="wall",
+            wall=WallCrystalConfig(dis=4.0, ndis=3, sample_remount="S1"),
+        ),
+        scan=ScanConfig(),  # single frame at the rocking peak
+        io=replace(cfg.io, write_strain_provenance=False, include_perfect_crystal=False),
+    )
+
+
+def _wall_detector_frame(out_dir: Path) -> np.ndarray:
+    """Read the single wall-forward detector frame (float64) from the per-scan h5."""
+    det = out_dir / "scan0001" / "dfxm_sim_detector_0000.h5"
+    assert det.is_file(), f"no detector file written under {out_dir}"
+    with h5py.File(det, "r") as f:
+        return f["/entry_0000/dfxm_sim_detector/image"][0].astype(np.float64)
+
+
+@pytest.mark.slow
+def test_fcc_wall_forward_deterministic(tmp_path: Path) -> None:
+    """An FCC (Al) wall forward is byte-identical across two executions.
+
+    FU5 byte-identity gate: the new ``Ud_override`` plumbing must NOT change the
+    FCC wall output. An FCC wall (mount resolves to fcc) takes
+    ``Ud_override=None`` so ``Find_Hg`` uses the legacy module-global FCC wall
+    ``Ud`` — exactly as before FU5. Two runs of the same config must produce
+    byte-identical detector frames.
+    """
+    img_a = _wall_detector_frame_run(tmp_path / "run_a")
+    img_b = _wall_detector_frame_run(tmp_path / "run_b")
+
+    assert img_a.shape == img_b.shape, (
+        f"FCC wall produced different shapes: {img_a.shape} vs {img_b.shape}"
+    )
+    assert np.isfinite(img_a).all(), "FCC wall image contains non-finite values"
+    assert float(img_a.max()) > 0.0, "FCC wall image is all zeros — no contrast"
+    assert np.array_equal(img_a, img_b), (
+        "FCC wall forward is NOT byte-identical across two runs — "
+        f"max diff = {np.abs(img_a - img_b).max()}"
+    )
+
+
+def _wall_detector_frame_run(out_dir: Path) -> np.ndarray:
+    run_simulation(_fcc_wall_oblique_cfg(), out_dir)
+    return _wall_detector_frame(out_dir)
+
+
+@pytest.mark.slow
+def test_fcc_wall_uses_module_global_ud_not_population(tmp_path: Path, monkeypatch) -> None:
+    """An FCC wall passes ``Ud_override=None`` so Find_Hg uses the FCC module Ud.
+
+    The code-level byte-identity proof for FU5's FCC branch: capture the
+    ``Ud_override`` kwarg reaching ``Find_Hg``. For an FCC wall it must be
+    ``None`` (legacy module-global FCC wall Ud). Asserting it is NOT
+    ``population.Ud[0]`` (= ``slip_systems("fcc")[0]``, a DIFFERENT {111}⟨110⟩
+    system) guards against a regression that would silently change FCC bytes.
+    """
+    captured: dict[str, object] = {}
+    original = fm.Find_Hg
+
+    def _capturing(*args, Ud_override=None, **kwargs):
+        captured["Ud_override"] = Ud_override
+        return original(*args, Ud_override=Ud_override, **kwargs)
+
+    monkeypatch.setattr(fm, "Find_Hg", _capturing)
+
+    run_simulation(_fcc_wall_oblique_cfg(), tmp_path / "out")
+
+    assert "Ud_override" in captured, "Find_Hg was never called (wall provider not used?)"
+    assert captured["Ud_override"] is None, (
+        f"FCC wall passed Ud_override={captured['Ud_override']!r}; expected None "
+        "(the legacy module-global FCC wall Ud) — routing FCC through "
+        "population.Ud[0] would break byte-identity"
+    )

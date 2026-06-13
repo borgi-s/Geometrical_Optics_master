@@ -116,6 +116,91 @@ def test_hcp_forward_runs(tmp_path, metal):
     assert len(list(attrs["slip_families"])) > 0
 
 
+def _hcp_wall_toml(metal, hkl, eta):
+    """Wall-mode HCP forward on the analytic backend (no kernel).
+
+    Wall needs oblique geometry (simplified mode discards the mount). The wall's
+    single slip system is slip_systems("hcp")[0], built in the non-orthonormal
+    hexagonal Cartesian frame by _ud_matrix_from_bnt_cell.
+    """
+    return (
+        "[reciprocal]\n"
+        f"hkl = [{hkl[0]}, {hkl[1]}, {hkl[2]}]\n"
+        f"keV = {metal['keV']}\n"
+        'backend = "analytic"\nbeamstop = false\n\n'
+        '[geometry]\nmode = "oblique"\n'
+        f"eta = {eta!r}\n\n"
+        "[crystal]\n"
+        'lattice = "hexagonal"\n'
+        f"a = {metal['a']!r}\n"
+        f"c = {metal['c']!r}\n"
+        'structure_type = "hcp"\n'
+        f'material = "{metal["material"]}"\n'
+        "mount_x = [2, -1, 0]\nmount_y = [0, 1, 0]\nmount_z = [0, 0, 1]\n"
+        'mode = "wall"\n\n'
+        '[crystal.wall]\ndis = 4.0\nndis = 3\nsample_remount = "S1"\n\n'
+        "[scan.phi]\nvalue = 0.0\n\n"
+        "[io]\ninclude_perfect_crystal = false\nwrite_strain_provenance = false\n\n"
+        "[postprocess]\nenabled = false\n"
+    )
+
+
+@pytest.mark.slow
+def test_hcp_wall_forward_uses_cell_aware_ud(tmp_path, monkeypatch):
+    """FU5: an HCP wall forward renders with the population's cell-aware Ud.
+
+    Captures the Ud_override reaching Find_Hg for an HCP (Ti) wall and asserts it
+    equals population.Ud[0] (the hexagonal-frame slip-system rotation), NOT None
+    and NOT the module-global FCC Ud. Before FU5 the HCP wall silently used the
+    FCC Ud. Also checks the render is finite with contrast.
+    """
+    import dfxm_geo.direct_space.forward_model as fm
+
+    metal = _TI
+    eta = _eta_for(metal, _HKL)
+
+    captured = {}
+    original = fm.Find_Hg
+
+    def _capturing(*args, Ud_override=None, **kwargs):
+        captured["Ud_override"] = Ud_override
+        return original(*args, Ud_override=Ud_override, **kwargs)
+
+    monkeypatch.setattr(fm, "Find_Hg", _capturing)
+
+    cfg_path = tmp_path / "hcp_wall.toml"
+    cfg_path.write_text(_hcp_wall_toml(metal, _HKL, eta), encoding="utf-8")
+    cfg = SimulationConfig.from_toml(cfg_path)
+    assert cfg.geometry.mount is not None
+    assert cfg.geometry.mount.resolved_structure_type == "hcp"
+
+    population = fm.build_dislocation_population(
+        cfg.crystal,
+        fov_lateral_um=fm.Npixels * fm.psize * 1e6,
+        rng=None,
+        mount=cfg.geometry.mount,
+    )
+    expected_ud = population.Ud[0]
+
+    out = tmp_path / "out"
+    run_simulation(cfg, out)
+
+    assert "Ud_override" in captured, "Find_Hg was never called"
+    ud_used = captured["Ud_override"]
+    assert ud_used is not None, "HCP wall passed Ud_override=None (the FU5 bug)"
+    assert not np.array_equal(ud_used, fm.Ud), (
+        "HCP wall Ud_override equals the module-global FCC Ud — cell-aware Ud not routed"
+    )
+    assert np.array_equal(ud_used, expected_ud), (
+        "HCP wall Ud_override does not match population.Ud[0]"
+    )
+
+    det = next(out.glob("scan*/dfxm_sim_detector_0000.h5"))
+    with h5py.File(det, "r") as f:
+        img = f["/entry_0000/dfxm_sim_detector/image"][...]
+    assert np.isfinite(img).all() and float(img.max()) > 0.0
+
+
 def _hcp_identify_toml(metal, hkl, eta):
     return (
         'mode = "single"\n\n'

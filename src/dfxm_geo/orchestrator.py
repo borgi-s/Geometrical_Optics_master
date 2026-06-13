@@ -407,11 +407,24 @@ def _run_simulation_inner(
         w = config.crystal.wall
         assert w is not None
         S = SAMPLE_REMOUNT_OPTIONS[w.sample_remount]
+        # FU5: route the population's cell-aware Ud into the wall Find_Hg for
+        # non-cubic structures. FCC (mount None or resolved fcc) MUST pass
+        # Ud_override=None — the module-global FCC wall Ud is a DIFFERENT
+        # {111}⟨110⟩ system than population.Ud[0] (slip_systems("fcc")[0]), so
+        # routing FCC through population.Ud[0] would change the bytes. BCC/HCP
+        # walls were silently rendering with the FCC Ud before this fix; now they
+        # use the wall's single cell-aware system (population.Ud[0], broadcast
+        # across all dislocations by build_dislocation_population's wall branch).
+        _mount = config.geometry.mount
+        _wall_is_fcc = _mount is None or _mount.resolved_structure_type == "fcc"
+        _wall_Ud_override = None if _wall_is_fcc else population.Ud[0]
 
         def Hg_provider(z: float) -> tuple[np.ndarray, np.ndarray]:
             # population.b_um is BURGERS_VECTOR / population.ny is POISSON_RATIO
             # for FCC/Al (byte-identical to v2.x); the cell-derived |b| + material
-            # ν for non-FCC walls (M4 Stage 4.3a + I2).
+            # ν for non-FCC walls (M4 Stage 4.3a + I2). Ud_override is None for FCC
+            # (legacy module-global Ud — byte-identical) and the wall's cell-aware
+            # Ud for non-cubic (FU5).
             return fm.Find_Hg(
                 w.dis,
                 w.ndis,
@@ -425,6 +438,7 @@ def _run_simulation_inner(
                 z_offset_um=z,
                 b=population.b_um,
                 ny=population.ny,
+                Ud_override=_wall_Ud_override,
                 ctx=ctx,
             )
 

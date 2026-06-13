@@ -147,6 +147,121 @@ def test_bcc_forward_runs(tmp_path: Path) -> None:
     )
 
 
+def _bcc_wall_toml() -> str:
+    """Wall-mode BCC forward on the analytic backend (no kernel).
+
+    Wall needs oblique geometry (simplified mode discards the mount). Reuses the
+    BCC oblique mount/reflection from _bcc_forward_toml; the wall's single slip
+    system is slip_systems("bcc")[0] (a {110}/{112}<111> system).
+    """
+    return (
+        "[reciprocal]\n"
+        f"hkl = [{_BCC_HKL[0]}, {_BCC_HKL[1]}, {_BCC_HKL[2]}]\n"
+        f"keV = {_BCC_KEV}\n"
+        'backend = "analytic"\n'
+        "beamstop = false\n"
+        "\n"
+        "[geometry]\n"
+        'mode = "oblique"\n'
+        f"eta = {_BCC_ETA!r}\n"
+        "\n"
+        "[crystal]\n"
+        'lattice = "cubic"\n'
+        f"a = {_FE_A!r}\n"
+        'structure_type = "bcc"\n'
+        'material = "Fe"\n'
+        "mount_x = [1, 0, 0]\n"
+        "mount_y = [0, 1, 0]\n"
+        "mount_z = [0, 0, 1]\n"
+        'mode = "wall"\n'
+        "\n"
+        "[crystal.wall]\n"
+        "dis = 4.0\n"
+        "ndis = 3\n"
+        'sample_remount = "S1"\n'
+        "\n"
+        "[scan.phi]\n"
+        "value = 0.0\n"
+        "\n"
+        "[io]\n"
+        "include_perfect_crystal = false\n"
+        "write_strain_provenance = false\n"
+        "\n"
+        "[postprocess]\n"
+        "enabled = false\n"
+    )
+
+
+@pytest.mark.slow
+def test_bcc_wall_forward_uses_cell_aware_ud(tmp_path: Path, monkeypatch) -> None:
+    """FU5: a BCC wall forward renders with the population's cell-aware Ud.
+
+    Before FU5 the wall path called Find_Hg with the hardcoded module-global FCC
+    Ud, so BCC/HCP walls rendered in the WRONG crystal frame (silently). This
+    test captures the Ud_override reaching Find_Hg and asserts:
+
+      * it is NOT None (the FCC byte-identical sentinel), AND
+      * it equals population.Ud[0] — the wall's single BCC slip-system rotation
+        (slip_systems("bcc")[0]), NOT the module-global FCC wall Ud.
+
+    Also asserts the produced detector image is finite and has contrast, so the
+    cell-aware Ud actually flows through to a sensible forward render.
+    """
+    import dfxm_geo.direct_space.forward_model as fm
+
+    captured: dict[str, object] = {}
+    original = fm.Find_Hg
+
+    def _capturing(*args, Ud_override=None, **kwargs):
+        captured["Ud_override"] = Ud_override
+        return original(*args, Ud_override=Ud_override, **kwargs)
+
+    monkeypatch.setattr(fm, "Find_Hg", _capturing)
+
+    cfg_path = tmp_path / "bcc_wall.toml"
+    cfg_path.write_text(_bcc_wall_toml(), encoding="utf-8")
+    cfg = SimulationConfig.from_toml(cfg_path)
+    assert cfg.geometry.mount is not None
+    assert cfg.geometry.mount.resolved_structure_type == "bcc"  # precondition
+
+    # Build the same population the orchestrator builds, to get the expected Ud.
+    population = fm.build_dislocation_population(
+        cfg.crystal,
+        fov_lateral_um=fm.Npixels * fm.psize * 1e6,
+        rng=None,
+        mount=cfg.geometry.mount,
+    )
+    expected_ud = population.Ud[0]
+
+    out = tmp_path / "out"
+    run_simulation(cfg, out)
+
+    assert "Ud_override" in captured, "Find_Hg was never called (wall provider not used?)"
+    ud_used = captured["Ud_override"]
+    assert ud_used is not None, (
+        "BCC wall passed Ud_override=None — it would silently render with the "
+        "module-global FCC Ud (the FU5 bug)"
+    )
+    # Differs from the module-global FCC wall Ud (the bug-before value).
+    assert not np.array_equal(ud_used, fm.Ud), (
+        "BCC wall Ud_override equals the module-global FCC Ud — the cell-aware Ud "
+        "is not being routed (FU5 regression)"
+    )
+    # Equals the wall's single BCC slip-system rotation.
+    assert np.array_equal(ud_used, expected_ud), (
+        "BCC wall Ud_override does not match population.Ud[0] (the cell-aware "
+        "BCC slip-system rotation)"
+    )
+
+    # The render still produces a finite, non-empty image with the correct Ud.
+    det = out / "scan0001" / "dfxm_sim_detector_0000.h5"
+    assert det.is_file()
+    with h5py.File(det, "r") as f:
+        img = f["/entry_0000/dfxm_sim_detector/image"][...]
+    assert np.isfinite(img).all()
+    assert float(img.max()) > 0.0
+
+
 def _bcc_identify_toml() -> str:
     """Single-mode BCC identify on the analytic backend (no kernel)."""
     return (
