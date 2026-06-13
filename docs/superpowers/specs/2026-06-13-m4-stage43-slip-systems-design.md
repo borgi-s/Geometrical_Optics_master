@@ -90,11 +90,15 @@ Public functions (cubic-only in 4.3a; signatures accept the cell for 4.3b):
   Euclidean (`v/|v|`), NOT the literal `/√2` — bit-identical for FCC ⟨110⟩,
   correct for BCC ⟨111⟩.
 - `derive_structure_type(*, structure_type, space_group, lattice) -> str`:
-  explicit `structure_type` wins; else from space group — centering letter +
-  crystal system (F-cubic→fcc, I-cubic→bcc, P-hexagonal→hcp; via gemmi's
-  `SpaceGroup` centring + `space_group_crystal_system`, called through a thin
-  helper in `crystal/cif.py` so gemmi stays behind that boundary); else `"fcc"`
-  (back-compat default). Unknown/unsupported → `ValueError` naming the choices.
+  **precedence** — when a space group is present it is authoritative (the
+  crystallographic evidence overrides a possibly-wrong user assertion): derive
+  from centering letter + crystal system (F-cubic→fcc, I-cubic→bcc,
+  P-hexagonal→hcp; via gemmi's `SpaceGroup` centring +
+  `space_group_crystal_system`, called through a thin helper in `crystal/cif.py`
+  so gemmi stays behind that boundary) and **raise if an explicit
+  `structure_type` contradicts it**. With no space group, explicit
+  `structure_type` wins over the default; with neither, `"fcc"` (back-compat).
+  Unknown/unsupported → `ValueError` naming the choices.
 
 **Enumeration validation (test-locked counts):** fcc {111}⟨110⟩ → 12 systems,
 4 planes; bcc {110}⟨111⟩ → 12 systems, 6 planes; bcc {112}⟨111⟩ → 12 systems,
