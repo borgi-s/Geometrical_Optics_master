@@ -258,16 +258,19 @@ def _mount_cell(config: SimulationConfig | IdentificationConfig) -> UnitCell | N
 def _context_for_run(
     res: fm.ResolutionContext,
     run: _ReflectionRun,
-    config: SimulationConfig | IdentificationConfig,
+    cell: UnitCell | None = None,
 ) -> fm.ForwardContext:
     """Build a ``ForwardContext`` for a single ``ReflectionRun``.
 
     Wraps ``fm.build_forward_context`` with the run's Bragg angle, hkl, and
     omega so the orchestrator loop has a single call-site.
+
+    ``cell`` routes q_hkl through cell.B for non-cubic crystals
+    (``None`` → cubic q/|q|, M4 4.3b).  Pass ``_mount_cell(config)`` at
+    call sites that have a config; tests that only need the 2-arg form can
+    omit it.
     """
-    return fm.build_forward_context(
-        run.theta, res, run.hkl, omega=run.omega, cell=_mount_cell(config)
-    )
+    return fm.build_forward_context(run.theta, res, run.hkl, omega=run.omega, cell=cell)
 
 
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
@@ -384,7 +387,7 @@ def _run_simulation_inner(
     # run's hkl and omega into the ForwardContext; single-reflection uses the
     # config-level hkl with omega=0 (the original code path).
     if reflection is not None:
-        ctx = _context_for_run(res, reflection, config)
+        ctx = _context_for_run(res, reflection, cell=_mount_cell(config))
     else:
         ctx = fm.build_forward_context(
             run_theta(config),
@@ -1809,10 +1812,14 @@ def run_identification(
         results: list[dict[str, Any]] = []
         # All-reflections visibility: collect unit q for every reflection so
         # the sweep grid is IDENTICAL across all masters (spec §8).
+        # NOTE (M4 4.3b): _q_unit gives the Miller direction, NOT B·hkl. For HCP
+        # multi-reflection g·b this needs the Cartesian reciprocal direction —
+        # Task 7 fixes _q_unit / the Cartesian g·b path.  Single-reflection
+        # identify already uses ctx.q_hkl (cell-correct).
         all_vis_qs = [_q_unit(r.hkl) for r in runs]
         for idx, run in enumerate(runs, start=1):
             res_run = _resolution_for_run(config.reciprocal, config.geometry, run)
-            ctx_run = _context_for_run(res_run, run, config)
+            ctx_run = _context_for_run(res_run, run, cell=_mount_cell(config))
             sub_dir = output_dir / f"reflection_{idx:03d}"
             results.append(
                 _dispatch_identification(

@@ -1399,6 +1399,9 @@ def _find_hg_from_population_numpy(
     truth the kernel is checked against at rtol=1e-12.
 
     Args:
+        h, k, l: Miller indices — accepted for call-site compatibility; IGNORED
+            (q_hkl is sourced from ctx, set cell-correctly by
+            build_forward_context).
         ctx: Required ForwardContext (#16 Slice 5). ``Us``, ``Theta``, and
             ``rl`` (when the explicit kwarg is None) are sourced from it —
             mirrors ``Find_Hg_from_population`` so parity holds for both the
@@ -1475,7 +1478,9 @@ def Find_Hg_from_population(
 
     Args:
         population: DislocationPopulation from `build_dislocation_population`.
-        h, k, l: Miller indices of the active reflection.
+        h, k, l: Miller indices — accepted for call-site compatibility; IGNORED
+            (q_hkl is sourced from ctx, set cell-correctly by
+            build_forward_context).
         S: 3x3 sample-remount rotation (default identity).
         rl: Detector ray grid to evaluate the strain on. Defaults to
             ``ctx.geometry.rl``. Pass `Z_shift(z_um, xl_range=ctx.geometry.xl_range)`
