@@ -1,10 +1,8 @@
 # Crystal structures
 
-How `dfxm-geo` models dislocation physics in FCC and BCC crystals —
+How `dfxm-geo` models dislocation physics in FCC, BCC, and HCP crystals —
 slip-system selection, Burgers vector magnitudes, isotropic Poisson ratios,
-and the configuration TOML keys that control them. HCP support (basal,
-prismatic, and pyramidal families with hexagonal Miller-Bravais indices) is
-planned for Stage 4.3b and is **not** implemented yet.
+and the configuration TOML keys that control them.
 
 ## Structure resolution
 
@@ -24,7 +22,7 @@ Space-group-to-structure mapping:
 |---|---|---|
 | F-cubic | Fm-3m, F4-3m, … | `"fcc"` |
 | I-cubic | Im-3m, I4-3m, … | `"bcc"` |
-| P-hexagonal | P6₃/mmc, P6/mmm, … | `"hcp"` (4.3b — raises if used) |
+| P-hexagonal | P6₃/mmc, P6/mmm, … | `"hcp"` |
 
 Contradicting the space group is an error:
 
@@ -77,6 +75,115 @@ slip_families = ["{110}<111>"]   # only the 12 primary systems
 Valid names for `slip_families` are `"{110}<111>"` and `"{112}<111>"`.
 Supplying an unknown name raises an error listing the available options.
 
+### HCP — basal, prismatic, and pyramidal families
+
+Five slip families are registered, giving 30 systems in total:
+
+| Family (4-index name) | Planes | Systems | Burgers type |
+|---|---|---|---|
+| {0001}⟨11-20⟩ — basal | 1 | 3 | ⟨a⟩ |
+| {10-10}⟨11-20⟩ — prismatic | 3 | 3 | ⟨a⟩ |
+| {10-11}⟨11-20⟩ — 1st-order pyramidal ⟨a⟩ | 6 | 6 | ⟨a⟩ |
+| {10-11}⟨11-23⟩ — 1st-order pyramidal ⟨c+a⟩ | 6 | 12 | ⟨c+a⟩ |
+| {11-22}⟨11-23⟩ — 2nd-order pyramidal ⟨c+a⟩ | 6 | 6 | ⟨c+a⟩ |
+| **Total (default)** | 16 distinct | **30** | — |
+
+All five families are active by default. Use `slip_families` to narrow the set:
+
+```toml
+[crystal]
+structure_type = "hcp"
+slip_families = ["{0001}<11-20>", "{10-11}<11-23>"]   # basal + 1st-order pyramidal ⟨c+a⟩
+```
+
+Valid family name strings (use these exact strings in `slip_families`):
+
+- `"{0001}<11-20>"`
+- `"{10-10}<11-20>"`
+- `"{10-11}<11-20>"`
+- `"{10-11}<11-23>"`
+- `"{11-22}<11-23>"`
+
+Supplying an unknown name raises an error listing the available options.
+
+#### 4-index Miller–Bravais notation
+
+Hexagonal planes and directions are conventionally written in 4-index notation
+(h k i l) / [u v t w]. `dfxm-geo` accepts length-4 tuples wherever a plane
+or Burgers direction is required and converts them internally to the 3-index
+form used by the physics engine:
+
+- **Plane** (h k i l), with i = −(h+k): drop the redundant i → (h, k, l).
+- **Direction** [u v t w], with t = −(u+v): U = 2u+v, V = u+2v, W = w, then
+  divide by gcd.
+
+Both `slip_plane_normal` in the identification config and the
+`[[crystal.slip_system]]` escape hatch accept 4-index lists:
+
+```toml
+[crystal]
+slip_plane_normal = [0, 0, 0, 1]   # (0001) basal → stored as (0, 0, 1)
+```
+
+```toml
+[[crystal.slip_system]]
+plane   = [0, 0, 0, 1]             # (0001) in 4-index — accepted
+burgers = [2, -1, -1, 0]           # [2-1-10] in 4-index — accepted
+```
+
+#### Orthonormal mount requirement for hexagonal cells
+
+The default mount `(1,0,0)/(0,1,0)/(0,0,1)` assumes an orthonormal basis and
+is **NOT orthogonal for a hexagonal cell** (the a* and b* reciprocal vectors
+subtend 60°). Supplying the default mount for an HCP crystal raises an error.
+
+Use a mount whose reciprocal-space vectors are mutually orthogonal, for example:
+
+```
+mount_x = [2, -1, 0]
+mount_y = [0,  1, 0]
+mount_z = [0,  0, 1]
+```
+
+In Cartesian coordinates the real-space directions `A·[2,-1,0]` and `A·[0,1,0]`
+are orthogonal for a hexagonal cell (both lie in the basal plane, 120° apart;
+their `B·m` reciprocal directions are orthogonal). This mount is used in all
+HCP examples and tests.
+
+#### HCP requires oblique geometry
+
+Like BCC, HCP requires oblique geometry (`[geometry] mode = "oblique"`) because
+the crystal mount (and hence the scattering geometry) must be specified
+explicitly. Simplified mode (`mode = "simplified"`) discards the mount and
+cannot carry HCP slip-system information — attempting to use it with
+`structure_type = "hcp"` raises an error pointing to oblique mode.
+
+#### Picking a reachable reflection
+
+Not every reflection (h, k, l) is Laue-reachable at a given keV for a given
+mount. Use `dfxm_geo.crystal.oblique.compute_omega_eta` to check:
+
+```python
+from dfxm_geo.crystal.oblique import CrystalMount, compute_omega_eta
+import numpy as np
+
+mount = CrystalMount(
+    lattice="hexagonal", a=2.951e-10, c=4.684e-10,
+    structure_type="hcp",
+    mount_x=(2, -1, 0), mount_y=(0, 1, 0), mount_z=(0, 0, 1),
+)
+geom = compute_omega_eta(mount, hkl=(1, 0, -1), keV=17.0)
+eta = geom.eta_1 if not np.isnan(geom.eta_1) else geom.eta_2
+print(f"eta = {eta:.6f}")   # put this value in [geometry] eta
+```
+
+The paper's preferred basal reflection **(0002) is NOT Laue-reachable at 17 keV**
+for the `(2,-1,0)/(0,1,0)/(0,0,1)` mount — `compute_omega_eta` returns NaN η
+for both Ti and Mg. The end-to-end tests use **(1, 0, -1)** instead (≈ −2.08 rad
+for Ti at 17 keV), which is a 1st-order pyramidal reflection and IS reachable.
+Use `dfxm-find-reflections` to explore which reflections are accessible for
+your material, mount, and keV.
+
 ## TOML configuration examples
 
 ### Explicit structure type
@@ -106,6 +213,36 @@ mount_z = [0, 0, 1]
 
 `cif` requires `pip install "dfxm-geo[cif]"` (or `conda install -c conda-forge gemmi`).
 The path is resolved relative to the config file's directory.
+
+### HCP oblique (Ti, forward mode)
+
+```toml
+[reciprocal]
+hkl   = [1, 0, -1]          # 1st-order pyramidal reflection — reachable at 17 keV
+keV   = 17.0
+backend = "analytic"
+beamstop = false
+
+[geometry]
+mode = "oblique"
+eta  = -2.0818               # from compute_omega_eta; exact value required
+
+[crystal]
+lattice = "hexagonal"
+a = 2.951e-10                # α-Ti, metres
+c = 4.684e-10
+structure_type = "hcp"
+material = "Ti"              # sets ν = 0.32 (KL)
+mount_x = [2, -1, 0]
+mount_y = [0,  1, 0]
+mount_z = [0,  0, 1]
+mode = "random_dislocations"
+
+[crystal.random_dislocations]
+ndis  = 10
+seed  = 42
+sigma = 8.0                  # µm spread
+```
 
 ### Custom slip systems (escape hatch)
 
@@ -138,9 +275,9 @@ they appear in the TOML file.
 `structure_type` and `[[crystal.slip_system]]` are mutually exclusive —
 setting both raises an error.
 
-### BCC oblique-η landmine
+### Oblique-η requirement (BCC and HCP)
 
-A single-reflection BCC oblique run requires an **exact** η value (the
+A single-reflection oblique run (BCC or HCP) requires an **exact** η value (the
 azimuthal angle at which the reflection satisfies the diffraction condition
 for the given mount). The `[geometry]` validator cross-checks the supplied
 `eta` against `compute_omega_eta` and raises if it does not match.
@@ -148,7 +285,7 @@ Supplying `eta = 0.0` will be rejected unless 0 happens to be the correct
 value for your mount:
 
 ```toml
-# ❌ likely to fail: eta=0.0 is rarely correct for a BCC oblique run
+# ❌ likely to fail: eta=0.0 is rarely correct for a BCC or HCP oblique run
 [geometry]
 mode = "oblique"
 eta = 0.0
@@ -163,12 +300,18 @@ hkl = [1, 1, 0]
 # eta omitted — the solver finds valid geometry automatically
 ```
 
-Or supply the correct η from `dfxm_geo.reciprocal_space.kernel.compute_omega_eta`
+Or supply the correct η from `dfxm_geo.crystal.oblique.compute_omega_eta`
 before writing the TOML:
 
 ```python
-from dfxm_geo.reciprocal_space.kernel import compute_omega_eta
-theta, omega, eta = compute_omega_eta(mount, hkl=(1, 1, 0), keV=17.0)
+from dfxm_geo.crystal.oblique import CrystalMount, compute_omega_eta
+import numpy as np
+
+# BCC example (Fe)
+mount = CrystalMount(lattice="cubic", a=2.87e-10, structure_type="bcc",
+                     mount_x=(1,1,0), mount_y=(-1,1,0), mount_z=(0,0,1))
+geom = compute_omega_eta(mount, hkl=(1, 1, 0), keV=17.0)
+eta = geom.eta_1 if not np.isnan(geom.eta_1) else geom.eta_2
 print(f"eta = {eta:.6f}")   # put this value in [geometry] eta
 ```
 
@@ -190,17 +333,20 @@ This value matches the Al (−1, 1, −1) reference from the Borgi et al. (2024)
 paper. All FCC simulations use this constant regardless of the actual lattice
 parameter in the TOML — changing `[crystal] a` for FCC does **not** alter |b|.
 
-### Non-FCC (BCC, custom)
+### Non-FCC (BCC, HCP, custom)
 
-For BCC and custom structures, |b| is derived from the cell matrix **A** and
-the integer Burgers direction **b_int**:
+For BCC, HCP, and custom structures, |b| is derived from the cell matrix **A**
+and the integer Burgers direction **b_int**:
 
 ```
 |b| = fraction × |A · b_int|   (in µm, A in metres)
 ```
 
-where the lattice-translation fraction is 1/2 for both ⟨110⟩_fcc and ⟨111⟩_bcc
-(centered-lattice primitive translations). For the two BCC families:
+where the lattice-translation fraction is 1/2 for the ⟨111⟩_bcc
+centered-lattice primitive translation, and 1.0 for HCP (the registry stores
+the reduced full-translation integer direction — no centered-lattice halving).
+
+For the two BCC families:
 
 | Family | Burgers direction | Formula | Example (α-Fe, a = 2.87 Å) |
 |---|---|---|---|
@@ -209,6 +355,20 @@ where the lattice-translation fraction is 1/2 for both ⟨110⟩_fcc and ⟨111�
 
 Both BCC families share the same Burgers direction family ⟨111⟩, so they give
 the same |b|.
+
+### HCP — c/a-dependent Burgers magnitude
+
+HCP has two distinct Burgers-vector lengths depending on the dislocation type:
+
+| Type | Integer direction (3-index) | Formula | Example (α-Ti, a = 2.951 Å, c = 4.684 Å) |
+|---|---|---|---|
+| ⟨a⟩ (basal, prismatic, pyr-⟨a⟩) | [1,0,0], [0,1,0], [1,1,0] | a | 2.951 × 10⁻⁴ µm |
+| ⟨c+a⟩ (pyr 1st- and 2nd-order) | [1,0,1], [1,0,-1], … | √(a²+c²) | 5.537 × 10⁻⁴ µm |
+
+The magnitude is computed per-dislocation from the cell parameters (Task 3/6 of
+M4 Stage 4.3b). In a `random_dislocations` run each drawn dislocation carries
+its own |b|, so a single simulation will contain a mix of ⟨a⟩ and ⟨c+a⟩
+contributions when all five families are active.
 
 ## Poisson ratio
 
@@ -242,10 +402,9 @@ Values are polycrystalline Voigt-Reuss-Hill (VRH) aggregate averages.
   Calculated Aggregate Properties: A Handbook*, 2nd ed. MIT Press, 1971
   (VRH aggregate ν).
 
-The Ti and Mg entries appear in the table for completeness — they will become
-relevant for HCP simulations in Stage 4.3b. A forward or identify run that
-sets `material = "Ti"` today will still raise an error later when the HCP
-slip-system registry is absent; the Poisson lookup itself will succeed.
+The Ti and Mg entries are used by HCP simulations (M4 Stage 4.3b). Setting
+`material = "Ti"` or `material = "Mg"` with `structure_type = "hcp"` resolves
+the Poisson ratio and contributes it to the HDF5 provenance attrs.
 
 ## Structure provenance in HDF5 output
 
@@ -260,8 +419,9 @@ following additional attributes:
 | `poisson_source` | string | `"KL"` | `"KL"`, `"SW"`, or `"override"` |
 | `burgers_magnitude_um` | float64 | `2.485e-4` | \|b\| in µm for the primary slip family |
 | `material` | string | `"Fe"` | Only present if `[crystal] material` was set |
-| `slip_families` | list[string] | `["{110}<111>"]` | Only present if `slip_families` was set |
+| `slip_families` | list[string] | `["{110}<111>"]` | Only present if `slip_families` was set (HCP: always present) |
 | `space_group` | string | `"Im-3m"` | Only present if derived from a space group or CIF |
+| `c_over_a` | float64 | `1.587` | **HCP only** — c/a ratio from the cell parameters |
 
 These attrs are written by `dfxm_geo.io.hdf5.structure_provenance_attrs`
 and are appended to the same `/N.1/` attrs that carry `scan_mode`,
@@ -276,27 +436,26 @@ v2.5.x in this case.
 
 **Isotropic elasticity only.** The displacement field implemented in
 `crystal/dislocations.py` uses the Hirth & Lothe isotropic solution with a
-single scalar ν. Anisotropic single-crystal elasticity (the full C_ijkl tensor
-— e.g. C₁₁, C₁₂, C₄₄ for cubic) is **not** implemented and is out of scope
-for v3.0.0. For materials with strong elastic anisotropy (W, Ni), the isotropic
-VRH average is a reasonable first approximation for bulk polycrystalline
-aggregates, but per-grain anisotropic contrast will differ from the isotropic
-prediction.
-
-**HCP is 4.3b.** The `derive_structure_type` function returns `"hcp"` for
-P-hexagonal space groups, and the Poisson table includes Ti and Mg. However,
-the slip-system registry has no HCP entry, so any simulation that reaches the
-slip-system lookup will raise a clear error. Full HCP support — basal
-{0001}⟨11-20⟩, prismatic {10-10}⟨11-20⟩, and pyramidal ⟨c+a⟩ families with
-Miller-Bravais → Cartesian conversion — is Stage 4.3b.
+single scalar ν. This applies equally to FCC, BCC, and HCP crystals.
+Anisotropic single-crystal elasticity (the full C_ijkl tensor — e.g.
+C₁₁, C₁₂, C₄₄ for cubic; C₁₃, C₃₃, C₄₄ for HCP) is **not** implemented
+and is out of scope for v3.0.0. For materials with strong elastic anisotropy
+(W, Ni, Ti with high c/a-ratio variants), the isotropic VRH average is a
+reasonable first approximation for bulk polycrystalline aggregates, but
+per-grain anisotropic contrast will differ from the isotropic prediction.
 
 **{123}⟨111⟩ BCC (pencil glide) only via the escape hatch.** The built-in
 registry covers {110} and {112} BCC families. The {123} family is physically
 active in BCC metals at elevated temperatures; it can be added via
 `[[crystal.slip_system]]` entries (one per system, no symmetry expansion).
 
-**Cubic only in the symmetry enumerator.** The `_variants` / `_enumerate_orbit`
-functions that expand a (plane, Burgers) family representative into a full
-symmetry orbit treat Miller indices as Cartesian components, which is only
-exact for cubic crystals. Non-cubic structures must supply explicit systems
-via the escape hatch.
+**Non-HCP hexagonal / trigonal structures use the HCP registry.** The
+`derive_structure_type` function maps all P-hexagonal space groups to `"hcp"`.
+If your trigonal or hexagonal crystal has a genuinely different slip system
+set, use the `[[crystal.slip_system]]` escape hatch to specify systems
+explicitly.
+
+**HCP requires oblique geometry.** Simplified mode (`[geometry] mode =
+"simplified"`) does not carry a crystal mount and cannot serve HCP
+simulations — attempting to use it with `structure_type = "hcp"` raises an
+error. Use `mode = "oblique"` with an orthonormal mount (see the HCP section).
