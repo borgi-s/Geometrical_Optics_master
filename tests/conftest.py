@@ -30,3 +30,18 @@ def _bound_kernel_cache_memory():
     import dfxm_geo.pipeline as _pipeline
 
     _pipeline._KERNEL_CTX_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _restore_slip_registry():
+    """Snapshot and restore slip_systems._REGISTRY around every test.
+
+    Prevents custom structures registered in one test from leaking into others
+    (e.g. register_custom calls in test_crystal_structure_config.py).
+    """
+    from dfxm_geo.crystal import slip_systems as _ss
+
+    snapshot = dict(_ss._REGISTRY)
+    yield
+    _ss._REGISTRY.clear()
+    _ss._REGISTRY.update(snapshot)

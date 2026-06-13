@@ -95,6 +95,11 @@ def _crystal_mount_from_toml(data: dict | None, base_dir: Path | None = None) ->
     custom_slip = data.get("slip_system")
     resolved_structure_type = data.get("structure_type")
     if custom_slip is not None:
+        if resolved_structure_type is not None:
+            raise ValueError(
+                "[crystal] structure_type and [[crystal.slip_system]] are mutually "
+                "exclusive; the slip_system hatch defines its own structure."
+            )
         from dfxm_geo.crystal.slip_systems import register_custom
 
         custom_name = f"custom:{data.get('material', 'user')}"

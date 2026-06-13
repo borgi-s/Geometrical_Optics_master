@@ -31,3 +31,14 @@ def test_custom_slip_systems_registration():
 def test_custom_slip_system_rejects_non_glide():
     with pytest.raises(ValueError, match="b.n"):
         register_custom("bad", [{"plane": (1, 0, 0), "burgers": (1, 0, 0)}])
+
+
+def test_structure_type_and_slip_system_mutually_exclusive(tmp_path):
+    block = {
+        "lattice": "cubic",
+        "a": 3e-10,
+        "structure_type": "bcc",
+        "slip_system": [{"plane": (1, 0, 0), "burgers": (0, 1, 0)}],
+    }
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _crystal_mount_from_toml(block, base_dir=tmp_path)

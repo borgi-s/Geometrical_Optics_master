@@ -811,7 +811,9 @@ class IdentificationConfig:
             from dfxm_geo.crystal.slip_systems import plane_normals
 
             structure = mount.resolved_structure_type
-            valid_planes = plane_normals(structure, families=None)
+            valid_planes = plane_normals(
+                structure, families=None
+            )  # families=None: accept any plane valid for the structure (accept-more). Tasks 8/9 may tighten to families=mount.slip_families once Burgers lookup honors it.
             from dfxm_geo.crystal.slip_systems import _canon as _ss_canon
 
             if _ss_canon(self.crystal.slip_plane_normal) not in valid_planes:

@@ -225,7 +225,17 @@ def register_custom(name: str, systems: list[dict]) -> None:
                 literal=True,
             )
         )
-    _REGISTRY[name] = tuple(fams)
+    new = tuple(fams)
+    if name in _REGISTRY and _REGISTRY[name] != new:
+        import warnings
+
+        warnings.warn(
+            f"register_custom: replacing existing registry entry {name!r} with "
+            "different slip systems; if two configs share the same 'material' key "
+            "this may be unintentional.",
+            stacklevel=2,
+        )
+    _REGISTRY[name] = new
 
 
 def burgers_magnitude(structure: str, family: str, cell: UnitCell) -> float:
