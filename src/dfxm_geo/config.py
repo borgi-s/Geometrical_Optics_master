@@ -177,6 +177,25 @@ class CenteredCrystalConfig:
     t: tuple[int, int, int] = (1, -2, 1)
 
     def __post_init__(self) -> None:
+        # Accept 4-index Miller–Bravais notation; convert to 3-index before validation.
+        # n is a PLANE (hkil → hkl); b and t are DIRECTIONS (uvtw → uvw).
+        # Mirror the pattern used in IdentificationCrystalConfig.__post_init__.
+        for field_name, field_val in (("b", self.b), ("n", self.n), ("t", self.t)):
+            raw: tuple[int, ...] = tuple(int(x) for x in field_val)
+            length = len(raw)
+            if length == 4:
+                from dfxm_geo.crystal.slip_systems import hkil_to_hkl, uvtw_to_uvw
+
+                idx4 = (raw[0], raw[1], raw[2], raw[3])
+                converted: tuple[int, int, int] = (
+                    hkil_to_hkl(idx4) if field_name == "n" else uvtw_to_uvw(idx4)
+                )
+                setattr(self, field_name, converted)
+            elif length != 3:
+                raise ValueError(
+                    f"[crystal.centered] {field_name} must be a 3- or 4-index tuple; "
+                    f"got length {length}: {field_val!r}"
+                )
         b = self.b
         n = self.n
         t = self.t
