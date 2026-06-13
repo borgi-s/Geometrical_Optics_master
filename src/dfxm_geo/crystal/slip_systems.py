@@ -159,17 +159,14 @@ def derive_structure_type(
     space_group: str | None,
     lattice: str | None,
 ) -> str:
-    """Resolve the structure family for slip-system lookup.
+    """Resolve the structure family.
 
-    Resolution order:
-    1. If *space_group* is given, derive the family from the centering (via
-       ``crystal.cif.space_group_structure_family``).  If *structure_type*
-       is also given and contradicts the derived family, raise ``ValueError``.
-    2. If only *structure_type* is given, return it (validated loosely).
-    3. Otherwise default to ``'fcc'`` (back-compat with pre-4.3 configs).
-
-    The *lattice* parameter is accepted for API stability (used in 4.3b for
-    non-cubic cells) but is currently unused.
+    Precedence: when a space group is present it is authoritative (the
+    crystallographic evidence overrides a possibly-wrong user assertion) —
+    derive from it and raise if an explicit structure_type contradicts it.
+    With no space group, explicit structure_type wins over the default; with
+    neither, 'fcc' (back-compat). The `lattice` param is accepted for API
+    stability (4.3b will use it for HCP cell conversion) and is currently unused.
     """
     if space_group is not None:
         from dfxm_geo.crystal.cif import space_group_structure_family

@@ -155,3 +155,10 @@ def test_derive_contradiction_raises():
     pytest.importorskip("gemmi")
     with pytest.raises(ValueError, match="contradicts"):
         derive_structure_type(structure_type="bcc", space_group="Fm-3m", lattice="cubic")
+
+
+def test_derive_explicit_agrees_with_space_group():
+    pytest.importorskip("gemmi")
+    assert (
+        derive_structure_type(structure_type="fcc", space_group="Fm-3m", lattice="cubic") == "fcc"
+    )
