@@ -16,8 +16,8 @@ from dfxm_geo.crystal.oblique import CrystalMount
 from dfxm_geo.orchestrator import (
     _ALL_111_PLANES,
     _draw_dislocation,
-    _identify_structure_is_fcc,
     _resolve_identify_planes_and_burgers,
+    _structure_is_fcc,
 )
 
 
@@ -25,7 +25,7 @@ def test_fcc_path_reuses_exact_v2x_objects():
     """mount None and explicit fcc both reuse _ALL_111_PLANES + _burgers_vectors
     (same object identity → no behavioural drift) and the *√2 integer label."""
     for mount in (None, CrystalMount(lattice="cubic", a=4.0495e-10, structure_type="fcc")):
-        assert _identify_structure_is_fcc(mount) is True
+        assert _structure_is_fcc(mount) is True
         planes, burgers_fn, burgers_int_fn, burgers_mag_fn = _resolve_identify_planes_and_burgers(
             mount
         )
@@ -47,7 +47,7 @@ def test_bcc_path_is_registry_driven_111():
     """BCC routes to the non-FCC branch: plane_normals/burgers_in_plane from the
     registry, integer Burgers are ⟨111⟩ aligned with the unit table (× √3)."""
     mount = CrystalMount(lattice="cubic", a=2.8665e-10, structure_type="bcc", material="Fe")
-    assert _identify_structure_is_fcc(mount) is False
+    assert _structure_is_fcc(mount) is False
     planes, burgers_fn, burgers_int_fn, burgers_mag_fn = _resolve_identify_planes_and_burgers(mount)
     assert planes is not _ALL_111_PLANES
     assert (1, 1, 0) in planes  # BCC {110} present

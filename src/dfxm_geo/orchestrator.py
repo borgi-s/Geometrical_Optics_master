@@ -416,7 +416,7 @@ def _run_simulation_inner(
         # use the wall's single cell-aware system (population.Ud[0], broadcast
         # across all dislocations by build_dislocation_population's wall branch).
         _mount = config.geometry.mount
-        _wall_is_fcc = _mount is None or _mount.resolved_structure_type == "fcc"
+        _wall_is_fcc = _structure_is_fcc(_mount)
         _wall_Ud_override = None if _wall_is_fcc else population.Ud[0]
 
         def Hg_provider(z: float) -> tuple[np.ndarray, np.ndarray]:
@@ -1177,8 +1177,8 @@ def _resolve_identify_planes_and_burgers(
     return planes, _nonfcc_burgers, _nonfcc_int, _nonfcc_mag
 
 
-def _identify_structure_is_fcc(mount: CrystalMount | None) -> bool:
-    """True when the identify run uses the FCC byte-identical path (mount None or fcc)."""
+def _structure_is_fcc(mount: CrystalMount | None) -> bool:
+    """True when the run uses the FCC byte-identical path (mount None or fcc)."""
     return mount is None or mount.resolved_structure_type == "fcc"
 
 
@@ -1333,7 +1333,7 @@ def _iter_identification_multi(
     # FCC: pass burgers_int_fn=None so _draw_dislocation keeps b_vec as the v2.x
     # float array (unit * √2), not a newly constructed int->float array — byte-identical
     # to v2.x output. Non-FCC: registry integer Burgers.
-    _draw_int_fn = None if _identify_structure_is_fcc(config.geometry.mount) else _burgers_int_fn
+    _draw_int_fn = None if _structure_is_fcc(config.geometry.mount) else _burgers_int_fn
     # Poisson ratio for the displacement field (M4 4.3a I2). Al/FCC → 0.334
     # (byte-identical to v2.x); a material/override changes the physics.
     _ny = _resolve_identify_ny(config.geometry.mount)
@@ -1611,7 +1611,7 @@ def _iter_identification_zscan(
     # FCC: pass burgers_int_fn=None to _draw_dislocation (secondary) so b_vec
     # stays the v2.x float array (unit * √2), not a newly constructed int->float array.
     # Non-FCC: registry integers.
-    _draw_int_fn = None if _identify_structure_is_fcc(config.geometry.mount) else _burgers_int_fn
+    _draw_int_fn = None if _structure_is_fcc(config.geometry.mount) else _burgers_int_fn
     # Poisson ratio for the displacement field (M4 4.3a I2). Al/FCC → 0.334
     # (byte-identical to v2.x); a material/override changes the physics.
     _ny = _resolve_identify_ny(config.geometry.mount)

@@ -223,6 +223,10 @@ def test_fcc_wall_uses_module_global_ud_not_population(tmp_path: Path, monkeypat
     ``None`` (legacy module-global FCC wall Ud). Asserting it is NOT
     ``population.Ud[0]`` (= ``slip_systems("fcc")[0]``, a DIFFERENT {111}⟨110⟩
     system) guards against a regression that would silently change FCC bytes.
+
+    Uses an oblique mount that resolves to fcc (``resolved_structure_type == "fcc"``
+    arm of ``_structure_is_fcc``). The ``mount is None`` arm is covered by
+    ``test_fcc_simplified_wall_ud_override_is_none`` below.
     """
     captured: dict[str, object] = {}
     original = fm.Find_Hg
@@ -240,4 +244,71 @@ def test_fcc_wall_uses_module_global_ud_not_population(tmp_path: Path, monkeypat
         f"FCC wall passed Ud_override={captured['Ud_override']!r}; expected None "
         "(the legacy module-global FCC wall Ud) — routing FCC through "
         "population.Ud[0] would break byte-identity"
+    )
+
+
+@pytest.mark.slow
+def test_fcc_simplified_wall_ud_override_is_none(tmp_path: Path, monkeypatch) -> None:
+    """A simplified-default (mount=None) FCC wall passes ``Ud_override=None``.
+
+    Covers the ``mount is None`` arm of ``_structure_is_fcc`` in the wall
+    discriminator. Simplified geometry produces ``config.geometry.mount is None``;
+    the discriminator must still route to ``Ud_override=None`` (legacy module-global
+    FCC wall Ud — byte-identical to v2.x), not ``population.Ud[0]``.
+
+    The capturing wrapper calls through so the full render executes; the assertion
+    is on the value captured at the last ``Find_Hg`` call (all wall Hg_provider
+    calls share the same ``_wall_Ud_override`` decided once before the render loop).
+    """
+    # Minimal simplified-geometry FCC wall: no [geometry] block → mount is None.
+    # Single frame at rocking peak (scan.phi value = 0), analytic backend,
+    # small ndis=3 to keep the render fast.
+    cfg_toml = (
+        "[reciprocal]\n"
+        "hkl = [-1, 1, -1]\n"
+        "keV = 17.0\n"
+        'backend = "analytic"\n'
+        "beamstop = false\n"
+        "\n"
+        "[crystal]\n"
+        'mode = "wall"\n'
+        "\n"
+        "[crystal.wall]\n"
+        "dis = 4.0\n"
+        "ndis = 3\n"
+        'sample_remount = "S1"\n'
+        "\n"
+        "[scan.phi]\n"
+        "value = 0.0\n"
+        "\n"
+        "[io]\n"
+        "include_perfect_crystal = false\n"
+        "write_strain_provenance = false\n"
+        "\n"
+        "[postprocess]\n"
+        "enabled = false\n"
+    )
+    cfg_path = tmp_path / "fcc_simplified_wall.toml"
+    cfg_path.write_text(cfg_toml, encoding="utf-8")
+    cfg = SimulationConfig.from_toml(cfg_path)
+    assert cfg.geometry.mount is None, (
+        "config.geometry.mount should be None for simplified-default geometry"
+    )
+
+    captured: dict[str, object] = {}
+    original = fm.Find_Hg
+
+    def _capturing(*args, Ud_override=None, **kwargs):
+        captured["Ud_override"] = Ud_override
+        return original(*args, Ud_override=Ud_override, **kwargs)
+
+    monkeypatch.setattr(fm, "Find_Hg", _capturing)
+
+    run_simulation(cfg, tmp_path / "out")
+
+    assert "Ud_override" in captured, "Find_Hg was never called (wall Hg_provider not used?)"
+    assert captured["Ud_override"] is None, (
+        f"Simplified-default FCC wall passed Ud_override={captured['Ud_override']!r}; "
+        "expected None (mount is None → _structure_is_fcc=True → legacy module-global "
+        "FCC wall Ud). Routing through population.Ud[0] would break byte-identity."
     )
