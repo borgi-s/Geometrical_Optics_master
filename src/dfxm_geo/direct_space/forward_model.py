@@ -28,6 +28,7 @@ from dfxm_geo.crystal.slip_systems import SlipSystem, burgers_magnitude, slip_sy
 from dfxm_geo.io.strain_cache import load_or_generate_Hg
 
 if TYPE_CHECKING:
+    from dfxm_geo.crystal.cell import UnitCell
     from dfxm_geo.crystal.oblique import CrystalMount
     from dfxm_geo.pipeline import CrystalConfig, ReciprocalConfig, ScanConfig
     from dfxm_geo.reciprocal_space.analytic_resolution import AnalyticResolution
@@ -1110,6 +1111,39 @@ def _ud_matrix_from_bnt(
     arr = np.asarray([b, n, t], dtype=np.float64)
     norms = np.linalg.norm(arr, axis=1, keepdims=True)
     Ud = (arr / norms).T  # columns = b_hat, n_hat, t_hat
+    if np.linalg.det(Ud) < 0:
+        Ud[:, 2] = -Ud[:, 2]
+    return Ud
+
+
+def _ud_matrix_from_bnt_cell(
+    b: tuple[int, int, int],
+    n: tuple[int, int, int],
+    cell: "UnitCell",
+    *,
+    t_int: tuple[int, int, int],
+) -> np.ndarray:
+    """Cell-aware Ud builder: [b̂ | n̂ | t̂] with the non-orthonormal frame handled.
+
+    Cubic cells delegate to ``_ud_matrix_from_bnt`` (treats Miller as Cartesian)
+    so FCC/BCC stay byte-identical — ``t_int`` is the existing integer line
+    direction (registry ``s.t`` or the centered config ``c.t``).
+
+    Non-cubic cells convert to Cartesian first: b̂ = norm(A·b) (real direction),
+    n̂ = norm(B·n) (reciprocal plane normal), t̂ = norm(n̂ × b̂) (the pure-edge
+    line; b̂ ⊥ n̂ holds because the system is glide, see the cell identity
+    AᵀB = 2πI). The supplied ``t_int`` is ignored for non-cubic — the physical
+    line direction must be computed in the Cartesian frame.
+    """
+    if cell.is_cubic:
+        return _ud_matrix_from_bnt(b, n, t_int)
+    b_hat = cell.A @ np.array(b, dtype=np.float64)
+    b_hat /= np.linalg.norm(b_hat)
+    n_hat = cell.B @ np.array(n, dtype=np.float64)
+    n_hat /= np.linalg.norm(n_hat)
+    t_hat = np.cross(n_hat, b_hat)
+    t_hat /= np.linalg.norm(t_hat)
+    Ud = np.column_stack([b_hat, n_hat, t_hat])
     if np.linalg.det(Ud) < 0:
         Ud[:, 2] = -Ud[:, 2]
     return Ud
