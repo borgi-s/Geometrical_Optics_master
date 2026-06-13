@@ -440,6 +440,11 @@ def _population_hg_kernel(
     N = M.shape[0]
     alpha = 1e-20
 
+    # Precompute bf/bf1 for each dislocation once (outside the ray loop).
+    # (b[d] / c)[d] == b[d] / c in IEEE-754: same single division, same operands.
+    bf_arr = b / (4.0 * math.pi * (1.0 - ny))  # (N,) float64, precomputed once
+    bf1_arr = b / (2.0 * math.pi)  # (N,) float64
+
     # Per-ray scratch reused across iterations (no per-ray heap allocation).
     G = np.zeros((3, 3))
     Tmp = np.zeros((3, 3))
@@ -475,8 +480,8 @@ def _population_hg_kernel(
             nyf = 2.0 * ny * (sqx + sqy)
             c = cos_rot[d]
             s = sin_rot[d]
-            bf = b[d] / (4.0 * math.pi * (1.0 - ny))
-            bf1 = b[d] / (2.0 * math.pi)
+            bf = bf_arr[d]
+            bf1 = bf1_arr[d]
             denom1 = sqz + sqy + alpha
 
             # Pure-field gradient G (= Fdd - I); only 5 entries are nonzero.
@@ -750,6 +755,11 @@ def _scene_perdis_hg_kernel(
     N = M.shape[0]
     alpha = 1e-20
 
+    # Precompute bf/bf1 for each dislocation once (outside the ray loop).
+    # (b[d] / c)[d] == b[d] / c in IEEE-754: same single division, same operands.
+    bf_arr = b / (4.0 * math.pi * (1.0 - ny))  # (N,) float64, precomputed once
+    bf1_arr = b / (2.0 * math.pi)  # (N,) float64
+
     # Per-ray scratch reused across iterations (no per-ray heap allocation).
     G = np.zeros((3, 3))
     Tmp = np.zeros((3, 3))
@@ -785,8 +795,8 @@ def _scene_perdis_hg_kernel(
             nyf = 2.0 * ny * (sqx + sqy)
             c = cos_rot[d]
             s = sin_rot[d]
-            bf = b[d] / (4.0 * math.pi * (1.0 - ny))
-            bf1 = b[d] / (2.0 * math.pi)
+            bf = bf_arr[d]
+            bf1 = bf1_arr[d]
             denom1 = sqz + sqy + alpha
 
             # Pure-field gradient G (= Fdd - I); only 5 entries are nonzero.
