@@ -24,10 +24,12 @@ value = 1.25e-4
 range = 1.25e-4
 steps = 5
 
-[noise]
-poisson_noise = true
+[detector]
+# Realistic ID03 pco_ff model (uint16 ADU). Set model = "ideal" for raw
+# float32 physics output. See docs/detector-noise-model.md.
+model = "pco_edge_4.2_id03"
+exposure_time = 1.0
 rng_seed = 1
-intensity_scale = 7.0
 
 [io]
 include_perfect_crystal = false

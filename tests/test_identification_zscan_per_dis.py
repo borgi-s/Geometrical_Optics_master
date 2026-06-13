@@ -18,9 +18,9 @@ import pytest
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     AxisScanConfig,
+    DetectorConfig,
     IdentificationConfig,
     IdentificationCrystalConfig,
-    IdentificationNoiseConfig,
     IdentificationZScanConfig,
     ReciprocalConfig,
     ScanConfig,
@@ -50,7 +50,7 @@ def _zscan_cfg(*, render_per_dislocation: bool, include_secondary: bool) -> Iden
             phi=AxisScanConfig(range=6e-4, steps=2),
             chi=AxisScanConfig(range=2e-3, steps=2),
         ),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0, intensity_scale=1.0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         zscan=IdentificationZScanConfig(
             z_offsets_um=[0.0],
             include_secondary=include_secondary,
@@ -121,7 +121,7 @@ def test_zscan_per_dislocation_files_are_noiseless(tmp_path: Path) -> None:
                 phi=AxisScanConfig(range=6e-4, steps=2),
                 chi=AxisScanConfig(range=2e-3, steps=2),
             ),
-            noise=IdentificationNoiseConfig(poisson_noise=True, rng_seed=7, intensity_scale=100.0),
+            detector=DetectorConfig(rng_seed=7),
             zscan=IdentificationZScanConfig(
                 z_offsets_um=[0.0],
                 include_secondary=True,

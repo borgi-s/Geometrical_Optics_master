@@ -55,6 +55,13 @@ keV = 19.1
 backend = "analytic"
 beamstop = false
 
+# model="ideal": this is a clean-contrast physics gate (the measured ratios
+# below are deterministic, zero-variance analytic values). The detector-noise
+# model would add an ADU offset floor + Poisson/read noise that deflate the
+# std/mean contrast ratio; keep it off so the g.b criterion is what is tested.
+[detector]
+model = "ideal"
+
 [geometry]
 mode = "oblique"
 

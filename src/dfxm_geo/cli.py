@@ -83,7 +83,7 @@ def cli_main_identify(argv: list[str] | None = None) -> int:
         "--seed",
         type=int,
         default=None,
-        help="Override the config's noise.rng_seed (integer). Useful for per-task "
+        help="Override the config's [detector] rng_seed (integer). Useful for per-task "
         "reproducibility in array jobs (e.g. --seed $LSB_JOBINDEX).",
     )
     args = parser.parse_args(argv)
@@ -94,7 +94,7 @@ def cli_main_identify(argv: list[str] | None = None) -> int:
         cfg.__post_init__()  # re-run validation
 
     if args.seed is not None:
-        cfg = replace(cfg, noise=replace(cfg.noise, rng_seed=args.seed))
+        cfg = replace(cfg, detector=replace(cfg.detector, rng_seed=args.seed))
         cfg.__post_init__()  # re-run validation
 
     result = _pipeline.run_identification(cfg, args.output)

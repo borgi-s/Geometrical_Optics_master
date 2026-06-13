@@ -310,15 +310,18 @@ extra hints.
 ## Multi-mode opt-in: `render_per_dislocation`
 
 By default, multi mode writes **one** detector file per scan dir — the
-combined detector image with both dislocations' contributions summed and
-Poisson noise applied. Setting `[multi].render_per_dislocation = true`
-opts in to a three-detector pattern instead:
+combined detector image with both dislocations' contributions summed,
+passed through the detector model (see
+[Detector model and image dtype](#detector-model-and-image-dtype) and
+`docs/detector-noise-model.md`). Setting
+`[multi].render_per_dislocation = true` opts in to a three-detector
+pattern instead:
 
 ```
 scan0001/
-  dfxm_sim_detector_0000.h5            ← both dislocations summed (canonical detector, with Poisson noise)
-  dfxm_sim_detector_dis0_0000.h5       ← first dislocation only (noiseless)
-  dfxm_sim_detector_dis1_0000.h5       ← second dislocation only (noiseless)
+  dfxm_sim_detector_0000.h5            ← both dislocations summed (canonical detector, uint16 ADU)
+  dfxm_sim_detector_dis0_0000.h5       ← first dislocation only (noiseless float32)
+  dfxm_sim_detector_dis1_0000.h5       ← second dislocation only (noiseless float32)
 ```
 
 In this mode, the master's `/N.1/instrument/` carries three `NXdetector`
@@ -329,13 +332,13 @@ same `(N_frames, H, W)` stack shape as the combined detector, and the
 master's `/N.1/measurement/` group acquires one SoftLink per detector for
 BLISS-compatible discovery.
 
-**Noise policy:** The combined detector receives the canonical Poisson
-noise stream (so it's a realistic detector image). Per-dislocation files
-are **noiseless** (`image_arr * intensity_scale` only) — they exist to
-give ML training pipelines deterministic per-instance ground truth, and
-adding independent Poisson draws to each would corrupt the signal/
-background balance vs. the combined detector. The per-dis files sum
-exactly to the noiseless underlying image of the combined detector.
+**Noise policy:** The combined detector file is processed by the
+configured detector model (uint16 ADU output; realistic gain, offset, and
+read-noise added). Per-dislocation label files (`*_dis0_*` / `*_dis1_*`)
+are **noiseless float32 normalized intensity** — they give ML training
+pipelines deterministic per-instance ground truth. The per-dis float32
+frames sum exactly to the noiseless underlying image of the combined
+detector before the detector model is applied.
 
 Total compute cost: N_samples × 3 forward() calls (3× the default).
 Real beamlines do exactly this pattern when scanning multiple detectors
@@ -498,14 +501,75 @@ the `(N_frames, H, W)` array with the external link resolved.
 `DarlingReader` handles rectilinear scans over one or two varying motors (the
 case darling targets). For >2 scanned axes use `load_h5_scan` or silx directly.
 
+## Detector model and image dtype (v3.0.0+)
+
+Starting in v3.0.0 the pipeline applies a configurable detector noise model
+after every forward pass. The model is selected by `[detector] model` in
+the TOML config.
+
+### Detector image dtype
+
+| `[detector] model`     | Detector image dtype | Description                                        |
+| ---------------------- | -------------------- | -------------------------------------------------- |
+| `"pco_edge_4.2_id03"`  | **uint16** ADU       | Realistic ID03 pco_ff noise model (default)        |
+| `"ideal"`              | **float32**          | Raw physics output; no noise, no ADU conversion    |
+
+The realistic model converts the float32 photon-count image to uint16 ADU
+using fitted parameters (gain ≈ 2.14 ADU/photon, offset ≈ 102.5 + 7.5 t
+ADU, read-noise sigma(t) = sqrt(6.3 + 11.0·t) ADU (≈ 2.5 ADU readout
+floor as t→0, ≈ 4.2 ADU at the default t = 1 s), where t is
+`exposure_time` in seconds).
+Use `model = "ideal"` to recover the pre-v3 float32 output for direct
+physics comparisons.
+
+### Detector provenance attrs on the image dataset
+
+When any model is active, the following attributes are written onto the
+`/entry_0000/dfxm_sim_detector/image` dataset in every per-scan LIMA file:
+
+| Attribute          | Type    | Example value             | Description                                  |
+| ------------------ | ------- | ------------------------- | -------------------------------------------- |
+| `detector_model`   | str     | `"pco_edge_4.2_id03"`     | Model identifier                             |
+| `exposure_time`    | float64 | `1.0`                     | Exposure time used for offset calculation (s)|
+| `counts_scale`     | float64 | `1.0e4`                   | Physics-to-photon scaling factor             |
+| `detector_gain`    | float64 | `2.14`                    | ADU per photon (fitted)                      |
+| `detector_offset`  | float64 | `110.0`                   | Baseline ADU offset at t = exposure_time (s) |
+| `detector_spec`    | str     | `"2026-06-12-detector-noise-model-design"` | Provenance slug identifying the design-spec document that defines this detector model |
+
+For `model = "ideal"`, the detector dataset stays **float32** and **no**
+`detector_*` provenance attrs are written — the post-write pass is a no-op
+for ideal mode. Downstream readers should treat the presence of
+`detector_model` as the signal that a real noise model was applied (and its
+absence as ideal/raw float32).
+
+### Per-dislocation label files are always float32
+
+Per-dislocation label files (`*_dis0_*`, `*_dis1_*`, `*_primary_*`,
+`*_secondary_*`) are always written as **float32 noiseless** ground-truth
+labels regardless of the `[detector] model` setting. They represent the
+per-instance physics contribution before noise and ADU conversion, so ML
+training pipelines can use them as clean supervision targets.
+
+### No migration tool for pre-v3 files
+
+Files produced before v3.0.0 contain float32 detector images (no noise
+model was applied). There is **no migration tool** for these files —
+following the no-backcompat rule, old files stay readable as-is. To
+regenerate with the new noise model, re-run the pipeline with the v3.0.0
+config; the `[detector] model = "ideal"` escape hatch reproduces the
+pre-v3 float32 output if an exact match is needed.
+
 ## Compression
 
 Image data is chunked `(1, H, W)` (one frame per chunk) with gzip-4 plus
-the shuffle filter. Detector images are stored as `float32` — lossless for
-the simulated intensities, and it halves file size; the forward model
-computes in `float64`. Typical compression ratio is
-~3-5× for simulated images (which are sparse — most pixels are near
-zero); read latency for one full stack on a laptop SSD is ~1-2 seconds.
+the shuffle filter. Detector images are stored as **uint16** (realistic
+model, default) or **float32** (ideal model) — see
+[Detector model and image dtype](#detector-model-and-image-dtype-v300)
+above. The forward model computes in `float64` internally; the per-scan
+files store the post-model output at the reduced precision. Typical
+compression ratio is ~3-5× for simulated images (which are sparse — most
+pixels are near zero); read latency for one full stack on a laptop SSD is
+~1-2 seconds.
 
 Chunks-of-one means frame-by-frame access is fast (no need to decompress
 unrelated frames), at the cost of slightly worse overall compression

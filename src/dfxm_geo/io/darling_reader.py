@@ -154,6 +154,11 @@ class DarlingReader(_ReaderBase):
                 "DarlingReader supports at most 2. Use load_h5_scan() or silx."
             )
 
+        # Cast at load: detector-model output is uint16 ADU, but DarlingReader's
+        # contract is a float32 stack. copy=False keeps this a no-op for the
+        # already-float32 (ideal) case.
+        data_raw = data_raw.astype(np.float32, copy=False)
+
         # (m, n, H, W) -> (H, W, m, n), matching darling's MosaScan convention.
         data = data_raw.reshape(*scan_shape, h, w)
         data = data.swapaxes(0, -2).swapaxes(1, -1)

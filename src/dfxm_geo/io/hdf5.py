@@ -186,6 +186,44 @@ def _create_detector_skeleton(
     return img
 
 
+def replace_detector_image(
+    f: h5py.File,
+    data: np.ndarray,
+    *,
+    extra_attrs: dict[str, Any] | None = None,
+) -> None:
+    """Replace the detector image dataset in-place, allowing a dtype change.
+
+    Used by the post-write detector-model pass: the ideal float32 frames are
+    recreated as uint16 ADU at the same internal path (softlinks resolve by
+    name, so NXdata/measurement links survive). Original dataset attrs are
+    preserved; ``extra_attrs`` adds [detector] provenance.
+
+    ``data`` must be a 3-D stack ``(N, H, W)``.
+
+    ``extra_attrs`` keys take precedence over original attrs on collision
+    (extra wins), so callers should use non-colliding provenance keys or
+    knowingly override.
+    """
+    old = f[DETECTOR_INTERNAL_PATH]
+    attrs = dict(old.attrs)
+    _, height, width = old.shape
+    del f[DETECTOR_INTERNAL_PATH]
+    new_ds = f.create_dataset(
+        DETECTOR_INTERNAL_PATH,
+        data=data,
+        dtype=data.dtype,
+        chunks=(1, height, width),
+        compression="gzip",
+        compression_opts=4,
+        shuffle=True,
+    )
+    for k, v in attrs.items():
+        new_ds.attrs[k] = v
+    for k, v in (extra_attrs or {}).items():
+        new_ds.attrs[k] = v
+
+
 def _write_detector_file(path: Path, image_stack: np.ndarray) -> None:
     """Write a pre-computed (N, H, W) image stack as a LIMA-style detector file.
 

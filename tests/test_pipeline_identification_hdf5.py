@@ -10,10 +10,10 @@ import pytest
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
     AxisScanConfig,
+    DetectorConfig,
     IdentificationConfig,
     IdentificationCrystalConfig,
     IdentificationMonteCarloConfig,
-    IdentificationNoiseConfig,
     IOConfig,
     ReciprocalConfig,
     ScanConfig,
@@ -41,7 +41,7 @@ def _minimal_single_cfg() -> IdentificationConfig:
             exclude_invisibility=False,
         ),
         scan=ScanConfig(phi=AxisScanConfig(value=1e-4)),
-        noise=IdentificationNoiseConfig(poisson_noise=False),
+        detector=DetectorConfig(model="ideal"),
         io=IOConfig(),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
     )
@@ -94,7 +94,7 @@ def test_multi_mode_writes_master_plus_scan_dirs(tmp_path: Path) -> None:
         mode="multi",
         crystal=IdentificationCrystalConfig(slip_plane_normal=(1, 1, 1)),
         scan=ScanConfig(phi=AxisScanConfig(value=1e-4)),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         multi=IdentificationMonteCarloConfig(n_samples=3, pos_std_um=5.0),
         reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
@@ -142,7 +142,7 @@ def test_zscan_mode_writes_master_plus_scan_dirs(tmp_path: Path) -> None:
             phi=AxisScanConfig(range=0.034377, steps=3),
             chi=AxisScanConfig(range=0.114, steps=3),
         ),
-        noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+        detector=DetectorConfig(model="ideal", rng_seed=0),
         io=IOConfig(),
         zscan=IdentificationZScanConfig(
             z_offsets_um=[-1.0, 0.0, 1.0],

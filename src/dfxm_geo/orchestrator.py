@@ -25,6 +25,7 @@ import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.analysis.mosaicity import compute_com_maps
 from dfxm_geo.config import (
     _CANONICAL_AXES,
+    DetectorConfig,
     GeometryConfig,
     IdentificationConfig,
     ReciprocalConfig,
@@ -71,6 +72,7 @@ from dfxm_geo.crystal.slip_systems import (
 from dfxm_geo.crystal.slip_systems import (
     plane_normals as _plane_normals,
 )
+from dfxm_geo.detector import SensorMap, resolve_model
 from dfxm_geo.io.hdf5 import (
     DETECTOR_FILE_FMT,
     DETECTOR_INTERNAL_PATH,
@@ -78,6 +80,7 @@ from dfxm_geo.io.hdf5 import (
     ScanSpec,
     geometry_provenance_attrs,
     load_h5_scan,
+    replace_detector_image,
     write_identification_h5,
     write_multi_reflection_master,
     write_simulation_h5,
@@ -515,6 +518,20 @@ def _run_simulation_inner(
         ctx=ctx,
         reflection_attrs=_reflection_attrs,
     )
+    # Apply the realistic detector model (uint16 ADU + noise) post-write to the
+    # combined per-scan detector files, exactly as the identification runners do.
+    # Forward writes scan0001 (dislocations) and, when include_perfect_crystal,
+    # scan0002 (perfect crystal) — both get the model. Multi-reflection runs
+    # (reflection is not None) get independent per-reflection noise via the
+    # 1-based reflection_index, matching the identify convention; single-reflection
+    # passes 0 (the spawn-child noise stream).
+    n_det_scans = 2 if config.io.include_perfect_crystal else 1
+    _apply_detector_model(
+        config.detector,
+        h5_path.parent,
+        n_det_scans,
+        reflection_index=reflection_index if reflection is not None else 0,
+    )
     return {
         "h5_path": h5_path,
         "Hg": Hg_base,
@@ -889,9 +906,9 @@ def _iter_identification_single(
     labels align by scan index (spec §8, M3 plan 2).
     """
     crystal_cfg = config.crystal
-    # Noiseless frames are emitted here; intensity scaling and optional
-    # Poisson noise are applied to the combined detector file post-write
-    # by `_maybe_apply_poisson_noise` (called from the dispatcher).
+    # Noiseless frames are emitted here; intensity scaling and the realistic
+    # detector model are applied to the combined detector file post-write
+    # by `_apply_detector_model` (called from the dispatcher).
 
     # Structure-aware plane sweep + Burgers tables (resolved ONCE). FCC
     # (mount None or resolved fcc) → v2.x bit-identical path; BCC/custom →
@@ -1061,7 +1078,7 @@ def _run_identification_single(
         ctx=ctx,
         reflection_attrs=reflection_attrs,
     )
-    _maybe_apply_poisson_noise(config, output_dir, n_scans, reflection_index=reflection_index)
+    _apply_detector_model(config.detector, output_dir, n_scans, reflection_index=reflection_index)
     return {
         "n_images": n_scans,
         "output_dir": output_dir,
@@ -1298,11 +1315,11 @@ def _iter_identification_multi(
     (`dfxm_sim_detector`) holds the combined-scene frames. `=True`: two
     additional detectors (`dfxm_sim_detector_dis0`, `_dis1`) hold each
     dislocation rendered in isolation; these per-dislocation files are
-    NOISELESS by construction (they bypass the post-write Poisson pass).
+    NOISELESS by construction (they bypass the post-write detector-model pass).
 
-    All frames yielded here are NOISELESS; intensity scaling and
-    optional Poisson noise are applied to the combined detector file
-    post-write by `_maybe_apply_poisson_noise`.
+    All frames yielded here are NOISELESS; intensity scaling and the
+    realistic detector model are applied to the combined detector file
+    post-write by `_apply_detector_model`.
 
     When `[scan.z]` is configured, the iterator loops z outermost: each
     unique z value produces its own set of n_samples ScanSpecs, with
@@ -1317,7 +1334,7 @@ def _iter_identification_multi(
     """
     assert config.multi is not None  # validated in __post_init__
     mc = config.multi
-    noise_cfg = config.noise
+    detector_cfg = config.detector
     q_hkl = np.asarray(ctx.q_hkl, dtype=float)
 
     # Structure-aware plane sweep + Burgers tables (resolved ONCE). FCC → the
@@ -1348,9 +1365,10 @@ def _iter_identification_multi(
     theta_0_ = ctx.geometry.theta_0
 
     # Split master rng → child streams. [0] = param draws (consumed here);
-    # [1] = Poisson noise (consumed by _maybe_apply_poisson_noise, which
-    # re-spawns with the same seed to get the same noise stream).
-    param_rng, _noise_rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)
+    # [1] = detector noise (consumed by _apply_detector_model, which
+    # re-spawns with the same seed to get the same noise stream); [2] is the
+    # sensor map (also re-spawned there).
+    param_rng, _noise_rng = np.random.default_rng(detector_cfg.rng_seed).spawn(2)
 
     scan_mode = config.scan.derived_mode_name()
     scanned_axes = list(config.scan.scanned_axes())
@@ -1486,9 +1504,9 @@ def _run_identification_multi(
 ) -> dict[str, Any]:
     """Dispatcher: feed `_iter_identification_multi` into write_identification_h5.
 
-    After the master + per-scan detector files are written, applies a
-    post-write Poisson noise pass (and intensity scaling) to combined
-    detector files only — per-dislocation files stay noiseless.
+    After the master + per-scan detector files are written, applies the
+    post-write detector-model pass (intensity scaling + realistic noise) to
+    combined detector files only — per-dislocation files stay noiseless.
 
     reflection_index, reflection_attrs: forwarded from _dispatch_identification;
     defaults preserve the single-reflection byte-identical path.
@@ -1507,7 +1525,7 @@ def _run_identification_multi(
         ctx=ctx,
         reflection_attrs=reflection_attrs,
     )
-    _maybe_apply_poisson_noise(config, output_dir, n_scans, reflection_index=reflection_index)
+    _apply_detector_model(config.detector, output_dir, n_scans, reflection_index=reflection_index)
     return {
         "n_samples": config.multi.n_samples,
         "output_dir": output_dir,
@@ -1515,43 +1533,45 @@ def _run_identification_multi(
     }
 
 
-def _maybe_apply_poisson_noise(
-    config: IdentificationConfig, output_dir: Path, n_scans: int, *, reflection_index: int = 0
+def _apply_detector_model(
+    detector_cfg: DetectorConfig,
+    output_dir: Path,
+    n_scans: int,
+    *,
+    reflection_index: int = 0,
 ) -> None:
-    """Apply intensity scaling (always) and Poisson noise (if enabled) to
-    combined-detector files post-write.
+    """Convert combined-detector files to realistic uint16 ADU post-write.
 
-    Only modifies `dfxm_sim_detector_0000.h5` files; per-dislocation
-    detector files (`*_dis0_0000.h5`, `*_dis1_0000.h5`) are intentionally
-    left untouched so they remain deterministic ground-truth labels.
+    Only `dfxm_sim_detector_0000.h5` files are touched; per-dislocation
+    files (`*_primary_*`, `*_secondary_*`, `*_dis0_*`, `*_dis1_*`) stay
+    noiseless float32 ground-truth labels (naming-based bypass, unchanged
+    from the Poisson era — only the combined name resolves through
+    `DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")`).
 
-    Determinism contract (RNG policy, M3 plan 2):
-    - reflection_index == 0 (single-reflection / default): noise stream is
-      the second spawn of `np.random.default_rng(rng_seed).spawn(2)` — the
-      same split used by `_iter_identification_*` for parameter draws.
-      Bit-compatible with all v2.5.x releases.
-    - reflection_index > 0 (multi-reflection loop): noise seeded from
-      `np.random.default_rng([rng_seed, reflection_index])` so every
-      reflection gets an INDEPENDENT noise draw (multi-reflection data must
-      have independent detector noise even though all reflections share the
-      same crystal/dislocation realization).
+    RNG layout (spec 3.1/3.4): root = default_rng(rng_seed);
+    spawn child [1] = noise stream (single-reflection; per-reflection runs
+    use default_rng([rng_seed, reflection_index]) for independent noise),
+    spawn child [2] = sensor map (SAME for every scan and reflection — the
+    synthetic camera is one physical sensor). Children [0]/[1] keep the
+    pre-v3 layout so parameter draws are bit-identical for equal seeds.
     """
-    noise_cfg = config.noise
-    scale = noise_cfg.intensity_scale
-    if scale == 1.0 and not noise_cfg.poisson_noise:
-        return  # nothing to do; skip the per-scan file open
-    if noise_cfg.poisson_noise:
-        if reflection_index > 0:
-            # Multi-reflection: per-reflection independent noise stream
-            # (same crystal / dislocation params, independent detector noise).
-            rng: np.random.Generator | None = np.random.default_rng(
-                [noise_cfg.rng_seed, reflection_index]
-            )
-        else:
-            # Single-reflection: bit-compatible stream (v2.5.x behaviour).
-            rng = np.random.default_rng(noise_cfg.rng_seed).spawn(2)[1]
+    model = resolve_model(detector_cfg.model)
+    if model is None:
+        return
+    if reflection_index > 0:
+        noise_rng = np.random.default_rng([detector_cfg.rng_seed, reflection_index])
     else:
-        rng = None
+        noise_rng = np.random.default_rng(detector_cfg.rng_seed).spawn(2)[1]
+    sensor_rng = np.random.default_rng(detector_cfg.rng_seed).spawn(3)[2]
+    sensor: SensorMap | None = None
+    extra_attrs = {
+        "detector_model": model.name,
+        "exposure_time": detector_cfg.exposure_time,
+        "counts_scale": detector_cfg.counts_scale,
+        "detector_gain": model.gain,
+        "detector_offset": model.offset(detector_cfg.exposure_time),
+        "detector_spec": "2026-06-12-detector-noise-model-design",
+    }
     for k in range(1, n_scans + 1):
         det_file = (
             output_dir / SCAN_DIR_FMT.format(k) / DETECTOR_FILE_FMT.format(name="dfxm_sim_detector")
@@ -1559,11 +1579,12 @@ def _maybe_apply_poisson_noise(
         if not det_file.is_file():
             continue
         with h5py.File(det_file, "a") as f:
-            img = f[DETECTOR_INTERNAL_PATH]
-            arr = img[...] * scale
-            if rng is not None:
-                arr = rng.poisson(np.clip(arr, a_min=0.0, a_max=None)).astype(float)
-            img[...] = arr
+            ideal = f[DETECTOR_INTERNAL_PATH][...].astype(np.float64)
+            if sensor is None or sensor.fpn_offset.shape != ideal.shape[1:]:
+                sensor = model.make_sensor_map(ideal.shape[1:], sensor_rng)
+            adu = ideal * detector_cfg.counts_scale * detector_cfg.exposure_time
+            noisy = model.apply(adu, detector_cfg.exposure_time, noise_rng, sensor)
+            replace_detector_image(f, noisy, extra_attrs=extra_attrs)
 
 
 def _iter_identification_zscan(
@@ -1580,8 +1601,8 @@ def _iter_identification_zscan(
     shared across the rocking grid). The (phi, chi) rocking grid comes
     from ``config.scan.phi`` / ``config.scan.chi`` (shared B+C schema).
 
-    All frames are noiseless; intensity scaling / Poisson noise are
-    applied post-write by ``_maybe_apply_poisson_noise``.
+    All frames are noiseless; intensity scaling / the realistic detector
+    model are applied post-write by ``_apply_detector_model``.
 
     ctx is the run's ForwardContext, built by run_identification via
     build_forward_context(run_theta(config), ...) and passed in. Geometry globals
@@ -1596,7 +1617,7 @@ def _iter_identification_zscan(
     assert config.zscan is not None  # validated in __post_init__
     zscan = config.zscan
     crystal_cfg = config.crystal
-    noise_cfg = config.noise
+    detector_cfg = config.detector
 
     # Structure-aware plane sweep + Burgers tables (resolved ONCE). FCC → v2.x
     # objects (byte-identical); BCC/custom → registry-driven. See
@@ -1623,9 +1644,9 @@ def _iter_identification_zscan(
     )
 
     # Secondary stream uses SeedSequence child [secondary_rng_offset]. Default
-    # is 0; _maybe_apply_poisson_noise uses child [1] from a spawn(2), so the
-    # two streams are independent SeedSequence siblings.
-    spawned = np.random.default_rng(noise_cfg.rng_seed).spawn(zscan.secondary_rng_offset + 1)
+    # is 0; _apply_detector_model uses child [1] from a spawn(2) for noise (and
+    # child [2] for the sensor map), so the streams are independent siblings.
+    spawned = np.random.default_rng(detector_cfg.rng_seed).spawn(zscan.secondary_rng_offset + 1)
     secondary_rng = spawned[zscan.secondary_rng_offset]
 
     q_hkl = np.asarray(ctx.q_hkl, dtype=float)
@@ -1737,8 +1758,8 @@ def _iter_identification_zscan(
                         )
                         if zscan.render_per_dislocation:
                             # Primary + secondary each rendered alone (noiseless
-                            # ground-truth instance labels). Bypass the Poisson
-                            # pass, which only touches `dfxm_sim_detector`.
+                            # ground-truth instance labels). Bypass the detector-
+                            # model pass, which only touches `dfxm_sim_detector`.
                             assert solo_hgs is not None
                             prim_args, _ = _scan_frames_args(
                                 solo_hgs[0], frames_at_z, config.scan, ctx
@@ -1810,8 +1831,9 @@ def _run_identification_zscan(
     """Dispatcher: feed ``_iter_identification_zscan`` into write_identification_h5.
 
     After the master + per-scan detector files are written, applies the
-    post-write Poisson / intensity-scale pass to the combined detector only;
-    any per-dislocation files (`render_per_dislocation=True`) stay noiseless.
+    post-write detector-model pass (intensity scaling + realistic noise) to
+    the combined detector only; any per-dislocation files
+    (`render_per_dislocation=True`) stay noiseless.
 
     reflection_index, visibility_qs, reflection_attrs: forwarded from
     _dispatch_identification; defaults preserve the single-reflection path.
@@ -1829,7 +1851,7 @@ def _run_identification_zscan(
         ctx=ctx,
         reflection_attrs=reflection_attrs,
     )
-    _maybe_apply_poisson_noise(config, output_dir, n_scans, reflection_index=reflection_index)
+    _apply_detector_model(config.detector, output_dir, n_scans, reflection_index=reflection_index)
     return {
         "n_configurations": n_scans,
         "output_dir": output_dir,
@@ -1924,9 +1946,9 @@ def run_identification(
     list[dict]}``.
 
     RNG policy (M3 plan 2): the dislocation parameter stream uses
-    ``config.noise.rng_seed`` UNCHANGED for every reflection — all
+    ``config.detector.rng_seed`` UNCHANGED for every reflection — all
     reflections image the SAME crystal realization (the scientific
-    requirement for multi-reflection data). Poisson noise is seeded
+    requirement for multi-reflection data). Detector noise is seeded
     independently per reflection via ``[rng_seed, reflection_index]``
     so detector noise is not correlated across reflections.
     """

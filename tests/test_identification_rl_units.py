@@ -33,10 +33,10 @@ import numpy as np
 
 import dfxm_geo.direct_space.forward_model as fm
 from dfxm_geo.pipeline import (
+    DetectorConfig,
     IdentificationConfig,
     IdentificationCrystalConfig,
     IdentificationMonteCarloConfig,
-    IdentificationNoiseConfig,
     IdentificationZScanConfig,
     ReciprocalConfig,
     ScanConfig,
@@ -122,7 +122,7 @@ class TestIdentificationRlUnits:
                 n_samples=1, pos_std_um=0.0, render_per_dislocation=False
             ),
             scan=ScanConfig(),
-            noise=IdentificationNoiseConfig(poisson_noise=False, rng_seed=0),
+            detector=DetectorConfig(model="ideal", rng_seed=0),
             reciprocal=ReciprocalConfig(hkl=(-1, 1, -1), keV=17.0),
         )
         spec = next(iter(_iter_identification_multi(cfg, _ctx_for(cfg))))

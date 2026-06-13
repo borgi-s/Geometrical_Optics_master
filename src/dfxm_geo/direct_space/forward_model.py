@@ -885,6 +885,15 @@ def forward_from_static(
     # Initialize forward model image with zeros
     im_1 = np.zeros([(instr.NN2 // instr.Nsub), instr.NN1 // instr.Nsub])
 
+    # Sampling-invariance normalization (spec 2026-06-12 detector model,
+    # §3.2(a)): each pixel sums Nsub^2 * NN3 voxel contributions and prob_z
+    # is an unnormalized Gaussian whose column sum scales with NN3. Dividing
+    # by Nsub^2 * (one column's prob_z sum) makes the absolute level
+    # invariant under sampling-density changes (z-quadrature exact). The
+    # grid is mgrid[xl, yl, zl] flattened C-order, so prob_z[:NN3] is one
+    # column's z-weights.
+    _sampling_norm = float(instr.Nsub) ** 2 * float(geom.prob_z[: instr.NN3].sum())
+
     # Goniometer offset vector components (added to base_qc to form qc).
     ang0 = phi - TwoDeltaTheta / 2
     ang1 = float(chi)
@@ -907,6 +916,7 @@ def forward_from_static(
         prob = (res.analytic_eval(qi) * geom.prob_z).astype(np.float32)
         contribution = np.bincount(instr.flat_indices, weights=prob, minlength=im_1.size)
         im_1 += contribution.reshape(im_1.shape)
+        im_1 /= _sampling_norm
         if qi_return:
             return im_1, qi.reshape(3, instr.NN1, instr.NN2, instr.NN3)
         return im_1
@@ -946,6 +956,7 @@ def forward_from_static(
         res.npoints2 * res.npoints3,
         res.npoints3,
     )
+    im_1 /= _sampling_norm
     if qi_return:
         assert qi is not None  # built above because qi_return is True
         return im_1, qi.reshape(3, instr.NN1, instr.NN2, instr.NN3)

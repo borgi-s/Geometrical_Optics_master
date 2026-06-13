@@ -25,7 +25,8 @@ Buckets reported:
   and is no longer the dominant cost (was 61-70 % pre-W2).
 * ``frames_s``       — ``precompute_forward_static`` + every
   ``_compute_frame`` call (sum over worker threads)
-* ``poisson_s``      — ``_maybe_apply_poisson_noise`` (post-write pass)
+* ``poisson_s``      — ``_apply_detector_model`` (post-write detector pass;
+  bucket key retained as ``poisson_s`` for JSON back-compat)
 * ``io_other_s``     — ``write_identification_h5`` wall minus the hg/frames
   work nested inside it ≈ h5py writes + layout overhead
 * ``unattributed_s`` — run total minus everything above (dispatch, config
@@ -103,7 +104,9 @@ _STAGE_SITES = {
     "precompute": (fm, "precompute_forward_static"),
     "frames": (hdf5, "_compute_frame"),
     "writer": (orchestrator, "write_identification_h5"),
-    "poisson": (orchestrator, "_maybe_apply_poisson_noise"),
+    # Bucket key kept as "poisson" (→ poisson_s) for stage-timing JSON/test
+    # back-compat; the wrapped pass is now the realistic detector model.
+    "poisson": (orchestrator, "_apply_detector_model"),
 }
 
 
