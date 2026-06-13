@@ -104,6 +104,33 @@ def absence_checker(space_group: str) -> Callable[[tuple[int, int, int]], bool]:
     return _absent
 
 
+def space_group_structure_family(space_group: str) -> str:
+    """Map a space group to a slip-system structure family.
+
+    F-cubic  -> 'fcc'
+    I-cubic  -> 'bcc'
+    P-hexagonal / P-trigonal -> 'hcp'
+
+    Raises ``ValueError`` for families not yet supported by the slip-system
+    registry (fcc/bcc/hcp only).
+    """
+    gemmi = _import_gemmi()
+    sg = gemmi.SpaceGroup(space_group)
+    system = space_group_crystal_system(space_group)
+    centring = sg.centring_type()  # returns 'F', 'I', 'P', 'R', 'C', …
+    if system == "cubic" and centring == "F":
+        return "fcc"
+    if system == "cubic" and centring == "I":
+        return "bcc"
+    if system in ("hexagonal", "trigonal") and centring == "P":
+        return "hcp"
+    raise ValueError(
+        f"space group {space_group!r} ({centring}-{system}) has no supported "
+        f"slip-system family yet (fcc/bcc/hcp only); set [crystal] structure_type "
+        f"or [[crystal.slip_system]] explicitly."
+    )
+
+
 def reject_extinct(space_group: str | None, hkl: tuple[int, int, int], context: str) -> None:
     """Shared hard-error guard for explicitly-configured reflections.
 

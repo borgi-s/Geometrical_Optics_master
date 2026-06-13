@@ -153,6 +153,44 @@ def burgers_in_plane(
     return np.vstack([unit, -unit])
 
 
+def derive_structure_type(
+    *,
+    structure_type: str | None,
+    space_group: str | None,
+    lattice: str | None,
+) -> str:
+    """Resolve the structure family for slip-system lookup.
+
+    Resolution order:
+    1. If *space_group* is given, derive the family from the centering (via
+       ``crystal.cif.space_group_structure_family``).  If *structure_type*
+       is also given and contradicts the derived family, raise ``ValueError``.
+    2. If only *structure_type* is given, return it (validated loosely).
+    3. Otherwise default to ``'fcc'`` (back-compat with pre-4.3 configs).
+
+    The *lattice* parameter is accepted for API stability (used in 4.3b for
+    non-cubic cells) but is currently unused.
+    """
+    if space_group is not None:
+        from dfxm_geo.crystal.cif import space_group_structure_family
+
+        derived = space_group_structure_family(space_group)
+        if structure_type is not None and structure_type != derived:
+            raise ValueError(
+                f"structure_type={structure_type!r} contradicts space group "
+                f"{space_group!r} (implies {derived!r})."
+            )
+        return derived
+    if structure_type is not None:
+        if structure_type not in _REGISTRY and structure_type != "hcp":
+            raise ValueError(
+                f"unknown structure_type {structure_type!r}; expected one of "
+                f"{sorted(_REGISTRY)} (hcp lands in 4.3b)."
+            )
+        return structure_type
+    return "fcc"
+
+
 def burgers_magnitude(structure: str, family: str, cell: UnitCell) -> float:
     """Burgers magnitude |b| in micrometres for a structure's family, from the cell.
 

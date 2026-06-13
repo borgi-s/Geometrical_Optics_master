@@ -125,3 +125,33 @@ def test_burgers_magnitude_unknown_family_raises():
     al = UnitCell.cubic(4.0495e-10)
     with pytest.raises(ValueError, match="not defined"):
         burgers_magnitude("fcc", "{110}<111>", al)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: derive_structure_type
+# ---------------------------------------------------------------------------
+
+from dfxm_geo.crystal.slip_systems import derive_structure_type  # noqa: E402
+
+
+def test_derive_explicit_wins():
+    assert derive_structure_type(structure_type="bcc", space_group=None, lattice="cubic") == "bcc"
+
+
+def test_derive_default_is_fcc():
+    assert derive_structure_type(structure_type=None, space_group=None, lattice="cubic") == "fcc"
+
+
+@pytest.mark.parametrize(
+    "sg, expected",
+    [("Fm-3m", "fcc"), ("Im-3m", "bcc"), ("P6_3/mmc", "hcp")],
+)
+def test_derive_from_space_group(sg, expected):
+    pytest.importorskip("gemmi")
+    assert derive_structure_type(structure_type=None, space_group=sg, lattice=None) == expected
+
+
+def test_derive_contradiction_raises():
+    pytest.importorskip("gemmi")
+    with pytest.raises(ValueError, match="contradicts"):
+        derive_structure_type(structure_type="bcc", space_group="Fm-3m", lattice="cubic")
