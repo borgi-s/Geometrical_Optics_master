@@ -159,8 +159,19 @@ def burgers_magnitude(structure: str, family: str, cell: UnitCell) -> float:
     |b| = fraction * |A . b_int|, A in metres -> result in um. Cubic FCC
     1/2<110> -> a/sqrt(2); BCC 1/2<111> -> a*sqrt(3)/2.
     """
-    fam = next(f for f in _REGISTRY[structure] if f.name == family)
-    b_int = np.array(fam.burgers_family, dtype=float)
+    if structure not in _REGISTRY:
+        raise ValueError(f"unknown structure {structure!r}; expected one of {sorted(_REGISTRY)}")
+    matches = [f for f in _REGISTRY[structure] if f.name == family]
+    if not matches:
+        raise ValueError(
+            f"slip family {family!r} not defined for {structure!r}; "
+            f"available: {sorted(f.name for f in _REGISTRY[structure])}"
+        )
+    if family not in _BURGERS_FRACTION:
+        raise ValueError(
+            f"no lattice-translation fraction registered for family {family!r}; "
+            f"add it to _BURGERS_FRACTION."
+        )
+    b_int = np.array(matches[0].burgers_family, dtype=float)
     cart = cell.A @ b_int  # metres
-    frac = _BURGERS_FRACTION.get(family, 1.0)
-    return float(frac * np.linalg.norm(cart) * 1e6)
+    return float(_BURGERS_FRACTION[family] * np.linalg.norm(cart) * 1e6)

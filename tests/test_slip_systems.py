@@ -107,7 +107,7 @@ def test_burgers_in_plane_bcc_unit_and_count():
     # {110} plane hosts 2 distinct <111> Burgers -> 4 with negatives
     # (the bcc default registry includes {112}<111> too, but those have
     # different planes; for the (1,1,0) plane only <111> in-plane count).
-    assert got110.shape[0] >= 4
+    assert got110.shape[0] == 4
 
 
 def test_burgers_magnitude_fcc_al_exact():
@@ -119,3 +119,9 @@ def test_burgers_magnitude_bcc_fe():
     fe = UnitCell.cubic(2.8665e-10)
     expected_um = 2.8665e-10 * np.sqrt(3) / 2 * 1e6
     assert burgers_magnitude("bcc", "{110}<111>", fe) == pytest.approx(expected_um, rel=1e-9)
+
+
+def test_burgers_magnitude_unknown_family_raises():
+    al = UnitCell.cubic(4.0495e-10)
+    with pytest.raises(ValueError, match="not defined"):
+        burgers_magnitude("fcc", "{110}<111>", al)
