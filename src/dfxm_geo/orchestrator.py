@@ -1128,6 +1128,7 @@ def _draw_dislocation(
     # _build_dislocation_sample_entry, and g·b which normalizes either way).
     # FCC default: unit ⟨110⟩ * √2 (bit-identical). Non-FCC: registry integers.
     if burgers_int_fn is None:
+        # FCC path: caller passes None to keep the v2.x float b_vec.
         b_vec = b_table[b_idx] * np.sqrt(2)
     else:
         b_vec = burgers_int_fn(plane, b_idx).astype(float)
@@ -1195,9 +1196,9 @@ def _iter_identification_multi(
     _planes, _burgers_fn, _burgers_int_fn = _resolve_identify_planes_and_burgers(
         config.geometry.mount
     )
-    # FCC: pass burgers_int_fn=None so _draw_dislocation keeps the EXACT v2.x
-    # `b_vec = unit * √2` (the rounded-int variant would perturb the g·b float in
-    # the last ULP, breaking byte-identity). Non-FCC: registry integer Burgers.
+    # FCC: pass burgers_int_fn=None so _draw_dislocation keeps b_vec as the v2.x
+    # float array (unit * √2), not a newly constructed int->float array — byte-identical
+    # to v2.x output. Non-FCC: registry integer Burgers.
     _draw_int_fn = None if _identify_structure_is_fcc(config.geometry.mount) else _burgers_int_fn
 
     # Source geometry + instrument from ctx (oblique-safe).
@@ -1458,8 +1459,9 @@ def _iter_identification_zscan(
     all_planes, _burgers_fn, _burgers_int_fn = _resolve_identify_planes_and_burgers(
         config.geometry.mount
     )
-    # FCC: pass burgers_int_fn=None to _draw_dislocation (secondary) so its b_vec
-    # keeps the EXACT v2.x `unit * √2` — byte-identity. Non-FCC: registry integers.
+    # FCC: pass burgers_int_fn=None to _draw_dislocation (secondary) so b_vec
+    # stays the v2.x float array (unit * √2), not a newly constructed int->float array.
+    # Non-FCC: registry integers.
     _draw_int_fn = None if _identify_structure_is_fcc(config.geometry.mount) else _burgers_int_fn
     planes = all_planes if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
     angles_deg = np.arange(
