@@ -7,8 +7,8 @@ and the configuration TOML keys that control them.
 ## Structure resolution
 
 Before the simulation runs, the code resolves a single *structure type* string
-(`"fcc"` or `"bcc"`) that determines which slip-system table to load. The
-precedence is:
+(`"fcc"`, `"bcc"`, or `"hcp"`) that determines which slip-system table to load.
+The precedence is:
 
 | Source | When present | Overrides |
 |---|---|---|

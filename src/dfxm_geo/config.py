@@ -600,12 +600,23 @@ def _build_geometry_config(
         # M4 Stage 4.3b delivered HCP (hexagonal) forward/identify; other
         # non-cubic systems (orthorhombic/monoclinic/triclinic) still have no
         # slip-system registry, so they remain unsupported in the pipeline.
+        # Common case: a hexagonal cell with no structure_type/space_group
+        # resolves to the back-compat default 'fcc' and lands here — point the
+        # user straight at the HCP knob rather than the generic message.
+        hcp_hint = ""
+        if mount.lattice in ("hexagonal", "trigonal"):
+            hcp_hint = (
+                f" This is a {mount.lattice} cell with no structure_type or "
+                "space_group, so it resolved to the default 'fcc'; set "
+                '[crystal] structure_type = "hcp" (or a P-hexagonal space_group / '
+                "CIF) to use HCP slip systems."
+            )
         raise ValueError(
             f"non-cubic cells with resolved structure "
             f"{mount.resolved_structure_type!r} are not yet supported in the "
-            "forward/identify pipeline (only cubic FCC/BCC and hexagonal HCP "
-            "are wired; M4 Stage 4.3b added HCP). Stage 4.1 supports arbitrary "
-            "non-cubic lattices in dfxm-bootstrap and dfxm-find-reflections."
+            f"forward/identify pipeline (only cubic FCC/BCC and hexagonal HCP "
+            f"are wired; M4 Stage 4.3b added HCP).{hcp_hint} Stage 4.1 supports "
+            "arbitrary non-cubic lattices in dfxm-bootstrap and dfxm-find-reflections."
         )
 
     if multi_reflection:
