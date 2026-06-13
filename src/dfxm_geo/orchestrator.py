@@ -82,6 +82,7 @@ from dfxm_geo.io.hdf5 import (
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
 
 if TYPE_CHECKING:
+    from dfxm_geo.crystal.cell import UnitCell
     from dfxm_geo.crystal.oblique import CrystalMount
 
 # #16: module-level cache so repeated _lookup_and_load_kernel calls for the same
@@ -248,16 +249,25 @@ def _resolution_for_run(
     return _load_resolution(recip_run, geom_run, skip_hkl_check=True)
 
 
+def _mount_cell(config: SimulationConfig | IdentificationConfig) -> UnitCell | None:
+    """The resolved UnitCell when an oblique mount is present, else None (cubic q_hkl)."""
+    mount = config.geometry.mount
+    return mount.cell if mount is not None else None
+
+
 def _context_for_run(
     res: fm.ResolutionContext,
     run: _ReflectionRun,
+    config: SimulationConfig | IdentificationConfig,
 ) -> fm.ForwardContext:
     """Build a ``ForwardContext`` for a single ``ReflectionRun``.
 
     Wraps ``fm.build_forward_context`` with the run's Bragg angle, hkl, and
     omega so the orchestrator loop has a single call-site.
     """
-    return fm.build_forward_context(run.theta, res, run.hkl, omega=run.omega)
+    return fm.build_forward_context(
+        run.theta, res, run.hkl, omega=run.omega, cell=_mount_cell(config)
+    )
 
 
 def run_simulation(config: SimulationConfig, output_dir: Path) -> dict[str, Any]:
@@ -374,12 +384,13 @@ def _run_simulation_inner(
     # run's hkl and omega into the ForwardContext; single-reflection uses the
     # config-level hkl with omega=0 (the original code path).
     if reflection is not None:
-        ctx = _context_for_run(res, reflection)
+        ctx = _context_for_run(res, reflection, config)
     else:
         ctx = fm.build_forward_context(
             run_theta(config),
             res,
             config.reciprocal.hkl,
+            cell=_mount_cell(config),
         )
 
     # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
@@ -573,6 +584,7 @@ def run_postprocess(
         run_theta(config),
         res,
         config.reciprocal.hkl,
+        cell=_mount_cell(config),
     )
 
     phi_steps = config.scan.phi.steps or 1
@@ -1800,7 +1812,7 @@ def run_identification(
         all_vis_qs = [_q_unit(r.hkl) for r in runs]
         for idx, run in enumerate(runs, start=1):
             res_run = _resolution_for_run(config.reciprocal, config.geometry, run)
-            ctx_run = _context_for_run(res_run, run)
+            ctx_run = _context_for_run(res_run, run, config)
             sub_dir = output_dir / f"reflection_{idx:03d}"
             results.append(
                 _dispatch_identification(
@@ -1832,5 +1844,6 @@ def run_identification(
         run_theta(config),
         res,
         config.reciprocal.hkl,
+        cell=_mount_cell(config),
     )
     return _dispatch_identification(config, output_dir, ctx)

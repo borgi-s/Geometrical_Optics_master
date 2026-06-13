@@ -256,8 +256,9 @@ def Find_Hg(
             f"{sorted(SAMPLE_REMOUNT_OPTIONS)}"
         )
 
-    Q_norm = np.sqrt(h * h + k * k + l * l)  # We have assumed B_0 = I
-    q_hkl = np.asarray([h, k, l]) / Q_norm
+    # q_hkl comes from the context (cell-aware via _q_hkl_unit in build_forward_context).
+    # h, k, l are kept as parameters to drive the cache filename + _vars.txt sidecar.
+    q_hkl = ctx.q_hkl
 
     # The cache key must include every parameter that affects the rl ray grid
     # shape: dis/psize/zl_rms determine the physics, Npixels/Nsub determine the
@@ -671,12 +672,27 @@ def build_geometry_context(
     )
 
 
+def _q_hkl_unit(hkl: "tuple[int, int, int]", cell: "UnitCell | None") -> np.ndarray:
+    """Unit reciprocal-lattice direction for ``hkl`` in the crystal Cartesian frame.
+
+    Cubic / no cell: ``q/|q|`` (B ∝ I → byte-identical to the v2.x form).
+    Non-cubic: ``norm(B·[h,k,l])`` — the metric-correct direction (HCP, M4 4.3b).
+    """
+    q = np.asarray(hkl, dtype=float)
+    if cell is None or cell.is_cubic:
+        return q / np.sqrt(float(q @ q))
+    g = cell.B @ q
+    return g / np.linalg.norm(g)
+
+
 def build_forward_context(
     theta_run: float,
     resolution: "ResolutionContext",
     hkl: "tuple[int, int, int]",
     instrument: "InstrumentContext | None" = None,
     omega: float = 0.0,
+    *,
+    cell: "UnitCell | None" = None,
 ) -> "ForwardContext":
     """Compose a context for a run from explicit theta, resolution, and hkl.
 
@@ -690,11 +706,14 @@ def build_forward_context(
 
     ``omega`` is the B' goniometer angle in radians (default 0.0); forwarded
     to ``GeometryContext`` and consumed ONLY by ``precompute_forward_static``.
+
+    ``cell`` is the resolved ``UnitCell`` from the crystal mount, used to
+    compute q_hkl via ``norm(B·hkl)`` for non-cubic crystals (HCP, M4 4.3b).
+    When ``None`` or cubic, falls back to the byte-identical ``q/|q|`` form.
     """
     instr = instrument if instrument is not None else build_instrument_context()
     geom = build_geometry_context(theta_run, instr, omega=omega)
-    q = np.asarray(hkl, dtype=float)
-    q_hkl_ = q / np.sqrt(float(q @ q))  # B_0=I form; bit-identical to Find_Hg (~line 385)
+    q_hkl_ = _q_hkl_unit(hkl, cell)  # B_0=I (cubic/None) or B·G (non-cubic, M4 4.3b)
     return ForwardContext(instrument=instr, geometry=geom, resolution=resolution, q_hkl=q_hkl_)
 
 
@@ -1392,8 +1411,8 @@ def _find_hg_from_population_numpy(
     Us_ = ctx.instrument.Us
     Theta_ = ctx.geometry.Theta
 
-    Q_norm = np.sqrt(h * h + k * k + l * l)
-    q_hkl = np.asarray([h, k, l]) / Q_norm
+    # q_hkl comes from the context (cell-aware via _q_hkl_unit in build_forward_context).
+    q_hkl = ctx.q_hkl
 
     # Build MixedDislocSpec per dislocation. Fd_find_multi_dislocs_mixed
     # supports per-crystal Ud + lab-frame offset. Honour each dislocation's
@@ -1473,8 +1492,8 @@ def Find_Hg_from_population(
 
     # rl precedence: explicit kwarg > ctx.geometry.rl.
     rl_eff = rl if rl is not None else ctx.geometry.rl
-    Q_norm = np.sqrt(h * h + k * k + l * l)
-    q_hkl = np.asarray([h, k, l]) / Q_norm
+    # q_hkl comes from the context (cell-aware via _q_hkl_unit in build_forward_context).
+    q_hkl = ctx.q_hkl
 
     n = len(population.positions_um)
     # Collapse the per-dislocation transform to M_d = Ud_d.T @ Us.T @ S.T @ Theta.
