@@ -6,6 +6,7 @@ import pytest
 from dfxm_geo.crystal.cell import UnitCell
 from dfxm_geo.crystal.slip_systems import (
     burgers_in_plane,
+    burgers_in_plane_int,
     burgers_magnitude,
     plane_normals,
     slip_systems,
@@ -142,6 +143,36 @@ def test_burgers_in_plane_bcc_unit_and_count():
     # (the bcc default registry includes {112}<111> too, but those have
     # different planes; for the (1,1,0) plane only <111> in-plane count).
     assert got110.shape[0] == 4
+
+
+def test_burgers_in_plane_int_aligns_with_unit_and_is_integer_fcc():
+    """FCC {111}: burgers_in_plane_int row i is the INTEGER ⟨110⟩ direction whose
+    unit-normalization equals burgers_in_plane row i (index alignment), i.e.
+    int_i == round(unit_i * √2). Integer entries are exact (no rounding error)."""
+    for plane in ((1, 1, 1), (1, -1, 1), (1, 1, -1), (-1, 1, 1)):
+        unit = burgers_in_plane("fcc", plane)
+        ints = burgers_in_plane_int("fcc", plane)
+        assert ints.dtype.kind in ("i", "u")
+        assert ints.shape == unit.shape
+        # FCC ⟨110⟩: |b_int| == √2, so int == unit * √2 row-for-row.
+        assert np.allclose(ints, unit * np.sqrt(2))
+        # Components are exactly integral (±1/0 for ⟨110⟩).
+        assert np.array_equal(ints, np.rint(ints).astype(int))
+
+
+def test_burgers_in_plane_int_bcc_is_111_family():
+    """BCC {110}: integer Burgers are ⟨111⟩ (NOT ⟨110⟩×√2). Rows align with
+    burgers_in_plane (each unit row × √3 == the integer ⟨111⟩ row)."""
+    plane = (1, 1, 0)
+    unit = burgers_in_plane("bcc", plane)
+    ints = burgers_in_plane_int("bcc", plane)
+    assert ints.dtype.kind in ("i", "u")
+    assert ints.shape == unit.shape
+    # Every integer row is a ⟨111⟩ variant: all |components| == 1.
+    for v in ints:
+        assert sorted(abs(int(c)) for c in v) == [1, 1, 1]
+    # |⟨111⟩| == √3, so int == unit * √3 row-for-row (alignment with unit table).
+    assert np.allclose(ints, unit * np.sqrt(3))
 
 
 def test_burgers_magnitude_fcc_al_exact():

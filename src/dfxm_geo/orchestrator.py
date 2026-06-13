@@ -16,7 +16,7 @@ import sys
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import h5py
 import numpy as np
@@ -58,6 +58,15 @@ from dfxm_geo.crystal.reflections import (
     ReflectionRun as _ReflectionRun,
 )
 from dfxm_geo.crystal.remount import SAMPLE_REMOUNT_OPTIONS
+from dfxm_geo.crystal.slip_systems import (
+    burgers_in_plane as _burgers_in_plane,
+)
+from dfxm_geo.crystal.slip_systems import (
+    burgers_in_plane_int as _burgers_in_plane_int,
+)
+from dfxm_geo.crystal.slip_systems import (
+    plane_normals as _plane_normals,
+)
 from dfxm_geo.io.hdf5 import (
     DETECTOR_FILE_FMT,
     DETECTOR_INTERNAL_PATH,
@@ -70,6 +79,9 @@ from dfxm_geo.io.hdf5 import (
     write_simulation_h5,
 )
 from dfxm_geo.viz.mosaicity import plot_mosaicity_maps, plot_qi_cross_section
+
+if TYPE_CHECKING:
+    from dfxm_geo.crystal.oblique import CrystalMount
 
 # #16: module-level cache so repeated _lookup_and_load_kernel calls for the same
 # kernel path return the already-loaded ResolutionContext without hitting disk
@@ -839,9 +851,13 @@ def _iter_identification_single(
     # Poisson noise are applied to the combined detector file post-write
     # by `_maybe_apply_poisson_noise` (called from the dispatcher).
 
-    planes = (
-        _ALL_111_PLANES if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
+    # Structure-aware plane sweep + Burgers tables (resolved ONCE). FCC
+    # (mount None or resolved fcc) → v2.x bit-identical path; BCC/custom →
+    # registry-driven. See _resolve_identify_planes_and_burgers.
+    all_planes, _burgers_fn, _burgers_int_fn = _resolve_identify_planes_and_burgers(
+        config.geometry.mount
     )
+    planes = all_planes if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
 
     angles_deg = np.arange(
         crystal_cfg.angle_start_deg,
@@ -876,7 +892,7 @@ def _iter_identification_single(
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for plane in planes:
-            b_table = _burgers_vectors(plane)
+            b_table = _burgers_fn(plane)
             b_indices = (
                 crystal_cfg.b_vector_indices
                 if crystal_cfg.b_vector_indices is not None
@@ -913,10 +929,13 @@ def _iter_identification_single(
 
                     args_list, positioners = _scan_frames_args(Hg, frames_at_z, config.scan, ctx)
 
+                    # FCC: *√2 integer reconstruction (⟨110⟩, bit-identical to v2.x).
+                    # Non-FCC: integer Burgers from the registry (e.g. BCC ⟨111⟩).
+                    _b_int = _burgers_int_fn(plane, b_idx)
                     burgers_int = (
-                        int(round(b_table[b_idx, 0] * np.sqrt(2))),
-                        int(round(b_table[b_idx, 1] * np.sqrt(2))),
-                        int(round(b_table[b_idx, 2] * np.sqrt(2))),
+                        int(_b_int[0]),
+                        int(_b_int[1]),
+                        int(_b_int[2]),
                     )
                     # g·b labels (Task 5, M3 plan 2): per-scan visibility scalars
                     # computed from this run's q_hkl and the scan's Burgers vector.
@@ -993,6 +1012,14 @@ def _run_identification_single(
     }
 
 
+# FCC-specific identify plane sweep order. This is a SEPARATE hand-authored
+# ordering, DISTINCT from the forward slip-system order (slip_systems("fcc") /
+# the deleted forward_model._SLIP_SYSTEM_111). The FCC identify path is proven
+# bit-identical against this exact order/signs (Task 5), so it is NOT routed
+# through plane_normals("fcc") (which derives its order from the slip-system
+# grouping and would not reproduce these signs). Retained verbatim for FCC
+# byte-identity; non-FCC structures use plane_normals(structure) instead — see
+# _resolve_identify_planes_and_burgers.
 _ALL_111_PLANES: list[tuple[int, int, int]] = [
     (1, 1, 1),
     (1, -1, 1),
@@ -1001,11 +1028,93 @@ _ALL_111_PLANES: list[tuple[int, int, int]] = [
 ]
 
 
-def _draw_dislocation(rng: np.random.Generator, pos_std_um: float) -> dict[str, Any]:
-    """Draw a single random dislocation (slip plane, Burgers idx, angle, position)."""
-    plane_idx = int(rng.integers(0, len(_ALL_111_PLANES)))
-    plane = _ALL_111_PLANES[plane_idx]
-    b_table = _burgers_vectors(plane)
+def _resolve_identify_planes_and_burgers(
+    mount: CrystalMount | None,
+) -> tuple[
+    list[tuple[int, int, int]],
+    Callable[[tuple[int, int, int]], np.ndarray],
+    Callable[[tuple[int, int, int], int], np.ndarray],
+]:
+    """Resolve (plane sweep, unit-Burgers fn, integer-Burgers-label fn) for identify.
+
+    Shared by the three identify iterators so the FCC-vs-non-FCC branch lives in
+    one place. Resolves the mount's structure/families ONCE (not per-plane).
+
+    Returns three things, indexed consistently by ``b_idx``:
+    - ``planes``: the slip-plane sweep list.
+    - ``burgers_fn(plane) -> (m, 3)``: per-vector UNIT-normalized Burgers (the
+      drop-in for the old ``_burgers_vectors(plane)`` — drives Ud + g·b).
+    - ``burgers_int_fn(plane, b_idx) -> (3,)``: the INTEGER (u, v, w) Burgers
+      label for HDF5, aligned with ``burgers_fn`` row ``b_idx``.
+
+    FCC (``mount is None`` OR ``resolved_structure_type == "fcc"``): EXACT v2.x
+    behaviour — ``_ALL_111_PLANES`` + ``_burgers_vectors`` + the ``*√2`` integer
+    reconstruction. This path is byte-identical and must stay so.
+
+    Non-FCC (BCC, custom): ``plane_normals(structure, families)`` +
+    ``burgers_in_plane(structure, plane, families)`` + the registry integer
+    Burgers (``burgers_in_plane_int``) — NOT ``*√2`` (that ⟨110⟩ assumption is
+    wrong for BCC ⟨111⟩).
+    """
+    structure = mount.resolved_structure_type if mount is not None else "fcc"
+    if structure == "fcc":
+        # FCC path: literally the v2.x logic. _ALL_111_PLANES order + signs and
+        # the *√2 integer reconstruction are load-bearing for bit-identity.
+        def _fcc_int(plane: tuple[int, int, int], b_idx: int) -> np.ndarray:
+            b_table = _burgers_vectors(plane)
+            return np.asarray(
+                [
+                    int(round(b_table[b_idx, 0] * np.sqrt(2))),
+                    int(round(b_table[b_idx, 1] * np.sqrt(2))),
+                    int(round(b_table[b_idx, 2] * np.sqrt(2))),
+                ],
+                dtype=np.int32,
+            )
+
+        return _ALL_111_PLANES, _burgers_vectors, _fcc_int
+
+    # Non-FCC: registry-driven plane sweep + integer Burgers from the registry.
+    fams = list(mount.slip_families) if (mount is not None and mount.slip_families) else None
+    planes = _plane_normals(structure, families=fams)
+
+    def _nonfcc_burgers(plane: tuple[int, int, int]) -> np.ndarray:
+        return _burgers_in_plane(structure, plane, families=fams)
+
+    def _nonfcc_int(plane: tuple[int, int, int], b_idx: int) -> np.ndarray:
+        return _burgers_in_plane_int(structure, plane, families=fams)[b_idx].astype(np.int32)
+
+    return planes, _nonfcc_burgers, _nonfcc_int
+
+
+def _identify_structure_is_fcc(mount: CrystalMount | None) -> bool:
+    """True when the identify run uses the FCC byte-identical path (mount None or fcc)."""
+    return mount is None or mount.resolved_structure_type == "fcc"
+
+
+def _draw_dislocation(
+    rng: np.random.Generator,
+    pos_std_um: float,
+    *,
+    planes: list[tuple[int, int, int]] | None = None,
+    burgers_fn: Callable[[tuple[int, int, int]], np.ndarray] | None = None,
+    burgers_int_fn: Callable[[tuple[int, int, int], int], np.ndarray] | None = None,
+) -> dict[str, Any]:
+    """Draw a single random dislocation (slip plane, Burgers idx, angle, position).
+
+    Structure-aware via the optional (planes, burgers_fn, burgers_int_fn) triple
+    from ``_resolve_identify_planes_and_burgers``. ALL THREE default to the FCC
+    objects (``_ALL_111_PLANES`` / ``_burgers_vectors`` / the ``*√2`` reconstruction)
+    so a bare ``_draw_dislocation(rng, pos)`` call is byte-identical to v2.x — the
+    RNG draw ``rng.integers(0, len(planes))`` stays ``len(_ALL_111_PLANES)`` == 4
+    and indexes into the same plane list, preserving the multi/z-scan stream.
+    """
+    if planes is None:
+        planes = _ALL_111_PLANES
+    if burgers_fn is None:
+        burgers_fn = _burgers_vectors
+    plane_idx = int(rng.integers(0, len(planes)))
+    plane = planes[plane_idx]
+    b_table = burgers_fn(plane)
     b_idx = int(rng.integers(0, len(b_table)))
     alpha = float(rng.uniform(0.0, 360.0))
     pos = (float(rng.normal(0.0, pos_std_um)), float(rng.normal(0.0, pos_std_um)), 0.0)
@@ -1015,10 +1124,18 @@ def _draw_dislocation(rng: np.random.Generator, pos_std_um: float) -> dict[str, 
     rotated = _rotated_t_vectors(n_unit, b_table[b_idx : b_idx + 1], np.array([alpha]))
     Ud = _ud_matrices(n_unit, rotated)[0, 0]
 
+    # b_vec is the INTEGER Burgers (drives the HDF5 label via round() in
+    # _build_dislocation_sample_entry, and g·b which normalizes either way).
+    # FCC default: unit ⟨110⟩ * √2 (bit-identical). Non-FCC: registry integers.
+    if burgers_int_fn is None:
+        b_vec = b_table[b_idx] * np.sqrt(2)
+    else:
+        b_vec = burgers_int_fn(plane, b_idx).astype(float)
+
     return {
         "plane": plane,
         "b_idx": b_idx,
-        "b_vec": b_table[b_idx] * np.sqrt(2),
+        "b_vec": b_vec,
         "alpha_deg": alpha,
         "pos_um": pos,
         "Ud": Ud,
@@ -1072,6 +1189,17 @@ def _iter_identification_multi(
     noise_cfg = config.noise
     q_hkl = np.asarray(ctx.q_hkl, dtype=float)
 
+    # Structure-aware plane sweep + Burgers tables (resolved ONCE). FCC → the
+    # v2.x objects, so the per-draw RNG stream stays byte-identical. See
+    # _resolve_identify_planes_and_burgers / _draw_dislocation.
+    _planes, _burgers_fn, _burgers_int_fn = _resolve_identify_planes_and_burgers(
+        config.geometry.mount
+    )
+    # FCC: pass burgers_int_fn=None so _draw_dislocation keeps the EXACT v2.x
+    # `b_vec = unit * √2` (the rounded-int variant would perturb the g·b float in
+    # the last ULP, breaking byte-identity). Non-FCC: registry integer Burgers.
+    _draw_int_fn = None if _identify_structure_is_fcc(config.geometry.mount) else _burgers_int_fn
+
     # Source geometry + instrument from ctx (oblique-safe).
     Us_ = ctx.instrument.Us
     Theta_ = ctx.geometry.Theta
@@ -1105,8 +1233,20 @@ def _iter_identification_multi(
         frames_at_z = _build_scan_frames_at_z(config.scan, z_float)
 
         for _ in range(mc.n_samples):
-            d1 = _draw_dislocation(param_rng, mc.pos_std_um)
-            d2 = _draw_dislocation(param_rng, mc.pos_std_um)
+            d1 = _draw_dislocation(
+                param_rng,
+                mc.pos_std_um,
+                planes=_planes,
+                burgers_fn=_burgers_fn,
+                burgers_int_fn=_draw_int_fn,
+            )
+            d2 = _draw_dislocation(
+                param_rng,
+                mc.pos_std_um,
+                planes=_planes,
+                burgers_fn=_burgers_fn,
+                burgers_int_fn=_draw_int_fn,
+            )
 
             # Combined-scene Hg (sum of both dislocations)
             specs = [
@@ -1312,9 +1452,16 @@ def _iter_identification_zscan(
     crystal_cfg = config.crystal
     noise_cfg = config.noise
 
-    planes = (
-        _ALL_111_PLANES if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
+    # Structure-aware plane sweep + Burgers tables (resolved ONCE). FCC → v2.x
+    # objects (byte-identical); BCC/custom → registry-driven. See
+    # _resolve_identify_planes_and_burgers.
+    all_planes, _burgers_fn, _burgers_int_fn = _resolve_identify_planes_and_burgers(
+        config.geometry.mount
     )
+    # FCC: pass burgers_int_fn=None to _draw_dislocation (secondary) so its b_vec
+    # keeps the EXACT v2.x `unit * √2` — byte-identity. Non-FCC: registry integers.
+    _draw_int_fn = None if _identify_structure_is_fcc(config.geometry.mount) else _burgers_int_fn
+    planes = all_planes if crystal_cfg.sweep_all_slip_planes else [crystal_cfg.slip_plane_normal]
     angles_deg = np.arange(
         crystal_cfg.angle_start_deg,
         crystal_cfg.angle_stop_deg + crystal_cfg.angle_step_deg * 0.5,
@@ -1347,7 +1494,7 @@ def _iter_identification_zscan(
         # xl_range keeps the oblique x-lateral extent correct (S3 #16).
         rl_shifted = fm.Z_shift(z_off, xl_range=xl_range_) * 1e6
         for plane in planes:
-            b_table = _burgers_vectors(plane)
+            b_table = _burgers_fn(plane)
             b_indices = (
                 crystal_cfg.b_vector_indices
                 if crystal_cfg.b_vector_indices is not None
@@ -1376,14 +1523,9 @@ def _iter_identification_zscan(
                         position_lab_um=(0.0, 0.0, 0.0),
                     )
 
-                    burgers_int = np.asarray(
-                        [
-                            int(round(b_table[b_idx, 0] * np.sqrt(2))),
-                            int(round(b_table[b_idx, 1] * np.sqrt(2))),
-                            int(round(b_table[b_idx, 2] * np.sqrt(2))),
-                        ],
-                        dtype=np.int32,
-                    )
+                    # FCC: *√2 ⟨110⟩ reconstruction (bit-identical to v2.x).
+                    # Non-FCC: integer Burgers from the registry (e.g. BCC ⟨111⟩).
+                    burgers_int = np.asarray(_burgers_int_fn(plane, b_idx), dtype=np.int32)
                     sample: dict[str, Any] = {
                         "name": "simulated, dislocation identification (z-scan)",
                         "z_offset_um": float(z_off),
@@ -1399,7 +1541,13 @@ def _iter_identification_zscan(
                         str, list[tuple[int, np.ndarray, float, float, float, fm.ForwardContext]]
                     ] = {}
                     if zscan.include_secondary:
-                        sec = _draw_dislocation(secondary_rng, pos_std_um=0.0)
+                        sec = _draw_dislocation(
+                            secondary_rng,
+                            pos_std_um=0.0,
+                            planes=all_planes,
+                            burgers_fn=_burgers_fn,
+                            burgers_int_fn=_draw_int_fn,
+                        )
                         secondary_spec = MixedDislocSpec(
                             Ud_mix=sec["Ud"],
                             rotation_deg=sec["alpha_deg"],

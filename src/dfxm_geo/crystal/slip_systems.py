@@ -234,6 +234,33 @@ def burgers_in_plane(
     return np.vstack([unit, -unit])
 
 
+def burgers_in_plane_int(
+    structure: str, plane: tuple[int, int, int], *, families: list[str] | None = None
+) -> np.ndarray:
+    """Integer (u, v, w) Burgers directions lying in `plane` (+ negatives), shape (m, 3).
+
+    The INTEGER-Miller companion of ``burgers_in_plane``: row i here is the
+    integer direction whose unit-normalization is row i of ``burgers_in_plane``
+    (same plane, same families) — i.e. the index ``b_idx`` aligns across the two.
+    Use this for the integer Burgers LABEL written to HDF5 in the non-FCC identify
+    branch (the FCC path keeps its own ``*√2`` reconstruction for bit-identity;
+    that assumption is ⟨110⟩-specific and wrong for BCC ⟨111⟩, so general
+    structures read the integer Burgers from the registry instead).
+    """
+    cn = _canon(plane)
+    pos: list[tuple[int, int, int]] = []
+    for s in slip_systems(structure, families=families):
+        if _canon(s.n) == cn and _canon(s.b) not in pos:
+            pos.append(_canon(s.b))
+    if not pos:
+        raise ValueError(
+            f"{plane} is not a slip plane for structure {structure!r}; "
+            f"planes: {plane_normals(structure, families=families)}"
+        )
+    basis = np.array(pos, dtype=int)
+    return np.vstack([basis, -basis])
+
+
 def derive_structure_type(
     *,
     structure_type: str | None,
