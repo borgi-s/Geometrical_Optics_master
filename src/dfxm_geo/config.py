@@ -577,12 +577,16 @@ def _build_geometry_config(
     if not multi_reflection:
         reject_extinct(mount.space_group, reciprocal.hkl, "[reciprocal] hkl")
 
-    if not mount.cell.is_cubic:
+    if not mount.cell.is_cubic and mount.resolved_structure_type != "hcp":
+        # M4 Stage 4.3b delivered HCP (hexagonal) forward/identify; other
+        # non-cubic systems (orthorhombic/monoclinic/triclinic) still have no
+        # slip-system registry, so they remain unsupported in the pipeline.
         raise ValueError(
-            "non-cubic cells are not yet supported in the forward/identify "
-            "pipeline (lands in M4 Stage 4.3 with general slip systems). "
-            "Stage 4.1 supports non-cubic lattices in dfxm-bootstrap and "
-            "dfxm-find-reflections."
+            f"non-cubic cells with resolved structure "
+            f"{mount.resolved_structure_type!r} are not yet supported in the "
+            "forward/identify pipeline (only cubic FCC/BCC and hexagonal HCP "
+            "are wired; M4 Stage 4.3b added HCP). Stage 4.1 supports arbitrary "
+            "non-cubic lattices in dfxm-bootstrap and dfxm-find-reflections."
         )
 
     if multi_reflection:
