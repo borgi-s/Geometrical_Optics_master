@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from dfxm_geo.crystal.cell import UnitCell
 
 
 @dataclass(frozen=True)
@@ -115,3 +118,49 @@ def plane_normals(
         if c not in seen:
             seen.append(c)
     return seen
+
+
+# Lattice-translation fraction per family: the slip Burgers is this fraction
+# of the integer direction's lattice vector (1/2 for the centered-lattice
+# translations <110>_fcc, <111>_bcc).
+_BURGERS_FRACTION: dict[str, float] = {
+    "{111}<110>": 0.5,
+    "{110}<111>": 0.5,
+    "{112}<111>": 0.5,
+}
+
+
+def burgers_in_plane(
+    structure: str, plane: tuple[int, int, int], *, families: list[str] | None = None
+) -> np.ndarray:
+    """Unit Burgers directions lying in `plane` (+ negatives), shape (m, 3).
+
+    Replaces crystal.burgers._BASIS_TABLE/burgers_vectors. Per-vector
+    Euclidean normalization (bit-identical to the old /sqrt(2) for FCC <110>).
+    """
+    cn = _canon(plane)
+    pos: list[tuple[int, int, int]] = []
+    for s in slip_systems(structure, families=families):
+        if _canon(s.n) == cn and _canon(s.b) not in pos:
+            pos.append(_canon(s.b))
+    if not pos:
+        raise ValueError(
+            f"{plane} is not a slip plane for structure {structure!r}; "
+            f"planes: {plane_normals(structure, families=families)}"
+        )
+    basis = np.array(pos, dtype=float)
+    unit = basis / np.linalg.norm(basis, axis=1, keepdims=True)
+    return np.vstack([unit, -unit])
+
+
+def burgers_magnitude(structure: str, family: str, cell: UnitCell) -> float:
+    """Burgers magnitude |b| in micrometres for a structure's family, from the cell.
+
+    |b| = fraction * |A . b_int|, A in metres -> result in um. Cubic FCC
+    1/2<110> -> a/sqrt(2); BCC 1/2<111> -> a*sqrt(3)/2.
+    """
+    fam = next(f for f in _REGISTRY[structure] if f.name == family)
+    b_int = np.array(fam.burgers_family, dtype=float)
+    cart = cell.A @ b_int  # metres
+    frac = _BURGERS_FRACTION.get(family, 1.0)
+    return float(frac * np.linalg.norm(cart) * 1e6)

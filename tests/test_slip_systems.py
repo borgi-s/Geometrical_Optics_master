@@ -3,7 +3,10 @@
 import numpy as np
 import pytest
 
+from dfxm_geo.crystal.cell import UnitCell
 from dfxm_geo.crystal.slip_systems import (
+    burgers_in_plane,
+    burgers_magnitude,
     plane_normals,
     slip_systems,
 )
@@ -64,3 +67,55 @@ def test_unknown_structure_raises():
 def test_unknown_family_raises():
     with pytest.raises(ValueError, match="not defined"):
         slip_systems("fcc", families=["{110}<111>"])
+
+
+# ---------------------------------------------------------------------------
+# Task 2: burgers_in_plane + burgers_magnitude
+# ---------------------------------------------------------------------------
+
+
+def test_burgers_in_plane_fcc_matches_legacy_basis():
+    """For each {111} plane, the 6 unit Burgers match the pre-branch
+    _BASIS_TABLE / sqrt(2) (FCC bit-identity)."""
+    from dfxm_geo.crystal.burgers import _BASIS_TABLE  # still present pre-Task 5
+
+    def _slug_to_plane(slug):
+        # "1-11" -> (1,-1,1); "-111" -> (-1,1,1)
+        out, i = [], 0
+        while i < len(slug):
+            if slug[i] == "-":
+                out.append(-int(slug[i + 1]))
+                i += 2
+            else:
+                out.append(int(slug[i]))
+                i += 1
+        return tuple(out)
+
+    for slug, basis in _BASIS_TABLE.items():
+        plane = _slug_to_plane(slug)
+        got = burgers_in_plane("fcc", plane)
+        want = np.vstack([basis, -basis]) / np.sqrt(2)
+        gs = sorted(tuple(np.round(v, 9)) for v in got)
+        ws = sorted(tuple(np.round(v, 9)) for v in want)
+        assert np.allclose(gs, ws)
+
+
+def test_burgers_in_plane_bcc_unit_and_count():
+    got110 = burgers_in_plane("bcc", (1, 1, 0))
+    for v in got110:
+        assert np.isclose(np.linalg.norm(v), 1.0)
+    # {110} plane hosts 2 distinct <111> Burgers -> 4 with negatives
+    # (the bcc default registry includes {112}<111> too, but those have
+    # different planes; for the (1,1,0) plane only <111> in-plane count).
+    assert got110.shape[0] >= 4
+
+
+def test_burgers_magnitude_fcc_al_exact():
+    al = UnitCell.cubic(4.0495e-10)
+    assert burgers_magnitude("fcc", "{111}<110>", al) == pytest.approx(2.862e-4, rel=1e-3)
+
+
+def test_burgers_magnitude_bcc_fe():
+    fe = UnitCell.cubic(2.8665e-10)
+    expected_um = 2.8665e-10 * np.sqrt(3) / 2 * 1e6
+    assert burgers_magnitude("bcc", "{110}<111>", fe) == pytest.approx(expected_um, rel=1e-9)
