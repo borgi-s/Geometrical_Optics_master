@@ -98,17 +98,18 @@ Public functions (cubic-only in 4.3a; signatures accept the cell for 4.3b):
 
 **Enumeration validation (test-locked counts):** fcc {111}⟨110⟩ → 12 systems,
 4 planes; bcc {110}⟨111⟩ → 12 systems, 6 planes; bcc {112}⟨111⟩ → 12 systems,
-12 planes. The enumerator output for fcc {111}⟨110⟩ must equal the current
+12 planes; **bcc default ({110}+{112}) → 24 systems, 18 planes**. The
+enumerator output for fcc {111}⟨110⟩ must equal the current
 `_SLIP_SYSTEM_111` as a **set** of (b̂, n̂, t̂) up to the sign convention
 (asserted in tests; this is how we prove the registry reproduces the hand
 table before deleting it).
 
-**4.3a families decision:** ship bcc `{110}<111>` as the default
-(12 systems, the dominant BCC slip mode). `{112}<111>` included in the
-registry but **opt-in** via `families = ["{110}<111>", "{112}<111>"]` —
-keeps the default population physically clean and the system count
-deterministic. `{123}<111>` deferred (rarely needed; user-defined escape
-hatch covers it).
+**4.3a families decision (Sina 2026-06-13):** ship bcc `{110}<111>` **and**
+`{112}<111>` together as the default — **24 systems total** (12 + 12) over
+18 distinct planes (6 {110} + 12 {112}). `{123}<111>` deferred (rarely
+needed; the user-defined `[[crystal.slip_system]]` escape hatch covers it).
+`slip_families` can still narrow the default to a single family for studies
+that want only one mode.
 
 ### 3.2 Burgers magnitude from the cell
 
@@ -130,7 +131,12 @@ hatch covers it).
 
 - `crystal/elasticity.py` (new): `_POISSON_TABLE: dict[str, float]` keyed by
   element symbol (Al 0.334, Fe 0.29, W 0.28, Cu 0.34, Ni 0.31, Ti 0.32,
-  Mg 0.29, …; sourced + cited in the module docstring), and
+  Mg 0.29, …). **Each value carries an inline source citation** in the module
+  docstring (Sina 2026-06-13) — a polycrystalline/handbook reference per
+  entry (e.g. *Kaye & Laby Tables of Physical & Chemical Constants*;
+  *Simmons & Wang, Single Crystal Elastic Constants, 1971* for the
+  single-crystal-averaged values). No bare numbers. Provenance also records
+  which source/material produced the ν used in a run.
   `poisson_ratio(*, override, material) -> float`: explicit `override` wins;
   else table lookup by `material`; else 0.334 (Al) — the value used is emitted
   in provenance.
@@ -184,9 +190,10 @@ slip_families = ["{110}<111>"]  # optional; default per structure
 
 ### 3.6 Tests (4.3a)
 
-- Registry unit: variant counts (fcc 12/4, bcc 12/6, bcc+112 24/…), `b·n==0`
-  for every system, `t == n×b`, dedup correctness, and **fcc registry ≡
-  `_SLIP_SYSTEM_111`** (set equality up to sign) before its deletion.
+- Registry unit: variant counts (fcc 12/4, bcc {110} 12/6, bcc {112} 12/12,
+  bcc default {110}+{112} 24/18), `b·n==0` for every system, `t == n×b`,
+  dedup correctness, and **fcc registry ≡ `_SLIP_SYSTEM_111`** (set equality
+  up to sign) before its deletion.
 - `burgers_magnitude`: Al FCC → 2.862e-4 µm (exact); Fe BCC a=2.8665 Å →
   a√3/2 in µm (closed-form check).
 - `poisson_ratio`: override > material > default precedence.
