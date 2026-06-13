@@ -392,7 +392,7 @@ def derive_structure_type(
     derive from it and raise if an explicit structure_type contradicts it.
     With no space group, explicit structure_type wins over the default; with
     neither, 'fcc' (back-compat). The `lattice` param is accepted for API
-    stability (4.3b will use it for HCP cell conversion) and is currently unused.
+    stability and is currently unused (cell conversion goes through cell.A/B elsewhere).
     """
     if space_group is not None:
         from dfxm_geo.crystal.cif import space_group_structure_family

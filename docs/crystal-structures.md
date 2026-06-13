@@ -462,3 +462,12 @@ explicitly.
 "simplified"`) does not carry a crystal mount and cannot serve HCP
 simulations — attempting to use it with `structure_type = "hcp"` raises an
 error. Use `mode = "oblique"` with an orthonormal mount (see the HCP section).
+
+**Non-cubic `wall` mode is not yet frame-correct (pre-existing, affects BCC and HCP).** The
+forward `wall` population builder (`Find_Hg`) uses a hardcoded FCC-frame orientation matrix
+`Ud` derived from the legacy `_SLIP_SYSTEM_111` table. The per-population, cell-aware `Ud`
+builder (`_ud_matrix_from_bnt_cell`) is only consumed by the `centered` and
+`random_dislocations` forward paths via `Find_Hg_from_population`. As a result, a BCC or HCP
+forward run with `mode = "wall"` will render with the wrong dislocation frame — silently, with
+no error. **Use `centered` or `random_dislocations` for non-cubic crystals.** Extending the
+wall path to be cell-aware is a known follow-up for a future release.
