@@ -41,16 +41,13 @@ from dfxm_geo.crystal.burgers import (
     burgers_vectors as _burgers_vectors,
 )
 from dfxm_geo.crystal.burgers import (
+    fixed_ud_matrices as _fixed_ud_matrices,
+)
+from dfxm_geo.crystal.burgers import (
     gb_cos as _gb_cos,
 )
 from dfxm_geo.crystal.burgers import (
     gb_visible as _gb_visible,
-)
-from dfxm_geo.crystal.burgers import (
-    rotated_t_vectors as _rotated_t_vectors,
-)
-from dfxm_geo.crystal.burgers import (
-    ud_matrices as _ud_matrices,
 )
 from dfxm_geo.crystal.dislocations import (
     MixedDislocSpec,
@@ -973,8 +970,13 @@ def _iter_identification_single(
                 assert _cell is not None
                 n_arr_unnorm = _cell.B @ np.asarray(plane, dtype=float)
             n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
-            rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
-            Ud_all = _ud_matrices(n_arr, rotated)
+            # FIXED (character-independent) frame [b̂ | n̂ | t̂₀] per Burgers vector;
+            # rotation_deg ALONE encodes edge↔screw character (see
+            # crystal.burgers.fixed_ud_matrices). The previous per-angle
+            # ud_matrices(rotated_t_vectors(...)) rotated column 0 to n×t, so the
+            # screw axis became n×b ⊥ b and a g·b=0 screw could light up
+            # (tests/test_screw_gb_extinction.py). Pure-edge (α=0) is unchanged.
+            Ud_fixed = _fixed_ud_matrices(n_arr, b_subset)  # (n_burgers, 3, 3)
 
             # Resolve visibility query vectors: None -> [ctx.q_hkl] (single-reflection);
             # provided list -> all-reflections gate (keep if visible to any).
@@ -985,8 +987,8 @@ def _iter_identification_single(
                     for q in _vis_qs
                 ):
                     continue
-                for i, alpha in enumerate(angles_deg):
-                    Ud_mix = Ud_all[i, j]
+                for alpha in angles_deg:
+                    Ud_mix = Ud_fixed[j]
                     Hg, _ = find_hg_scene(
                         rl_eff,
                         Us_,
@@ -1260,8 +1262,11 @@ def _draw_dislocation(
     else:
         n = cell.B @ np.asarray(plane, dtype=float)
     n_unit = n / np.linalg.norm(n)
-    rotated = _rotated_t_vectors(n_unit, b_table[b_idx : b_idx + 1], np.array([alpha]))
-    Ud = _ud_matrices(n_unit, rotated)[0, 0]
+    # FIXED (character-independent) frame [b̂ | n̂ | t̂₀]; alpha is the screw/edge
+    # character (rotation_deg downstream), NOT a frame rotation — see
+    # crystal.burgers.fixed_ud_matrices. The old ud_matrices(rotated_t_vectors)
+    # rotated column 0 to n×t and broke g·b=0 screw extinction.
+    Ud = _fixed_ud_matrices(n_unit, b_table[b_idx : b_idx + 1])[0]
 
     # b_vec is the INTEGER Burgers (drives the HDF5 label via round() in
     # _build_dislocation_sample_entry). FCC default: unit ⟨110⟩ * √2
@@ -1684,8 +1689,10 @@ def _iter_identification_zscan(
                 assert _cell is not None
                 n_arr_unnorm = _cell.B @ np.asarray(plane, dtype=float)
             n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
-            rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
-            Ud_all = _ud_matrices(n_arr, rotated)
+            # FIXED (character-independent) frame [b̂ | n̂ | t̂₀] per Burgers vector;
+            # rotation_deg ALONE encodes edge↔screw character (see
+            # crystal.burgers.fixed_ud_matrices and the single-mode note above).
+            Ud_fixed = _fixed_ud_matrices(n_arr, b_subset)  # (n_burgers, 3, 3)
 
             # Resolve visibility query vectors: None -> [ctx.q_hkl] (single-reflection);
             # provided list -> all-reflections gate (keep if visible to any).
@@ -1696,8 +1703,8 @@ def _iter_identification_zscan(
                     for q in _vis_qs
                 ):
                     continue
-                for i, alpha in enumerate(angles_deg):
-                    Ud_primary = Ud_all[i, j]
+                for alpha in angles_deg:
+                    Ud_primary = Ud_fixed[j]
                     primary_spec = MixedDislocSpec(
                         Ud_mix=Ud_primary,
                         rotation_deg=float(alpha),

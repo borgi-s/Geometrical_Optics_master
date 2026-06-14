@@ -117,6 +117,49 @@ def rotated_t_vectors(
     return out
 
 
+def fixed_ud_matrices(
+    slip_plane_normal: np.ndarray,
+    burgers: np.ndarray,
+) -> np.ndarray:
+    """Character-independent dislocation frames ``[b̂ | n̂ | t̂₀]`` — one per Burgers.
+
+    Unlike :func:`ud_matrices` (whose column 0 is ``n × t`` and therefore rotates
+    with the character angle), this frame is FIXED: column 0 is the Burgers
+    direction ``b̂``, column 1 the slip-plane normal ``n̂``, column 2 the reference
+    pure-edge line ``t̂₀ = b̂ × n̂``. ``Fd_find_mixed`` / ``find_hg_scene`` then
+    encode the edge↔screw character ENTIRELY through ``rotation_deg``, so the
+    modelled Burgers vector stays ``b̂`` for every character angle.
+
+    This is required for physically correct screw contrast. At the pure-screw
+    angle (``rotation_deg = 90°``) ``Fd_find_mixed`` places the screw axis (both
+    the line and the Burgers vector) along column 0, so column 0 MUST be the true
+    Burgers ``b̂`` for a ``g·b = 0`` screw to be invisible — the textbook
+    isotropic-elasticity result (Hirth & Lothe; Howie & Whelan 1961). The earlier
+    per-angle construction ``ud_matrices(n, rotated_t_vectors(n, b, angles))``
+    rotated column 0 to ``n × t ≈ n × b ⊥ b`` at the screw angle, so the modelled
+    screw carried Burgers ``n × b`` instead of ``b`` and a ``g·b = 0`` screw could
+    light up (HCP prismatic ⟨a⟩ on (0002): ``n × b ∥ c``). See
+    ``tests/test_screw_gb_extinction.py``.
+
+    Equals ``ud_matrices(n, rotated_t_vectors(n, burgers, [0.0]))[0]`` (the α = 0
+    frame) by construction, so identify pure-edge candidates stay byte-identical;
+    only ``rotation_deg ≠ 0`` (screw / mixed) candidate fields change, and they
+    change to the physically correct values.
+
+    Args:
+        slip_plane_normal: shape (3,) — the slip-plane normal ``n`` (need not be
+            unit length).
+        burgers: shape (n_burgers, 3) — the in-plane Burgers vectors (need not be
+            unit length).
+
+    Returns:
+        ndarray of shape (n_burgers, 3, 3): the fixed frames, column-stacked
+        ``[b̂ | n̂ | t̂₀]``.
+    """
+    t_0 = rotated_t_vectors(slip_plane_normal, burgers, np.array([0.0]))  # (1, m, 3)
+    return ud_matrices(slip_plane_normal, t_0)[0]  # (m, 3, 3)
+
+
 def ud_matrices(
     slip_plane_normal: np.ndarray,
     rotated_vectors: np.ndarray,
