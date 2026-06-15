@@ -43,20 +43,10 @@ eps_rms     = 6.0e-5
 beamstop    = false
 aperture    = false            # paper Fig 3B uses no beamstop / no aperture
 
-# NOTE: physical DETECTOR GEOMETRY. dfxm's object-plane pixel =
-# psize / magnification(15.1) ~= 50 nm ~= the module default (40 nm). The
-# pipeline currently uses module-default detector geometry; this block is not
-# yet consumed (deferred: re-derive the ray grid from psize/Npixels at runtime).
-# Renamed from [detector] -> [detector_geometry] because [detector] now denotes
-# the noise-model block (DetectorConfig); this geometry table stays unread.
-[detector_geometry]
-Npixels = 272
-psize   = 0.75e-6
-psf_kernel_size = 9
-psf_sigma_px    = 1.0
-thermal_mean    = 99.453
-thermal_std     = 2.317
-dynamic_range_bits = 16
+# Detector geometry uses the forward-model module defaults (object pixel 40 nm,
+# Npixels 510). The previous unconsumed [detector_geometry] block (psize/psf/
+# thermal keys from the pre-v3 noise model) was removed when [detector_geometry]
+# became a real, validated schema.
 
 # Single detector image at the Fig 3B caption setpoint (NOT a scan).
 # Paper Fig 3B caption: dtheta=-0.42, phi=+0.46, chi=+0.067 mrad. dfxm axis map:
