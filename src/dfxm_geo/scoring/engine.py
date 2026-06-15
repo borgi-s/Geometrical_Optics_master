@@ -100,10 +100,11 @@ def _raw_matrix_numpy(pp: np.ndarray) -> np.ndarray:
 
 
 def _raw_matrix_torch(pp: np.ndarray) -> np.ndarray:
-    import torch  # noqa: F401
+    import torch
 
     n = pp.shape[0]
-    t = torch.as_tensor(pp, dtype=torch.float32, device="cuda")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    t = torch.as_tensor(pp, dtype=torch.float32, device=device)
     F = torch.fft.fft2(t)
     C = np.zeros((n, n))
     for i in range(n):
