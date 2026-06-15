@@ -399,6 +399,11 @@ def _run_simulation_inner(
     # run's hkl and omega into the ForwardContext; single-reflection uses the
     # config-level hkl with omega=0 (the original code path).
     if reflection is not None:
+        # Multi-reflection path: _context_for_run calls build_forward_context
+        # WITHOUT an instrument= kwarg, so the context uses the module-global
+        # detector geometry (Npixels=510, psize=40nm).  Threading `instr` here
+        # is a documented [detector_geometry] follow-up; single-reflection
+        # (the else branch) already threads `instr` correctly.
         ctx = _context_for_run(res, reflection, cell=_mount_cell(config))
     else:
         ctx = fm.build_forward_context(

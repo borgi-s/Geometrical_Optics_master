@@ -144,3 +144,97 @@ def test_forward_run_honors_npixels_override(tmp_path: Path):
         img = f[DETECTOR_INTERNAL_PATH][0]
     # Npixels=120 -> (NN2, NN1) = (120, 40); default would be (510, 170).
     assert img.shape == (120, 40), img.shape
+
+
+@pytest.mark.slow
+def test_wall_fg_cache_key_uses_run_npixels(tmp_path: Path):
+    """Wall-mode Fg cache filename encodes the run's Npixels, not the module global.
+
+    A wall forward with Npixels=120 override must write an Fg cache file whose
+    name contains ``px120`` (not ``px510``).  This is the regression test for
+    Fixes 1+2: before the fix, the cache key was hardcoded to the module-global
+    Npixels, so a [detector_geometry] override would silently thrash or re-use
+    the default-geometry cache.
+
+    The test uses dis=7777.0 (unique sentinel) to guarantee the glob is
+    attributable to this run and won't be confused with any other pre-existing
+    px120 cache file.
+    """
+    import glob
+    import os
+
+    import dfxm_geo.direct_space.forward_model as fm
+    from dfxm_geo.pipeline import SimulationConfig, run_simulation
+
+    # Use a unique dis so the Fg filename is unambiguous.
+    DIS_SENTINEL = 7777.0
+    DIS_STR = str(DIS_SENTINEL).replace(".", "")  # "77770"
+
+    Fg_dir = fm._REPO_ROOT / "direct_space" / "deformation_gradient_tensors"
+
+    # Clean any pre-existing px120 caches from this sentinel dis to make the
+    # assertion meaningful (do NOT touch px510 caches — byte-identity gates
+    # depend on those).
+    for p in glob.glob(str(Fg_dir / f"Fg_{DIS_STR}_*px120*.npy")):
+        os.remove(p)
+
+    # Simplified geometry FCC wall, analytic backend, single rocking-peak
+    # frame (scan.phi value=0), Npixels=120 override.
+    # dis=7777.0 is chosen as a unique sentinel to avoid cache collisions.
+    cfg_toml = (
+        "[reciprocal]\n"
+        "hkl = [-1, 1, -1]\n"
+        "keV = 17.0\n"
+        'backend = "analytic"\n'
+        "beamstop = false\n"
+        "\n"
+        "[crystal]\n"
+        'mode = "wall"\n'
+        "\n"
+        "[crystal.wall]\n"
+        f"dis = {DIS_SENTINEL}\n"
+        "ndis = 3\n"
+        'sample_remount = "S1"\n'
+        "\n"
+        "[scan.phi]\n"
+        "value = 0.0\n"
+        "\n"
+        '[detector]\nmodel = "ideal"\n\n'
+        "[detector_geometry]\n"
+        "pixel_size = 0.65e-6\n"
+        "magnification = 17.31\n"
+        "Npixels = 120\n"
+        "\n"
+        "[io]\n"
+        "include_perfect_crystal = false\n"
+        "write_strain_provenance = true\n"
+        "\n"
+        "[postprocess]\n"
+        "enabled = false\n"
+    )
+    cfg_path = tmp_path / "wall_px120.toml"
+    cfg_path.write_text(cfg_toml, encoding="utf-8")
+    cfg = SimulationConfig.from_toml(cfg_path)
+    out = tmp_path / "out"
+    run_simulation(cfg, out)
+
+    # (a) Detector image shape must reflect Npixels=120 -> (NN2, NN1) = (120, 40).
+    import h5py
+
+    from dfxm_geo.io.hdf5 import DETECTOR_INTERNAL_PATH
+
+    det = out / "scan0001" / "dfxm_sim_detector_0000.h5"
+    assert det.is_file(), f"detector h5 not written under {out / 'scan0001'}"
+    with h5py.File(det, "r") as f:
+        img = f[DETECTOR_INTERNAL_PATH][0]
+    assert img.shape == (120, 40), f"Expected (120, 40) for Npixels=120 wall run, got {img.shape}"
+
+    # (b) An Fg cache file whose name contains ``px120`` must have been written,
+    # proving the Fg cache key now uses the run's instrument geometry.
+    px120_caches = glob.glob(str(Fg_dir / f"Fg_{DIS_STR}_*px120*.npy"))
+    assert px120_caches, (
+        f"No Fg_*px120*.npy cache written for dis={DIS_SENTINEL}. "
+        "Fix 1 regression: cache key still uses the module-global Npixels (510).\n"
+        f"Fg_dir={Fg_dir}\n"
+        f"All Fg files: {glob.glob(str(Fg_dir / 'Fg_*.npy'))}"
+    )

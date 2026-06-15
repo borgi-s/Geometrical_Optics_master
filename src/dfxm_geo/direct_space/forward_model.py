@@ -319,14 +319,18 @@ def Find_Hg(
     geom_signature: tuple | None = (
         None if (h, k, l) == (-1, 1, -1) else (h, k, l, round(ctx.geometry.theta_0 * 1e6))
     )
+    # Use the run's instrument Npixels/Nsub (from ctx) so a [detector_geometry]
+    # override gets a distinct cache file and the default reproduces the legacy
+    # px510_sub1 name byte-identically (ctx.instrument.Npixels == 510 == the
+    # module global when no override is present).
     Fg_path = str(
         Fg_dir
         / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}{}{}{}{}.npy".format(
             str(dis).replace(".", ""),
             int(psize * 1e9),
             int(zl_rms * 2.35e9),
-            Npixels,
-            Nsub,
+            ctx.instrument.Npixels,
+            ctx.instrument.Nsub,
             remount_name,
             z_suffix,
             b_suffix,
@@ -368,8 +372,8 @@ def Find_Hg(
             "psize [nm]": psize,
             "zl_rms": zl_rms,
             "theta_0 [rad]": ctx.geometry.theta_0,
-            "Npixels": Npixels,
-            "Nsub": Nsub,
+            "Npixels": ctx.instrument.Npixels,  # run's instrument, not module global
+            "Nsub": ctx.instrument.Nsub,  # run's instrument, not module global
             "Ud": Ud_eff.tolist(),
             "Us": Us.tolist(),
             "Theta": Theta_.tolist(),
