@@ -111,3 +111,13 @@ def test_score_target_none_mode_shape():
     scores = engine.score_target(frames[0], frames, normalize="none")
     assert scores.shape == (3,)
     assert (scores >= 0).all()
+
+
+def test_torch_matrix_matches_numpy():
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA")
+    frames = _three_frames()
+    M_np = engine.score_matrix(frames, normalize="symmetric", backend="numpy")
+    M_t = engine.score_matrix(frames, normalize="symmetric", backend="torch")
+    assert np.allclose(M_np, M_t, atol=1e-4)

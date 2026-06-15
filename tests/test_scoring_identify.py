@@ -95,3 +95,23 @@ def test_study_degenerate_classes_confused():
     lib = CandidateLibrary(frames, labels, GridSpec((0.1, 0.1), (20, 20)))
     res = Identifier(lib, backend="numpy").study()
     assert res.top1_accuracy < 1.0  # the two identical frames confuse
+
+
+def test_public_api_surface():
+    import dfxm_geo.scoring as sc
+
+    for name in [
+        "GridSpec",
+        "CandidateLabel",
+        "CandidateLibrary",
+        "preprocess",
+        "cross_correlation_peak",
+        "score_matrix",
+        "score_target",
+        "resample_to_grid",
+        "load_library",
+        "Identifier",
+        "IdentifiabilityResult",
+        "RankedMatch",
+    ]:
+        assert hasattr(sc, name), name

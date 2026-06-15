@@ -24,7 +24,7 @@ def _resolve_backend(backend: str) -> str:
         return "numpy"
     if backend == "torch":
         try:
-            import torch  # noqa: F401
+            import torch  # type: ignore[import-not-found]  # noqa: F401
         except ImportError as exc:
             raise RuntimeError("backend='torch' requested but torch is not installed") from exc
         return "torch"
@@ -83,7 +83,7 @@ def score_matrix(
     """All-pairs normalized cross-correlation matrix (N, N)."""
     backend = _resolve_backend(backend)
     pp = np.stack([preprocess(f, k) for f in frames])
-    C = _raw_matrix_torch(pp) if backend == "torch" else _raw_matrix_numpy(pp)  # noqa: F821
+    C = _raw_matrix_torch(pp) if backend == "torch" else _raw_matrix_numpy(pp)
     return _normalize_matrix(C, normalize)
 
 
@@ -94,6 +94,21 @@ def _raw_matrix_numpy(pp: np.ndarray) -> np.ndarray:
     for i in range(n):
         cc = np.fft.ifft2(F[i] * np.conj(F[i:]))  # broadcast i vs j>=i
         peaks = np.abs(cc).reshape(n - i, -1).max(axis=1)
+        C[i, i:] = peaks
+        C[i:, i] = peaks
+    return C
+
+
+def _raw_matrix_torch(pp: np.ndarray) -> np.ndarray:
+    import torch  # noqa: F401
+
+    n = pp.shape[0]
+    t = torch.as_tensor(pp, dtype=torch.float32, device="cuda")
+    F = torch.fft.fft2(t)
+    C = np.zeros((n, n))
+    for i in range(n):
+        cc = torch.fft.ifft2(F[i] * torch.conj(F[i:])).abs()
+        peaks = cc.reshape(n - i, -1).amax(dim=1).cpu().numpy()
         C[i, i:] = peaks
         C[i:, i] = peaks
     return C
