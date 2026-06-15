@@ -41,16 +41,13 @@ from dfxm_geo.crystal.burgers import (
     burgers_vectors as _burgers_vectors,
 )
 from dfxm_geo.crystal.burgers import (
+    fixed_ud_matrices as _fixed_ud_matrices,
+)
+from dfxm_geo.crystal.burgers import (
     gb_cos as _gb_cos,
 )
 from dfxm_geo.crystal.burgers import (
     gb_visible as _gb_visible,
-)
-from dfxm_geo.crystal.burgers import (
-    rotated_t_vectors as _rotated_t_vectors,
-)
-from dfxm_geo.crystal.burgers import (
-    ud_matrices as _ud_matrices,
 )
 from dfxm_geo.crystal.dislocations import (
     MixedDislocSpec,
@@ -72,7 +69,7 @@ from dfxm_geo.crystal.slip_systems import (
 from dfxm_geo.crystal.slip_systems import (
     plane_normals as _plane_normals,
 )
-from dfxm_geo.detector import SensorMap, resolve_model
+from dfxm_geo.detector import DETECTOR_APPLY_CHUNK_FRAMES, SensorMap, resolve_model
 from dfxm_geo.io.hdf5 import (
     DETECTOR_FILE_FMT,
     DETECTOR_INTERNAL_PATH,
@@ -973,8 +970,13 @@ def _iter_identification_single(
                 assert _cell is not None
                 n_arr_unnorm = _cell.B @ np.asarray(plane, dtype=float)
             n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
-            rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
-            Ud_all = _ud_matrices(n_arr, rotated)
+            # FIXED (character-independent) frame [b̂ | n̂ | t̂₀] per Burgers vector;
+            # rotation_deg ALONE encodes edge↔screw character (see
+            # crystal.burgers.fixed_ud_matrices). The previous per-angle
+            # ud_matrices(rotated_t_vectors(...)) rotated column 0 to n×t, so the
+            # screw axis became n×b ⊥ b and a g·b=0 screw could light up
+            # (tests/test_screw_gb_extinction.py). Pure-edge (α=0) is unchanged.
+            Ud_fixed = _fixed_ud_matrices(n_arr, b_subset)  # (n_burgers, 3, 3)
 
             # Resolve visibility query vectors: None -> [ctx.q_hkl] (single-reflection);
             # provided list -> all-reflections gate (keep if visible to any).
@@ -985,8 +987,8 @@ def _iter_identification_single(
                     for q in _vis_qs
                 ):
                     continue
-                for i, alpha in enumerate(angles_deg):
-                    Ud_mix = Ud_all[i, j]
+                for alpha in angles_deg:
+                    Ud_mix = Ud_fixed[j]
                     Hg, _ = find_hg_scene(
                         rl_eff,
                         Us_,
@@ -1094,6 +1096,18 @@ def _run_identification_single(
 # grouping and would not reproduce these signs). Retained verbatim for FCC
 # byte-identity; non-FCC structures use plane_normals(structure) instead — see
 # _resolve_identify_planes_and_burgers.
+#
+# NOTE — DELIBERATELY DIFFERENT from _FCC_111_110_ORDERED in
+# crystal/slip_systems.py. The identify order here is
+# (1,1,1),(1,-1,1),(1,1,-1),(-1,1,1); the forward order (first-occurrence of
+# each n in that 12-system table) is (1,1,1),(1,-1,1),(-1,1,1),(1,1,-1) —
+# positions 2 and 3 are swapped. Each ordering is load-bearing in a DIFFERENT
+# RNG stream: identify draws rng.integers(0, 4) into this 4-plane list; forward
+# draws rng.integers(0, 12) into the 12-system list. Unifying them would change
+# byte output on one path and break a byte-identity gate. Consolidation was
+# investigated 2026-06-15 and found NOT SAFELY FEASIBLE. The decision is locked
+# by `test_fcc_forward_and_identify_orderings_are_deliberately_distinct` in
+# tests/test_cubic_bit_identity.py. Do not merge.
 _ALL_111_PLANES: list[tuple[int, int, int]] = [
     (1, 1, 1),
     (1, -1, 1),
@@ -1260,8 +1274,11 @@ def _draw_dislocation(
     else:
         n = cell.B @ np.asarray(plane, dtype=float)
     n_unit = n / np.linalg.norm(n)
-    rotated = _rotated_t_vectors(n_unit, b_table[b_idx : b_idx + 1], np.array([alpha]))
-    Ud = _ud_matrices(n_unit, rotated)[0, 0]
+    # FIXED (character-independent) frame [b̂ | n̂ | t̂₀]; alpha is the screw/edge
+    # character (rotation_deg downstream), NOT a frame rotation — see
+    # crystal.burgers.fixed_ud_matrices. The old ud_matrices(rotated_t_vectors)
+    # rotated column 0 to n×t and broke g·b=0 screw extinction.
+    Ud = _fixed_ud_matrices(n_unit, b_table[b_idx : b_idx + 1])[0]
 
     # b_vec is the INTEGER Burgers (drives the HDF5 label via round() in
     # _build_dislocation_sample_entry). FCC default: unit ⟨110⟩ * √2
@@ -1579,11 +1596,24 @@ def _apply_detector_model(
         if not det_file.is_file():
             continue
         with h5py.File(det_file, "a") as f:
-            ideal = f[DETECTOR_INTERNAL_PATH][...].astype(np.float64)
-            if sensor is None or sensor.fpn_offset.shape != ideal.shape[1:]:
-                sensor = model.make_sensor_map(ideal.shape[1:], sensor_rng)
-            adu = ideal * detector_cfg.counts_scale * detector_cfg.exposure_time
-            noisy = model.apply(adu, detector_cfg.exposure_time, noise_rng, sensor)
+            ds = f[DETECTOR_INTERNAL_PATH]
+            frame_shape = ds.shape[1:]  # (H, W)
+            if sensor is None or sensor.fpn_offset.shape != frame_shape:
+                sensor = model.make_sensor_map(frame_shape, sensor_rng)
+            n_frames = ds.shape[0]
+            noisy = np.empty((n_frames,) + frame_shape, dtype=np.uint16)
+            scale = detector_cfg.counts_scale * detector_cfg.exposure_time
+            # Process in frame chunks so the peak float64 footprint is bounded
+            # to one chunk rather than the full (n_frames, H, W) stack.
+            # The same noise_rng flows through chunks in order → byte-identical
+            # to a single apply() call (PCG64 draws sequentially in C-order).
+            for start in range(0, n_frames, DETECTOR_APPLY_CHUNK_FRAMES):
+                end = min(start + DETECTOR_APPLY_CHUNK_FRAMES, n_frames)
+                # Read float32 from HDF5, promote to float64 for one chunk only
+                chunk_adu = ds[start:end].astype(np.float64) * scale
+                noisy[start:end] = model.apply(
+                    chunk_adu, detector_cfg.exposure_time, noise_rng, sensor
+                )
             replace_detector_image(f, noisy, extra_attrs=extra_attrs)
 
 
@@ -1684,8 +1714,10 @@ def _iter_identification_zscan(
                 assert _cell is not None
                 n_arr_unnorm = _cell.B @ np.asarray(plane, dtype=float)
             n_arr = n_arr_unnorm / np.linalg.norm(n_arr_unnorm)
-            rotated = _rotated_t_vectors(n_arr, b_subset, angles_deg)
-            Ud_all = _ud_matrices(n_arr, rotated)
+            # FIXED (character-independent) frame [b̂ | n̂ | t̂₀] per Burgers vector;
+            # rotation_deg ALONE encodes edge↔screw character (see
+            # crystal.burgers.fixed_ud_matrices and the single-mode note above).
+            Ud_fixed = _fixed_ud_matrices(n_arr, b_subset)  # (n_burgers, 3, 3)
 
             # Resolve visibility query vectors: None -> [ctx.q_hkl] (single-reflection);
             # provided list -> all-reflections gate (keep if visible to any).
@@ -1696,8 +1728,8 @@ def _iter_identification_zscan(
                     for q in _vis_qs
                 ):
                     continue
-                for i, alpha in enumerate(angles_deg):
-                    Ud_primary = Ud_all[i, j]
+                for alpha in angles_deg:
+                    Ud_primary = Ud_fixed[j]
                     primary_spec = MixedDislocSpec(
                         Ud_mix=Ud_primary,
                         rotation_deg=float(alpha),

@@ -278,6 +278,7 @@ def test_hcp_via_ti_cif(tmp_path):
         f"eta = {eta!r}\n\n"
         "[crystal]\n"
         'cif = "ti.cif"\n'  # structure derived from P6_3/mmc -> hcp
+        'material = "Ti"\n'  # repo-audit #2: non-FCC requires material or poisson_ratio
         "mount_x = [2, -1, 0]\nmount_y = [0, 1, 0]\nmount_z = [0, 0, 1]\n"
         'mode = "centered"\n\n'
         "[crystal.centered]\n"
@@ -298,4 +299,10 @@ def test_hcp_via_ti_cif(tmp_path):
         img = f["/entry_0000/dfxm_sim_detector/image"][...]
     assert np.isfinite(img).all() and float(img.max()) > 0.0
     with h5py.File(out / "dfxm_geo.h5", "r") as f:
-        assert dict(f["/1.1"].attrs)["structure_type"] == "hcp"
+        attrs = dict(f["/1.1"].attrs)
+    assert attrs["structure_type"] == "hcp"
+    # repo-audit #2: ν provenance — Ti mount → ν≈0.32 must be recorded
+    nu_val = float(attrs.get("poisson_ratio", float("nan")))
+    assert np.isclose(nu_val, 0.32, atol=0.005), (
+        f"HCP Ti CIF route must record ν≈0.32; got {nu_val}"
+    )

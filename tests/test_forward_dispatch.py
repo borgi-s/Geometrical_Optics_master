@@ -121,8 +121,8 @@ class TestBuildDislocationPopulationCentered:
         from dfxm_geo.crystal.oblique import CrystalMount
         from dfxm_geo.crystal.slip_systems import burgers_magnitude, slip_systems
 
-        # Fe BCC, a = 2.8665 Å
-        bcc_mount = CrystalMount(lattice="cubic", a=2.8665e-10, structure_type="bcc")
+        # Fe BCC, a = 2.8665 Å — material="Fe" required by repo-audit #2 ν gate.
+        bcc_mount = CrystalMount(lattice="cubic", a=2.8665e-10, structure_type="bcc", material="Fe")
         # BCC {110}<111>: b=(1,-1,1), n=(1,1,0), b·n=0 check: 1+(-1)+0=0 ✓
         # t = n x b = (1,1,0) x (1,-1,1) = (1*1-0*(-1), 0*1-1*1, 1*(-1)-1*1) = (1,-1,-2)
         crystal = CrystalConfig(

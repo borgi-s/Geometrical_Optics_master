@@ -1336,7 +1336,7 @@ def test_hcp_via_ti_cif(tmp_path):
 - [ ] `...python.exe -m mypy src/dfxm_geo/` — 0 errors (was 0/43 at the 4.3a merge).
 - [ ] `grep -rn "B_0 = I\|B_0=I" src/dfxm_geo/` — the 4 q_hkl sites are gone (only `_q_hkl_unit` remains; cubic branch documented).
 - [ ] Sanity: an HCP `random_dislocations` forward sidecar records a MIX of `family` values (⟨a⟩ and ⟨c+a⟩) and `b_um_per` is set; an FCC run has `b_um_per is None`.
-- [ ] Review `git log --oneline main..HEAD`; update CLAUDE.md + auto-memory; hand off via `superpowers:finishing-a-development-branch` (no tag; no push without Sina's nod). Note the open 4.3a follow-up #4 (consolidate the two FCC orderings) — re-examine now that q_hkl/Burgers went non-cubic, but do NOT merge the orderings without re-proving both FCC byte-identity gates.
+- [ ] Review `git log --oneline main..HEAD`; update CLAUDE.md + auto-memory; hand off via `superpowers:finishing-a-development-branch` (no tag; no push without Sina's nod). ~~4.3a follow-up #4 (consolidate the two FCC orderings)~~ **CLOSED 2026-06-15: not safely feasible — each ordering is load-bearing in a different RNG stream; decision locked by `test_fcc_forward_and_identify_orderings_are_deliberately_distinct` in `tests/test_cubic_bit_identity.py`.**
 
 ---
 
