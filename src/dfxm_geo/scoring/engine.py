@@ -97,3 +97,31 @@ def _raw_matrix_numpy(pp: np.ndarray) -> np.ndarray:
         C[i, i:] = peaks
         C[i:, i] = peaks
     return C
+
+
+def score_target(
+    target: np.ndarray,
+    frames: np.ndarray,
+    *,
+    normalize: str = "symmetric",
+    backend: str = "auto",
+    k: float = 2.0,
+) -> np.ndarray:
+    """Score one target image against every library frame; returns (N,)."""
+    backend = _resolve_backend(backend)  # torch path shares the numpy math here
+    pp_t = preprocess(target, k)
+    pp = np.stack([preprocess(f, k) for f in frames])
+    ft = np.fft.fft2(pp_t)
+    F = np.fft.fft2(pp)
+    cross = np.abs(np.fft.ifft2(ft[None] * np.conj(F))).reshape(F.shape[0], -1).max(axis=1)
+    if normalize == "none":
+        return cross
+    auto_t = _peak_from_ffts(ft, ft)
+    auto_f = np.array([_peak_from_ffts(F[j], F[j]) for j in range(F.shape[0])])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        if normalize == "symmetric":
+            denom = np.sqrt(auto_t * auto_f)
+            return np.where(denom > 0, cross / denom, 0.0)
+        if normalize == "diagonal":
+            return np.where(auto_t > 0, cross / auto_t, 0.0)
+    raise ValueError(f"unknown normalize mode: {normalize!r}")

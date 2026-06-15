@@ -95,3 +95,19 @@ def test_score_matrix_none_mode_raw_peaks():
     M = engine.score_matrix(frames, normalize="none")
     assert np.allclose(M, M.T)
     assert (M >= 0).all()
+
+
+def test_score_target_recovers_matching_frame():
+    frames = _three_frames()
+    target = frames[2].copy()  # equals candidate 2
+    scores = engine.score_target(target, frames, normalize="symmetric")
+    assert scores.shape == (3,)
+    assert int(np.argmax(scores)) == 2
+    assert scores[2] > 0.99
+
+
+def test_score_target_none_mode_shape():
+    frames = _three_frames()
+    scores = engine.score_target(frames[0], frames, normalize="none")
+    assert scores.shape == (3,)
+    assert (scores >= 0).all()
