@@ -187,6 +187,19 @@ for Ti at 17 keV), which is a 1st-order pyramidal reflection and IS reachable.
 Use `dfxm-find-reflections` to explore which reflections are accessible for
 your material, mount, and keV.
 
+## Forward contrast across crystal systems
+
+All three supported structure families render end to end on the kernel-free
+analytic backend. The figure below shows one weak-beam DFXM image of a pure-edge
+dislocation in FCC aluminium, BCC tungsten and HCP titanium, all at 17 keV
+(reproduce with `python scripts/render_structure_showcase.py --figures`):
+
+![Weak-beam DFXM contrast of an edge dislocation in FCC Al, BCC W and HCP Ti](img/showcase_fcc_bcc_hcp.png)
+
+These renders are locked as golden regressions in
+`tests/test_structure_goldens.py` (Stage 4.4 validation), so a silent change to
+the forward physics of any structure family fails the suite.
+
 ## TOML configuration examples
 
 ### Explicit structure type
