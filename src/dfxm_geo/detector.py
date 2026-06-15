@@ -119,13 +119,18 @@ def apply_in_chunks(
 ) -> np.ndarray:
     """Call ``model.apply()`` in frame-contiguous chunks, threading ``rng``.
 
-    Produces byte-identical output to ``model.apply(ideal_adu, ...)`` because
-    NumPy's PCG64 Generator advances its internal state sequentially in flat
-    C-order. Feeding chunks [0:k], [k:2k], … through the same stateful ``rng``
-    object is equivalent to one call over all frames: each Poisson/Normal draw
-    pulls the next value from the same deterministic sequence.
+    Bounds peak memory to one chunk of float64 temporaries instead of
+    materialising the whole ``(n_frames, H, W)`` stack at once. The single
+    stateful ``rng`` is threaded through every chunk in increasing frame order,
+    so the result is deterministic and reproducible for a given seed: two
+    chunked runs with the same seed are byte-identical to each other.
 
-    The caller must NOT re-seed or replace ``rng`` between chunks.
+    NOTE: the output is NOT byte-identical to a single
+    ``model.apply(ideal_adu, ...)`` call over the full stack. ``apply()`` draws
+    all Poisson samples first, then all Gaussian read-noise samples; chunking
+    interleaves the two distributions per chunk, which changes the draw order
+    (hence the specific noise realisation, though not its statistics). The
+    caller must NOT re-seed or replace ``rng`` between chunks.
 
     Args:
         model: DetectorModel whose apply() is called per chunk.
@@ -136,8 +141,8 @@ def apply_in_chunks(
         chunk_frames: number of frames per chunk (default DETECTOR_APPLY_CHUNK_FRAMES).
 
     Returns:
-        uint16 array of shape (n_frames, H, W), byte-identical to a single
-        ``model.apply(ideal_adu, exposure_time, rng, sensor)`` call.
+        uint16 array of shape (n_frames, H, W). Deterministic for a fixed seed;
+        see the note above on why it differs from a single full-stack apply().
     """
     n_frames = ideal_adu.shape[0]
     if n_frames == 0:
