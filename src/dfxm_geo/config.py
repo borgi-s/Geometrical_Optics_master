@@ -712,6 +712,68 @@ class DetectorConfig:
             raise ValueError(f"counts_scale must be > 0, got {self.counts_scale}")
 
 
+@dataclass(frozen=True, kw_only=True)
+class DetectorGeometryConfig:
+    """[detector_geometry] block: object-plane ray-grid geometry.
+
+    ``pixel_size`` is the detector-plane effective pixel (camera pixel / visible
+    objective, m) and ``magnification`` the X-ray objective magnification M; the
+    object-plane pitch the forward model uses is ``object_psize = pixel_size /
+    magnification``. When the block is omitted the defaults reproduce the
+    forward_model module globals exactly (40 nm / 510 / 1), so existing configs
+    and the byte-identity gates are unchanged.
+    """
+
+    object_psize: float = 40e-9
+    Npixels: int = 510
+    Nsub: int = 1
+    pixel_size: float | None = None  # detector-plane pixel (m); provenance
+    magnification: float | None = None  # X-ray objective M; provenance
+
+    def __post_init__(self) -> None:
+        if self.object_psize <= 0:
+            raise ValueError(f"object_psize must be > 0, got {self.object_psize}")
+        if self.Npixels <= 0:
+            raise ValueError(f"Npixels must be > 0, got {self.Npixels}")
+        if self.Nsub <= 0:
+            raise ValueError(f"Nsub must be > 0, got {self.Nsub}")
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> DetectorGeometryConfig:
+        if not d:
+            return cls()
+        d = dict(d)
+        pixel_size = d.pop("pixel_size", None)
+        magnification = d.pop("magnification", None)
+        Npixels = int(d.pop("Npixels", 510))
+        Nsub = int(d.pop("Nsub", 1))
+        if d:
+            raise ValueError(f"[detector_geometry] unknown keys: {sorted(d)}")
+        if (pixel_size is None) != (magnification is None):
+            raise ValueError(
+                "[detector_geometry] pixel_size and magnification must be set "
+                "together (object_psize = pixel_size / magnification)"
+            )
+        if pixel_size is None:
+            object_psize = 40e-9
+        else:
+            pixel_size = float(pixel_size)
+            magnification = float(magnification)
+            if pixel_size <= 0 or magnification <= 0:
+                raise ValueError(
+                    f"[detector_geometry] pixel_size ({pixel_size}) and "
+                    f"magnification ({magnification}) must be > 0"
+                )
+            object_psize = pixel_size / magnification
+        return cls(
+            object_psize=object_psize,
+            Npixels=Npixels,
+            Nsub=Nsub,
+            pixel_size=pixel_size,
+            magnification=magnification,
+        )
+
+
 @dataclass
 class SimulationConfig:
     # Sub-project F: crystal cascades to canonical-centered default (was: required).
@@ -727,6 +789,8 @@ class SimulationConfig:
     reflections: list[_ReflectionRun] = field(default_factory=list)
     # v3 (detector-noise-model): realistic detector model + calibration.
     detector: DetectorConfig = field(default_factory=DetectorConfig)
+    # v3 (config-driven detector geometry): object-plane pitch + grid.
+    detector_geometry: DetectorGeometryConfig = field(default_factory=DetectorGeometryConfig)
 
     @classmethod
     def from_toml(cls, path: Path) -> SimulationConfig:
@@ -744,6 +808,7 @@ class SimulationConfig:
                 "rng_seed -> [detector] rng_seed). See docs/detector-noise-model.md."
             )
         detector = DetectorConfig(**raw.get("detector", {}))
+        detector_geometry = DetectorGeometryConfig.from_dict(raw.get("detector_geometry"))
         io = IOConfig(**raw.get("io", {}))
         postprocess = PostprocessConfig(**raw.get("postprocess", {}))
         reciprocal = ReciprocalConfig.from_dict(raw.get("reciprocal"))
@@ -766,6 +831,7 @@ class SimulationConfig:
             geometry=geometry,
             reflections=reflections,
             detector=detector,
+            detector_geometry=detector_geometry,
         )
 
 
