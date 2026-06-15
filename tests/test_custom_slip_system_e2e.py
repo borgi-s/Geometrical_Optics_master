@@ -49,6 +49,10 @@ def _custom_forward_toml() -> str:
         "[crystal]\n"
         'lattice = "cubic"\n'
         f"a = {_A!r}\n"
+        # A custom (non-FCC) structure needs an explicit Poisson source
+        # (repo-audit #2 nu-gate, oblique.py); custom structures have no
+        # material name, so give an explicit value.
+        "poisson_ratio = 0.3\n"
         "mount_x = [1, 0, 0]\n"
         "mount_y = [0, 1, 0]\n"
         "mount_z = [0, 0, 1]\n"
