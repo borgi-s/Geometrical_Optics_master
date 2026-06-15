@@ -62,6 +62,7 @@ from dfxm_geo.pipeline import (
     CenteredCrystalConfig,
     CrystalConfig,
     DetectorConfig,
+    DetectorGeometryConfig,
     IOConfig,
     ReciprocalConfig,
     ScanConfig,
@@ -100,6 +101,12 @@ MEASURED_OFFSET_ADU = PCO_EDGE_4P2_ID03.offset(EXPOSURE_TIME)  # 110.0 ADU
 REFLECTION_HKL = (-1, 1, -1)
 ENERGY_KEV = 17.0
 WEAK_BEAM_PHI = 1.25e-4  # rad
+
+# Matched-geometry re-measurement (2026-06-15): the data set is 10x focusing,
+# so the data's object-plane pitch is (camera 6.5 um / 10x) / M(17.31) = 37.6 nm,
+# vs the forward default 40 nm. We report counts_scale at BOTH geometries.
+MATCHED_PIXEL_SIZE = 6.5e-6 / 10.0  # detector-plane effective pixel (m)
+MATCHED_MAGNIFICATION = 17.31  # X-ray objective M (MAIN_X/OBX - 1)
 
 # Physics cross-check: documented assumption (see module docstring).
 FLUX_ID03_PH_PER_S = 1.0e12  # ph/s on sample — ASSUMPTION, confirm at beamline
@@ -146,11 +153,15 @@ def measure_experimental() -> tuple[float, float, int]:
     return integral, peak, npix
 
 
-def simulate_weak_beam() -> tuple[np.ndarray, float, float, float, int]:
+def simulate_weak_beam(
+    detector_geometry: DetectorGeometryConfig | None = None,
+) -> tuple[np.ndarray, float, float, float, int]:
     """Run the weak-beam single-dislocation forward scene (model='ideal').
 
     Returns ``(image, sim_integral, sim_core_peak, fov_fraction, n_pixels)``.
     The image is the noiseless normalized-intensity float frame.
+    ``detector_geometry`` overrides the object-plane geometry; ``None`` uses the
+    default (40 nm object-plane pitch, 510 px).
     """
     import tempfile
 
@@ -162,6 +173,7 @@ def simulate_weak_beam() -> tuple[np.ndarray, float, float, float, int]:
         io=IOConfig(include_perfect_crystal=False, write_strain_provenance=False),
         detector=DetectorConfig(model="ideal"),  # keep float normalized-intensity
         reciprocal=ReciprocalConfig(hkl=REFLECTION_HKL, keV=ENERGY_KEV, backend="mc"),
+        detector_geometry=detector_geometry or DetectorGeometryConfig(),
     )
     with tempfile.TemporaryDirectory(prefix="counts_scale_") as tmp:
         out = Path(tmp) / "run"
@@ -195,7 +207,7 @@ def main() -> None:
     print(f"  feature footprint                  : {adu_npix} px, peak {adu_peak:.1f} ADU")
 
     # --- simulated integral ---------------------------------------------------
-    _img, sim_integral, sim_peak, fov_fraction, sim_npix = simulate_weak_beam()
+    _img, sim_integral, sim_peak, fov_fraction, sim_npix = simulate_weak_beam(None)
     print(f"sim_integral (sim, largest feature)  : {sim_integral:.6g}  (norm. intensity)")
     print(f"  feature footprint                  : {sim_npix} px, core peak {sim_peak:.6g}")
     print(f"  FOV fraction (feature/frame)       : {fov_fraction:.4g}")
@@ -247,6 +259,28 @@ def main() -> None:
         f"{'PIN' if (guard_a and guard_b) else 'DO NOT PIN'}"
     )
     print("=" * 70)
+
+    print("=" * 70)
+    print("MATCHED 10x geometry re-measurement (object_psize ~ 37.6 nm)")
+    print("=" * 70)
+    matched = DetectorGeometryConfig.from_dict(
+        {"pixel_size": MATCHED_PIXEL_SIZE, "magnification": MATCHED_MAGNIFICATION}
+    )
+    print(f"object_psize = {matched.object_psize * 1e9:.2f} nm (default 40.00 nm)")
+    _img2, sim_integral2, sim_peak2, fov_fraction2, sim_npix2 = simulate_weak_beam(matched)
+    counts_scale2 = adu_integral / (sim_integral2 * EXPOSURE_TIME)
+    core_peak_adu2 = sim_peak2 * counts_scale2 * EXPOSURE_TIME
+    guard_a2 = GUARD_A_LO <= core_peak_adu2 <= GUARD_A_HI
+    print(f"sim_integral (matched) : {sim_integral2:.6g}  (feature {sim_npix2} px)")
+    print(f"counts_scale (matched) : {counts_scale2:.6g}")
+    print(
+        f"Guard A (matched): core-peak {core_peak_adu2:.1f} ADU "
+        f"(target {GUARD_A_LO:.0f}-{GUARD_A_HI:.0f}) -> {'PASS' if guard_a2 else 'FAIL'}"
+    )
+    print(
+        f"delta vs default: counts_scale {counts_scale2 / counts_scale:.3f}x, "
+        f"feature px {sim_npix2}/{sim_npix} = {sim_npix2 / sim_npix:.3f}x"
+    )
 
 
 if __name__ == "__main__":

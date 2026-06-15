@@ -93,3 +93,26 @@ cluster node or in isolation.
   which then breaks subprocess-spawning tests. Consider chunking/streaming the
   100M-ray MC resolution array (`resolution.py:408`) or scaling that test's
   ray count down, mirroring the detector `apply()` chunking fix.
+
+## counts_scale re-measurement at matched 10x geometry (2026-06-15)
+
+The forward detector geometry is now config-driven (`[detector_geometry]`,
+`pixel_size`/`magnification`). `derive_counts_scale.py` was re-run at the data's
+true 10x object-plane pitch (camera 6.5 µm / 10x / M=17.31 ≈ 37.6 nm) alongside
+the default 40 nm.
+
+| Geometry | object_psize | sim feature px | counts_scale | Guard A (core-peak ADU) |
+|---|---|---|---|---|
+| default | 40.0 nm | 112 | 2.90e+06 | 2,133,739 FAIL |
+| matched 10x | 37.55 nm | 119 | 2.60e+06 | 1,896,318 FAIL |
+
+**Verdict:** Matching the object-plane pitch from 40 nm to 37.6 nm moves
+`counts_scale` by only ~10% (2.90e6 → 2.60e6, a 0.895x factor) and shifts the
+feature footprint by ~6% (112 → 119 px), confirming that object-plane pitch is
+not the source of the ~35x discrepancy between the derived `counts_scale`
+(~2.9e6) and the provisional default (1.0e4). Both geometries fail Guard A for
+the same underlying reason: the simulated normalized-intensity peak (~0.74) is
+orders of magnitude larger than what the real dislocation feature occupies in
+the detector FOV, which is a FOV-fraction/normalization mismatch, not a
+pixel-pitch issue. The shipped `DetectorConfig.counts_scale` default is
+UNCHANGED in this pass (Sina reviews + pins separately as a v3.0.0 step).
