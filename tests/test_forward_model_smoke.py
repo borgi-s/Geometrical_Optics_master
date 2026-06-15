@@ -140,7 +140,9 @@ class TestFindHgSampleRemount:
 
         captured: dict = {}
 
-        def fake_load(rl, Ud, Us, Theta, dis, ndis, file_path=None, *, b=None, ny=None, S=None):
+        def fake_load(
+            rl, Ud, Us, Theta, dis, ndis, file_path=None, *, b=None, ny=None, S=None, **kw
+        ):
             captured["file_path"] = file_path
             captured["S"] = S
             captured["b"] = b
@@ -174,7 +176,9 @@ class TestFindHgSampleRemount:
 
         captured: dict = {}
 
-        def fake_load(rl, Ud, Us, Theta, dis, ndis, file_path=None, *, b=None, ny=None, S=None):
+        def fake_load(
+            rl, Ud, Us, Theta, dis, ndis, file_path=None, *, b=None, ny=None, S=None, **kw
+        ):
             captured["file_path"] = file_path
             captured["S"] = S
             captured["b"] = b

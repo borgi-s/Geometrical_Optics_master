@@ -470,6 +470,7 @@ def test_bcc_via_fe_cif(tmp_path: Path) -> None:
         "\n"
         "[crystal]\n"
         'cif = "fe.cif"\n'  # NO explicit structure_type — derived from the space group
+        'material = "Fe"\n'  # repo-audit #2: BCC requires material or poisson_ratio
         "mount_x = [1, 0, 0]\n"
         "mount_y = [0, 1, 0]\n"
         "mount_z = [0, 0, 1]\n"
@@ -514,3 +515,56 @@ def test_bcc_via_fe_cif(tmp_path: Path) -> None:
     assert np.isclose(float(attrs["burgers_magnitude_um"]), _EXPECTED_B_UM, rtol=1e-4)
     assert "space_group" in attrs
     assert attrs["space_group"]  # non-empty
+    # repo-audit #2: ν provenance — Fe mount → ν≈0.29 must be recorded
+    nu_val = float(attrs.get("poisson_ratio", float("nan")))
+    assert np.isclose(nu_val, 0.29, atol=0.005), (
+        f"BCC Fe CIF route must record ν≈0.29; got {nu_val}"
+    )
+
+
+@pytest.mark.slow
+def test_bcc_cif_without_material_is_gated(tmp_path: Path) -> None:
+    """BCC CIF with NO material and NO poisson_ratio → resolved_poisson_ratio raises.
+
+    repo-audit #2: the ν gate must fire at resolved_poisson_ratio access time
+    for any non-FCC structure that provides no Poisson ratio source.  This test
+    confirms the raise reaches the caller (via the mount property access in
+    build_forward_context or the orchestrator).
+    """
+    pytest.importorskip("gemmi")
+
+    cif_text = (
+        "data_Fe\n"
+        "_cell_length_a    2.8665\n"
+        "_cell_length_b    2.8665\n"
+        "_cell_length_c    2.8665\n"
+        "_cell_angle_alpha 90\n"
+        "_cell_angle_beta  90\n"
+        "_cell_angle_gamma 90\n"
+        "_symmetry_space_group_name_H-M   'I m -3 m'\n"
+        "_space_group_IT_number           229\n"
+        "loop_\n"
+        "_atom_site_label\n"
+        "_atom_site_fract_x\n"
+        "_atom_site_fract_y\n"
+        "_atom_site_fract_z\n"
+        "Fe1 0 0 0\n"
+    )
+    (tmp_path / "fe_nomat.cif").write_text(cif_text, encoding="utf-8")
+
+    # Build the mount directly (without pipeline) to test the property in isolation.
+    from dfxm_geo.reciprocal_space.kernel import _crystal_mount_from_toml
+
+    block = {
+        "cif": "fe_nomat.cif",
+        "mount_x": [1, 0, 0],
+        "mount_y": [0, 1, 0],
+        "mount_z": [0, 0, 1],
+    }
+    mount = _crystal_mount_from_toml(block, base_dir=tmp_path)
+    assert mount.resolved_structure_type == "bcc"  # derived from Im-3m
+    assert mount.material is None  # no material provided
+    assert mount.poisson_ratio is None  # no override provided
+
+    with pytest.raises(ValueError, match=r"material"):
+        _ = mount.resolved_poisson_ratio

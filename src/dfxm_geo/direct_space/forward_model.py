@@ -301,9 +301,27 @@ def Find_Hg(
     # (e.g. Fe 0.29) gets a distinct cache so it can never load a stale-ν Fg even
     # when |b| happens to coincide with the FCC default.
     ny_suffix = "" if ny == POISSON_RATIO else f"_ny{round(ny * 1e4)}"
+    # Geometry-aware cache key (repo-audit #1). The rl ray grid is theta-dependent
+    # (xl_range = -yl_start/tan(2*theta_0)/3), so two reflections with the same
+    # dis/psize/etc but different theta_0 (or hkl) would collide on the old key and
+    # silently load the wrong-reflection Fg. Fix: for the DEFAULT reflection (-1,1,-1)
+    # the suffix is EMPTY so the filename is byte-identical to v2.x (existing
+    # FCC caches/goldens/remount tests still hit). Any other reflection gets a
+    # distinct suffix keyed on (h,k,l,theta_0). theta_0 subsumes lattice_a+keV so
+    # a single integer suffices; round(*1e6) gives ≈1 µrad resolution.
+    geom_suffix = (
+        "" if (h, k, l) == (-1, 1, -1) else f"_hkl{h}_{k}_{l}_th{round(ctx.geometry.theta_0 * 1e6)}"
+    )
+    # The geom_signature tuple is passed to load_or_generate_Hg so it can write
+    # and check a .geom.json sidecar (load-time guard for same-filename/different-
+    # theta cases, e.g. default reflection re-run at a different keV, or stale
+    # pre-fix caches). None for the FCC default → old code path, byte-identical.
+    geom_signature: tuple | None = (
+        None if (h, k, l) == (-1, 1, -1) else (h, k, l, round(ctx.geometry.theta_0 * 1e6))
+    )
     Fg_path = str(
         Fg_dir
-        / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}{}{}{}.npy".format(
+        / "Fg_{}_{}nm_{}nm_px{}_sub{}_remount{}{}{}{}{}.npy".format(
             str(dis).replace(".", ""),
             int(psize * 1e9),
             int(zl_rms * 2.35e9),
@@ -313,6 +331,7 @@ def Find_Hg(
             z_suffix,
             b_suffix,
             ny_suffix,
+            geom_suffix,
         )
     )
 
@@ -328,14 +347,19 @@ def Find_Hg(
     # no override is given (byte-identical — FCC unchanged), else the population's
     # cell-aware ``Ud`` for a non-cubic (BCC/HCP) wall (FU5).
     Ud_eff = Ud if Ud_override is None else Ud_override
-    # NOTE (deferred repo-audit #1): the Fg cache filename is keyed by
-    # dis/psize/zl_rms/Npixels/Nsub/remount/z/b/ny — NOT by Ud or theta_0. For FCC
-    # the Ud is constant so this is safe; for non-FCC the b/ny suffixes
-    # differentiate structures/materials in practice. With FU5, ``Ud`` is now
-    # structure-dependent, so a future non-FCC run with the SAME b/ny/theta but a
-    # DIFFERENT Ud would collide on the cache key — covered by the deferred
-    # geometry/structure-aware cache-key fix (repo-audit #1), not here.
-    Hg = load_or_generate_Hg(rl_eff, Ud_eff, Us, Theta_, dis, ndis, Fg_path, b=b, ny=ny, S=S)
+    Hg = load_or_generate_Hg(
+        rl_eff,
+        Ud_eff,
+        Us,
+        Theta_,
+        dis,
+        ndis,
+        Fg_path,
+        b=b,
+        ny=ny,
+        S=S,
+        geom_signature=geom_signature,
+    )
 
     if not os.path.exists(Fg_path.replace(".npy", "_vars.txt")):
         _lkp = ctx.resolution.loaded_kernel_path

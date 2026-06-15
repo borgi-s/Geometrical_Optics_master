@@ -216,8 +216,37 @@ class CrystalMount:
 
     @property
     def resolved_poisson_ratio(self) -> float:
-        """Isotropic Poisson ratio: poisson_ratio override > material table > 0.334 (Al)."""
+        """Isotropic Poisson ratio: poisson_ratio override > material table > 0.334 (Al).
+
+        For non-FCC structures (BCC, HCP, …) an explicit ``[crystal] material``
+        or ``poisson_ratio`` is required: silently defaulting to Al's 0.334 for
+        Fe/W/Ti/Mg would give physically wrong displacement fields.  FCC is
+        exempt (the legacy Al default is intentional and byte-identical).
+
+        Raises:
+            ValueError: When ``resolved_structure_type != "fcc"`` and neither
+                ``material`` nor ``poisson_ratio`` is set.  The message points
+                directly at the fix (add ``material = "Fe"`` etc.).
+        """
         from dfxm_geo.crystal.elasticity import poisson_ratio
+
+        # Gate: non-FCC without any ν source → must raise (repo-audit #2).
+        # FCC is exempt — the Al default is the correct byte-identical legacy value.
+        if (
+            self.poisson_ratio is None
+            and self.material is None
+            and self.resolved_structure_type != "fcc"
+        ):
+            raise ValueError(
+                f"[crystal] resolved_structure_type={self.resolved_structure_type!r} "
+                f"requires an explicit Poisson ratio source, but neither "
+                f"[crystal] material= (e.g. 'Fe', 'W', 'Cu', 'Ni', 'Ti', 'Mg') "
+                f"nor [crystal] poisson_ratio= is set.  Without this, the "
+                f"displacement-gradient kernel would silently use Al's ν=0.334 "
+                f"for a non-aluminium structure, giving wrong strain.  "
+                f'Add one of: material = "Fe"  # or W / Cu / Ni / Ti / Mg  '
+                f"or:         poisson_ratio = 0.29  # explicit override"
+            )
 
         return poisson_ratio(override=self.poisson_ratio, material=self.material)
 
