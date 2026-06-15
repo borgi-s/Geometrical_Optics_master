@@ -1096,6 +1096,18 @@ def _run_identification_single(
 # grouping and would not reproduce these signs). Retained verbatim for FCC
 # byte-identity; non-FCC structures use plane_normals(structure) instead — see
 # _resolve_identify_planes_and_burgers.
+#
+# NOTE — DELIBERATELY DIFFERENT from _FCC_111_110_ORDERED in
+# crystal/slip_systems.py. The identify order here is
+# (1,1,1),(1,-1,1),(1,1,-1),(-1,1,1); the forward order (first-occurrence of
+# each n in that 12-system table) is (1,1,1),(1,-1,1),(-1,1,1),(1,1,-1) —
+# positions 2 and 3 are swapped. Each ordering is load-bearing in a DIFFERENT
+# RNG stream: identify draws rng.integers(0, 4) into this 4-plane list; forward
+# draws rng.integers(0, 12) into the 12-system list. Unifying them would change
+# byte output on one path and break a byte-identity gate. Consolidation was
+# investigated 2026-06-15 and found NOT SAFELY FEASIBLE. The decision is locked
+# by `test_fcc_forward_and_identify_orderings_are_deliberately_distinct` in
+# tests/test_cubic_bit_identity.py. Do not merge.
 _ALL_111_PLANES: list[tuple[int, int, int]] = [
     (1, 1, 1),
     (1, -1, 1),

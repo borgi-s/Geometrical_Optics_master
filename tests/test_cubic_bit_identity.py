@@ -34,6 +34,7 @@ from dfxm_geo.crystal.slip_systems import (
     slip_systems,
 )
 from dfxm_geo.data import configs_root
+from dfxm_geo.orchestrator import _ALL_111_PLANES
 from dfxm_geo.pipeline import (
     CrystalConfig,
     ScanConfig,
@@ -311,4 +312,119 @@ def test_fcc_simplified_wall_ud_override_is_none(tmp_path: Path, monkeypatch) ->
         f"Simplified-default FCC wall passed Ud_override={captured['Ud_override']!r}; "
         "expected None (mount is None → _structure_is_fcc=True → legacy module-global "
         "FCC wall Ud). Routing through population.Ud[0] would break byte-identity."
+    )
+
+
+# ---------------------------------------------------------------------------
+# FCC forward/identify ordering: deliberate distinction, not a bug
+# (investigated 2026-06-15, not safely consolidatable)
+# ---------------------------------------------------------------------------
+
+
+def test_fcc_forward_and_identify_orderings_are_deliberately_distinct() -> None:
+    """Lock the deliberate difference between the FCC forward and identify plane orders.
+
+    BACKGROUND
+    ----------
+    There are two separate hard-coded orderings of the FCC {111} slip planes that
+    must coexist for bit-identity reasons:
+
+    * ``_FCC_111_110_ORDERED`` (``crystal/slip_systems.py``) — the FORWARD path 12-
+      system table.  The ``random_dislocations`` builder draws
+      ``rng.integers(0, 12)`` into this list, so the sequence determines which
+      (b, n, t) each dislocation gets; the wall mode uses entry [0] as its single
+      slip system.  The first occurrence of each distinct plane in this list fixes
+      the **forward plane order**: (1,1,1), (1,-1,1), (-1,1,1), (1,1,-1).
+
+    * ``_ALL_111_PLANES`` (``orchestrator.py``) — the IDENTIFY path 4-plane list.
+      ``_draw_dislocation`` draws ``rng.integers(0, len(planes))`` == 4 into this
+      list.  Its order is: (1,1,1), (1,-1,1), (1,1,-1), (-1,1,1).
+
+    The two orderings differ at positions 2 and 3 (0-indexed): forward has
+    (-1,1,1) at index 2 and (1,1,-1) at index 3; identify has (1,1,-1) at index
+    2 and (-1,1,1) at index 3.
+
+    WHY THEY CANNOT BE UNIFIED
+    ---------------------------
+    Each ordering is load-bearing in a DIFFERENT RNG stream:
+
+    * Forward stream: ``rng.integers(0, 12)`` indexes the 12-system list
+      ``_FCC_111_110_ORDERED``; changing the 12-tuple order changes which
+      dislocation geometry each seed produces.
+    * Identify stream: ``rng.integers(0, 4)`` indexes the 4-plane list
+      ``_ALL_111_PLANES``; changing its order changes which plane each identify
+      seed selects.
+
+    Any "consolidation" that makes both lists share one ordering would necessarily
+    change the byte output on at least one path, breaking one of the two FCC
+    byte-identity gates:
+    - ``test_fcc_random_dislocations_forward_deterministic`` (forward gate)
+    - the identify stream pinned in ``test_identify_structure_aware.py``
+
+    DECISION (2026-06-15)
+    ----------------------
+    Consolidation was investigated on 2026-06-15 and found NOT SAFELY FEASIBLE.
+    The resolution is to CLOSE the follow-up by locking both orders in this test,
+    so nobody "simplifies" them later.  This test is the permanent record of the
+    decision.
+
+    WHAT THIS TEST ASSERTS
+    ----------------------
+    1. The forward-path plane order (first-occurrence of each distinct n across
+       ``_FCC_111_110_ORDERED``) is exactly
+       [(1,1,1), (1,-1,1), (-1,1,1), (1,1,-1)].
+    2. The identify-path plane order (``_ALL_111_PLANES``) is exactly
+       [(1,1,1), (1,-1,1), (1,1,-1), (-1,1,1)].
+    3. The two lists are the SAME SET of four planes but are NOT equal as ordered
+       sequences — they are a deliberate permutation (positions 2 and 3 swapped).
+
+    NOT marked slow: pure in-memory check, runs in <1 ms.
+    """
+    # --- 1. Derive the forward plane order from _FCC_111_110_ORDERED -----------
+    seen: list[tuple[int, int, int]] = []
+    for _b, n, _t in _FCC_111_110_ORDERED:
+        if n not in seen:
+            seen.append(n)
+    forward_plane_order = seen
+
+    expected_forward = [
+        (1, 1, 1),
+        (1, -1, 1),
+        (-1, 1, 1),
+        (1, 1, -1),
+    ]
+    assert forward_plane_order == expected_forward, (
+        f"Forward plane order changed!\n"
+        f"  got:      {forward_plane_order}\n"
+        f"  expected: {expected_forward}\n"
+        "This means _FCC_111_110_ORDERED was reordered — every FCC forward RNG "
+        "stream is now different from v2.x. Do NOT change this order."
+    )
+
+    # --- 2. Pin the identify plane order (_ALL_111_PLANES) ----------------------
+    expected_identify = [
+        (1, 1, 1),
+        (1, -1, 1),
+        (1, 1, -1),
+        (-1, 1, 1),
+    ]
+    assert list(_ALL_111_PLANES) == expected_identify, (
+        f"Identify plane order changed!\n"
+        f"  got:      {list(_ALL_111_PLANES)}\n"
+        f"  expected: {expected_identify}\n"
+        "This means _ALL_111_PLANES was reordered — every FCC identify RNG "
+        "stream is now different from v2.x. Do NOT change this order."
+    )
+
+    # --- 3. Assert same set but deliberately different sequence -----------------
+    assert set(tuple(p) for p in forward_plane_order) == set(tuple(p) for p in expected_identify), (
+        "Forward and identify plane SETS diverged — a {111} plane was added or dropped!"
+    )
+
+    assert forward_plane_order != expected_identify, (
+        "Forward and identify plane orders are now EQUAL — the deliberate "
+        "permutation (positions 2 and 3 swapped) has been lost. "
+        "If you intentionally unified them, update this test AND re-prove BOTH "
+        "FCC byte-identity gates (forward + identify) still pass. "
+        "See the docstring for the full history."
     )

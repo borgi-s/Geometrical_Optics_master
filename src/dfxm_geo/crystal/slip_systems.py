@@ -100,6 +100,17 @@ _REGISTRY: dict[str, tuple[SlipFamily, ...]] = {
 # tests (`test_fcc_ordered_table_is_complete_111_110_family`,
 # `test_fcc_registry_equals_legacy_slip_table`) and guarded at module import
 # below — so nothing is dropped; only the order is pinned for bit-identity.
+#
+# NOTE — DELIBERATELY DIFFERENT from the identify ordering (_ALL_111_PLANES in
+# orchestrator.py). The forward plane order (first-occurrence of each n in this
+# table) is (1,1,1),(1,-1,1),(-1,1,1),(1,1,-1); the identify order is
+# (1,1,1),(1,-1,1),(1,1,-1),(-1,1,1) — positions 2 and 3 are swapped. Each
+# ordering is load-bearing in a DIFFERENT RNG stream: forward draws into the
+# 12-system list here; identify draws into the 4-plane list there. Unifying
+# them would change byte output on one path and break a byte-identity gate.
+# Consolidation was investigated 2026-06-15 and found NOT SAFELY FEASIBLE.
+# The decision is locked by `test_fcc_forward_and_identify_orderings_are_
+# deliberately_distinct` in tests/test_cubic_bit_identity.py. Do not merge.
 _FCC_111_110_ORDERED: tuple[
     tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]], ...
 ] = (
