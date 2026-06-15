@@ -65,3 +65,80 @@ def test_load_missing_psize_raises(tmp_path):
         del h["1.1/dfxm_geo/psize"]
     with pytest.raises(ValueError, match="psize"):
         load_library(master)
+
+
+def test_invisible_filter(tmp_path):
+    cands = [
+        {
+            "plane": (1, 1, 1),
+            "b": (1, 0, 1),
+            "alpha": 0.0,
+            "gb_visible": 1,
+            "frame": _blob((8, 8), (1, 1)),
+        },
+        {
+            "plane": (1, 1, 1),
+            "b": (1, -1, 0),
+            "alpha": 0.0,
+            "gb_visible": 0,
+            "frame": _blob((8, 8), (4, 4)),
+        },
+    ]
+    master = _write_master(tmp_path, "dfxm_identify.h5", cands)
+    assert len(load_library(master)) == 1  # invisible dropped
+    assert len(load_library(master, include_invisible=True)) == 2
+
+
+def test_directory_concatenation(tmp_path):
+    d1 = tmp_path / "seed00001"
+    d1.mkdir()
+    d2 = tmp_path / "seed00002"
+    d2.mkdir()
+    _write_master(
+        d1,
+        "dfxm_identify.h5",
+        [{"plane": (1, 1, 1), "b": (1, 0, 1), "alpha": 0.0, "frame": _blob((8, 8), (1, 1))}],
+    )
+    _write_master(
+        d2,
+        "dfxm_identify.h5",
+        [{"plane": (1, 1, 1), "b": (0, 1, 1), "alpha": 0.0, "frame": _blob((8, 8), (4, 4))}],
+    )
+    lib = load_library(tmp_path)
+    assert len(lib) == 2
+
+
+def test_multiframe_reduction(tmp_path):
+    master = tmp_path / "dfxm_identify.h5"
+    with h5py.File(master, "w") as h:
+        e = h.create_group("1.1")
+        s = e.create_group("sample")
+        s["slip_plane_normal"] = np.asarray((1, 1, 1), np.int32)
+        s["burgers"] = np.asarray((1, 0, 1), np.int32)
+        s["rotation_deg"] = 0.0
+        g = e.create_group("dfxm_geo")
+        g["gb_cos"] = 0.8
+        g["gb_visible"] = np.int8(1)
+        g["q_hkl"] = np.asarray([0.0, 2.0, 0.0])
+        g["psize"] = 1.0e-7
+        scan = tmp_path / "scan1.h5"
+        stack = np.zeros((3, 8, 8), np.float32)
+        stack[1, 2, 2] = 50.0
+        with h5py.File(scan, "w") as d:
+            d["/entry_0000/dfxm_sim_detector/image"] = stack
+        e.create_group("instrument").create_group("dfxm_sim_detector")["data"] = h5py.ExternalLink(
+            "scan1.h5", "/entry_0000/dfxm_sim_detector/image"
+        )
+    lib = load_library(master, frame_reduction="max")
+    assert lib.frames.shape == (1, 8, 8)
+    assert lib.frames[0, 2, 2] == 50.0  # max-projection kept the peak
+
+
+def test_non_uniform_grid_raises(tmp_path):
+    cands = [
+        {"plane": (1, 1, 1), "b": (1, 0, 1), "alpha": 0.0, "frame": _blob((8, 8), (1, 1))},
+        {"plane": (1, 1, 1), "b": (0, 1, 1), "alpha": 0.0, "frame": _blob((10, 10), (4, 4))},
+    ]
+    master = _write_master(tmp_path, "dfxm_identify.h5", cands)
+    with pytest.raises(ValueError, match="non-uniform grid"):
+        load_library(master)
