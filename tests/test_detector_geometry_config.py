@@ -111,3 +111,36 @@ def test_geometry_context_y_extent_follows_instrument():
     # The y-extent of the ray grid must reflect the overridden instrument,
     # not the module default (510*40nm). Max |yl| ~ -instr.yl_start.
     assert abs(float(np.abs(geo.rl[1]).max()) - (-instr.yl_start)) < 1e-12
+
+
+@pytest.mark.slow
+def test_forward_run_honors_npixels_override(tmp_path: Path):
+    """A [detector_geometry] Npixels override changes the output image dims."""
+    import h5py
+
+    from dfxm_geo.io.hdf5 import DETECTOR_INTERNAL_PATH
+    from dfxm_geo.pipeline import SimulationConfig, run_simulation
+
+    toml = (
+        "[reciprocal]\nhkl = [-1, 1, -1]\nkeV = 17.0\n"
+        'backend = "analytic"\nbeamstop = false\naperture = false\n'
+        "zeta_v_fwhm = 5.3e-4\nzeta_h_fwhm = 0.0\n"
+        "NA_rms = 3.1106382978723403e-4\neps_rms = 6.0e-5\n\n"
+        '[geometry]\nmode = "simplified"\n\n'
+        '[crystal]\nmode = "centered"\nlattice = "cubic"\na = 4.05e-10\n\n'
+        "[crystal.centered]\nb = [1, 0, -1]\nn = [1, 1, 1]\nt = [1, -2, 1]\n\n"
+        "[scan.phi]\nvalue = 1.75e-4\n\n"
+        '[detector]\nmodel = "ideal"\n\n'
+        "[detector_geometry]\npixel_size = 0.65e-6\nmagnification = 17.31\nNpixels = 120\n\n"
+        "[io]\ninclude_perfect_crystal = false\nwrite_strain_provenance = false\n"
+    )
+    cfg_path = tmp_path / "ov.toml"
+    cfg_path.write_text(toml, encoding="utf-8")
+    cfg = SimulationConfig.from_toml(cfg_path)
+    out = tmp_path / "out"
+    run_simulation(cfg, out)
+    det = out / "scan0001" / "dfxm_sim_detector_0000.h5"
+    with h5py.File(det, "r") as f:
+        img = f[DETECTOR_INTERNAL_PATH][0]
+    # Npixels=120 -> (NN2, NN1) = (120, 40); default would be (510, 170).
+    assert img.shape == (120, 40), img.shape
