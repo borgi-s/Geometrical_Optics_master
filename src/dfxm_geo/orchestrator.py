@@ -356,7 +356,16 @@ def _run_simulation_inner(
     # the kernel was built from. In simplified geometry (the default FCC path)
     # config.geometry.mount is None -> build_dislocation_population resolves to
     # "fcc" + BURGERS_VECTOR (byte-identical to v2.x).
-    fov_lateral_um = fm.Npixels * fm.psize * 1e6  # m -> um
+    # Config-driven detector geometry: build the run's instrument once from
+    # [detector_geometry] (defaults reproduce the module globals exactly) and
+    # thread it through fov, build_forward_context, and the wall Find_Hg.
+    instr = fm.build_instrument_context_from_config(
+        psize=config.detector_geometry.object_psize,
+        zl_rms=fm.zl_rms,
+        Npixels=config.detector_geometry.Npixels,
+        Nsub=config.detector_geometry.Nsub,
+    )
+    fov_lateral_um = instr.Npixels * instr.psize * 1e6  # m -> um
     population = fm.build_dislocation_population(
         config.crystal, fov_lateral_um=fov_lateral_um, rng=None, mount=config.geometry.mount
     )
@@ -374,7 +383,7 @@ def _run_simulation_inner(
     # Effective-config print.
     print(
         f"[dfxm-forward] effective config:\n"
-        f"  Nsub={fm.Nsub}  Npixels={fm.Npixels}  NN1={fm.NN1}  NN2={fm.NN2}\n"
+        f"  Nsub={instr.Nsub}  Npixels={instr.Npixels}  NN1={instr.NN1}  NN2={instr.NN2}\n"
         f"  kernel={res.loaded_kernel_path}\n"
         f"  crystal.mode={config.crystal.mode}  ndis={len(population.positions_um)}\n"
         f"  scan.mode={config.scan.derived_mode_name()}  "
@@ -390,12 +399,18 @@ def _run_simulation_inner(
     # run's hkl and omega into the ForwardContext; single-reflection uses the
     # config-level hkl with omega=0 (the original code path).
     if reflection is not None:
+        # Multi-reflection path: _context_for_run calls build_forward_context
+        # WITHOUT an instrument= kwarg, so the context uses the module-global
+        # detector geometry (Npixels=510, psize=40nm).  Threading `instr` here
+        # is a documented [detector_geometry] follow-up; single-reflection
+        # (the else branch) already threads `instr` correctly.
         ctx = _context_for_run(res, reflection, cell=_mount_cell(config))
     else:
         ctx = fm.build_forward_context(
             run_theta(config),
             res,
             config.reciprocal.hkl,
+            instrument=instr,
             cell=_mount_cell(config),
         )
 
@@ -428,8 +443,8 @@ def _run_simulation_inner(
             return fm.Find_Hg(
                 w.dis,
                 w.ndis,
-                fm.psize,
-                fm.zl_rms,
+                instr.psize,
+                instr.zl_rms,
                 h=config.reciprocal.hkl[0],
                 k=config.reciprocal.hkl[1],
                 l=config.reciprocal.hkl[2],

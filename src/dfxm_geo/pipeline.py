@@ -31,6 +31,7 @@ from dfxm_geo.config import (  # noqa: F401
     CenteredCrystalConfig,
     CrystalConfig,
     DetectorConfig,
+    DetectorGeometryConfig,
     GeometryConfig,
     IdentificationConfig,
     IdentificationCrystalConfig,
