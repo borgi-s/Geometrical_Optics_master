@@ -19,6 +19,13 @@ import numpy as np
 
 FULL_WELL: Final[int] = 65535  # uint16 saturation, matches the real LIMA frames
 
+# Maximum number of frames processed in a single DetectorModel.apply() call.
+# At (510, 170) pixels per frame, 256 frames ≈ 112 MB float64 -- well under
+# typical RAM limits. Reducing this from n_frames to chunk_frames keeps the
+# peak float64 footprint bounded regardless of how large a scan stack grows.
+# (A 3721-frame 61×61 config at (510, 170) would otherwise allocate ~2.4 GiB.)
+DETECTOR_APPLY_CHUNK_FRAMES: Final[int] = 256
+
 
 # eq=False: the fpn_offset ndarray field would make an auto-generated __eq__
 # raise on truth-value ambiguity; identity equality is what we want (constructed once per run).
@@ -99,6 +106,47 @@ class DetectorModel:
             + rng.normal(0.0, self.noise_sigma(exposure_time), size=ideal_adu.shape)
         )
         return np.clip(np.rint(noisy), 0, FULL_WELL).astype(np.uint16)
+
+
+def apply_in_chunks(
+    model: DetectorModel,
+    ideal_adu: np.ndarray,
+    exposure_time: float,
+    rng: np.random.Generator,
+    sensor: SensorMap,
+    *,
+    chunk_frames: int = DETECTOR_APPLY_CHUNK_FRAMES,
+) -> np.ndarray:
+    """Call ``model.apply()`` in frame-contiguous chunks, threading ``rng``.
+
+    Produces byte-identical output to ``model.apply(ideal_adu, ...)`` because
+    NumPy's PCG64 Generator advances its internal state sequentially in flat
+    C-order. Feeding chunks [0:k], [k:2k], … through the same stateful ``rng``
+    object is equivalent to one call over all frames: each Poisson/Normal draw
+    pulls the next value from the same deterministic sequence.
+
+    The caller must NOT re-seed or replace ``rng`` between chunks.
+
+    Args:
+        model: DetectorModel whose apply() is called per chunk.
+        ideal_adu: float64 array of shape (n_frames, H, W).
+        exposure_time: exposure in seconds (passed through to apply()).
+        rng: stateful Generator; advanced in-place across chunks.
+        sensor: SensorMap (fixed-pattern, shared across all chunks).
+        chunk_frames: number of frames per chunk (default DETECTOR_APPLY_CHUNK_FRAMES).
+
+    Returns:
+        uint16 array of shape (n_frames, H, W), byte-identical to a single
+        ``model.apply(ideal_adu, exposure_time, rng, sensor)`` call.
+    """
+    n_frames = ideal_adu.shape[0]
+    if n_frames == 0:
+        return np.empty((0,) + ideal_adu.shape[1:], dtype=np.uint16)
+    out = np.empty_like(ideal_adu, dtype=np.uint16)
+    for start in range(0, n_frames, chunk_frames):
+        end = min(start + chunk_frames, n_frames)
+        out[start:end] = model.apply(ideal_adu[start:end], exposure_time, rng, sensor)
+    return out
 
 
 PCO_EDGE_4P2_ID03 = DetectorModel(

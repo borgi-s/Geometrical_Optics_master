@@ -4,9 +4,11 @@ import numpy as np
 import pytest
 
 from dfxm_geo.detector import (
+    DETECTOR_APPLY_CHUNK_FRAMES,
     FULL_WELL,
     PCO_EDGE_4P2_ID03,
     SensorMap,
+    apply_in_chunks,
     resolve_model,
 )
 
@@ -103,3 +105,51 @@ def test_apply_adds_sensor_map_offset():
     sm = SensorMap(fpn_offset=np.full((16, 16), 40.0))
     out = m.apply(np.zeros((50, 16, 16)), 1.0, np.random.default_rng(1), sm)
     assert out.astype(float).mean() == pytest.approx(m.offset(1.0) + 40.0, rel=0.02)
+
+
+def test_apply_in_chunks_is_deterministic_and_seed_sensitive():
+    """apply_in_chunks() must be deterministic: same seed → identical output,
+    different seed → different output.  Two calls with the same seed and
+    chunk_frames both forced to 3 (so that multiple chunks are exercised)
+    must agree; a third call with a different seed must disagree.
+
+    Note: chunked output intentionally differs from a single model.apply()
+    call over the full array because the Poisson and Normal draws are
+    interleaved per-chunk rather than drawn distribution-first.  The
+    important invariant is determinism within the chunked path itself.
+    """
+    m = PCO_EDGE_4P2_ID03
+    n_frames, H, W = 10, 16, 16
+    flat = SensorMap(fpn_offset=np.zeros((H, W)))
+    ideal = np.random.default_rng(99).uniform(0.0, 2000.0, size=(n_frames, H, W))
+
+    # Two identical seeds: must produce byte-identical output
+    a = apply_in_chunks(m, ideal.copy(), 1.0, np.random.default_rng(42), flat, chunk_frames=3)
+    b = apply_in_chunks(m, ideal.copy(), 1.0, np.random.default_rng(42), flat, chunk_frames=3)
+    # Different seed: must produce different output
+    c = apply_in_chunks(m, ideal.copy(), 1.0, np.random.default_rng(99), flat, chunk_frames=3)
+
+    assert a.dtype == np.uint16
+    assert b.dtype == np.uint16
+    assert np.array_equal(a, b), "same seed must give identical chunked output"
+    assert not np.array_equal(a, c), "different seed must give different chunked output"
+
+
+def test_apply_in_chunks_correct_shape_and_dtype():
+    """apply_in_chunks() returns the correct shape and dtype, and the output
+    contains realistic ADU values (above zero)."""
+    m = PCO_EDGE_4P2_ID03
+    n_frames, H, W = 7, 16, 16
+    flat = SensorMap(fpn_offset=np.zeros((H, W)))
+    ideal = np.random.default_rng(77).uniform(0.0, 2000.0, size=(n_frames, H, W))
+
+    result = apply_in_chunks(m, ideal, 1.0, np.random.default_rng(7), flat, chunk_frames=3)
+    assert result.dtype == np.uint16
+    assert result.shape == (n_frames, H, W)
+    assert result.mean() > 50  # realistic signal above floor
+
+
+def test_detector_apply_chunk_frames_constant():
+    """DETECTOR_APPLY_CHUNK_FRAMES is a positive integer (sanity check)."""
+    assert isinstance(DETECTOR_APPLY_CHUNK_FRAMES, int)
+    assert DETECTOR_APPLY_CHUNK_FRAMES > 0

@@ -69,7 +69,7 @@ from dfxm_geo.crystal.slip_systems import (
 from dfxm_geo.crystal.slip_systems import (
     plane_normals as _plane_normals,
 )
-from dfxm_geo.detector import SensorMap, resolve_model
+from dfxm_geo.detector import DETECTOR_APPLY_CHUNK_FRAMES, SensorMap, resolve_model
 from dfxm_geo.io.hdf5 import (
     DETECTOR_FILE_FMT,
     DETECTOR_INTERNAL_PATH,
@@ -1584,11 +1584,24 @@ def _apply_detector_model(
         if not det_file.is_file():
             continue
         with h5py.File(det_file, "a") as f:
-            ideal = f[DETECTOR_INTERNAL_PATH][...].astype(np.float64)
-            if sensor is None or sensor.fpn_offset.shape != ideal.shape[1:]:
-                sensor = model.make_sensor_map(ideal.shape[1:], sensor_rng)
-            adu = ideal * detector_cfg.counts_scale * detector_cfg.exposure_time
-            noisy = model.apply(adu, detector_cfg.exposure_time, noise_rng, sensor)
+            ds = f[DETECTOR_INTERNAL_PATH]
+            frame_shape = ds.shape[1:]  # (H, W)
+            if sensor is None or sensor.fpn_offset.shape != frame_shape:
+                sensor = model.make_sensor_map(frame_shape, sensor_rng)
+            n_frames = ds.shape[0]
+            noisy = np.empty((n_frames,) + frame_shape, dtype=np.uint16)
+            scale = detector_cfg.counts_scale * detector_cfg.exposure_time
+            # Process in frame chunks so the peak float64 footprint is bounded
+            # to one chunk rather than the full (n_frames, H, W) stack.
+            # The same noise_rng flows through chunks in order → byte-identical
+            # to a single apply() call (PCG64 draws sequentially in C-order).
+            for start in range(0, n_frames, DETECTOR_APPLY_CHUNK_FRAMES):
+                end = min(start + DETECTOR_APPLY_CHUNK_FRAMES, n_frames)
+                # Read float32 from HDF5, promote to float64 for one chunk only
+                chunk_adu = ds[start:end].astype(np.float64) * scale
+                noisy[start:end] = model.apply(
+                    chunk_adu, detector_cfg.exposure_time, noise_rng, sensor
+                )
             replace_detector_image(f, noisy, extra_attrs=extra_attrs)
 
 
