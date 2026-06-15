@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 import h5py
 import numpy as np
@@ -35,12 +36,21 @@ def _read_label(h: h5py.File, entry: str, fp: Path) -> CandidateLabel:
     s = h[entry]["sample"]
     g = h[entry]["dfxm_geo"]
     return CandidateLabel(
-        slip_plane_normal=tuple(int(x) for x in np.asarray(s["slip_plane_normal"])),
-        burgers=tuple(int(x) for x in np.asarray(s["burgers"])),
+        slip_plane_normal=cast(
+            "tuple[int, int, int]",
+            tuple(int(x) for x in np.asarray(s["slip_plane_normal"])),
+        ),
+        burgers=cast(
+            "tuple[int, int, int]",
+            tuple(int(x) for x in np.asarray(s["burgers"])),
+        ),
         rotation_deg=float(s["rotation_deg"][()]),
         gb_cos=float(g["gb_cos"][()]),
         gb_visible=bool(int(g["gb_visible"][()])),
-        q_hkl=tuple(float(x) for x in np.asarray(g["q_hkl"])),
+        q_hkl=cast(
+            "tuple[float, float, float]",
+            tuple(float(x) for x in np.asarray(g["q_hkl"])),
+        ),
         scan_index=int(entry.split(".")[0]),
         source_file=str(fp),
     )
