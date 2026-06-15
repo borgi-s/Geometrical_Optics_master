@@ -90,6 +90,7 @@ packages = [
     "dfxm_geo.direct_space",
     "dfxm_geo.io",
     "dfxm_geo.reciprocal_space",
+    "dfxm_geo.scoring",
     "dfxm_geo.viz",
 ]
 
