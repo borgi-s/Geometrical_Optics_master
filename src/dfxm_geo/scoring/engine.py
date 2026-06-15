@@ -62,3 +62,38 @@ def cross_correlation_peak(
     if normalize == "diagonal":
         return cross / auto_a if auto_a > 0 else 0.0
     raise ValueError(f"unknown normalize mode: {normalize!r}")
+
+
+def _normalize_matrix(C: np.ndarray, mode: str) -> np.ndarray:
+    if mode == "none":
+        return C
+    d = np.diag(C).copy()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        if mode == "symmetric":
+            denom = np.sqrt(np.outer(d, d))
+            return np.where(denom > 0, C / denom, 0.0)
+        if mode == "diagonal":
+            return np.where(d[:, None] > 0, C / d[:, None], 0.0)
+    raise ValueError(f"unknown normalize mode: {mode!r}")
+
+
+def score_matrix(
+    frames: np.ndarray, *, normalize: str = "symmetric", backend: str = "auto", k: float = 2.0
+) -> np.ndarray:
+    """All-pairs normalized cross-correlation matrix (N, N)."""
+    backend = _resolve_backend(backend)
+    pp = np.stack([preprocess(f, k) for f in frames])
+    C = _raw_matrix_torch(pp) if backend == "torch" else _raw_matrix_numpy(pp)  # noqa: F821
+    return _normalize_matrix(C, normalize)
+
+
+def _raw_matrix_numpy(pp: np.ndarray) -> np.ndarray:
+    n = pp.shape[0]
+    F = np.fft.fft2(pp)  # (n, H, W) complex
+    C = np.zeros((n, n))
+    for i in range(n):
+        cc = np.fft.ifft2(F[i] * np.conj(F[i:]))  # broadcast i vs j>=i
+        peaks = np.abs(cc).reshape(n - i, -1).max(axis=1)
+        C[i, i:] = peaks
+        C[i:, i] = peaks
+    return C

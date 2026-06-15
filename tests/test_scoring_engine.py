@@ -62,3 +62,36 @@ def test_resolve_backend_torch_missing(monkeypatch):
     assert engine._resolve_backend("auto") == "numpy"
     with pytest.raises(RuntimeError):
         engine._resolve_backend("torch")
+
+
+def _three_frames():
+    rng = np.random.default_rng(4)
+    base = rng.normal(50, 8, size=(24, 24))
+    a = base.copy()
+    a[5:8, 5:8] += 120
+    b = np.roll(a, (3, 2), axis=(0, 1))  # similar to a (shifted)
+    c = base.copy()
+    c[18:21, 18:21] += 120  # different feature
+    return np.stack([a, b, c])
+
+
+def test_score_matrix_symmetric_and_unit_diagonal():
+    frames = _three_frames()
+    M = engine.score_matrix(frames, normalize="symmetric")
+    assert M.shape == (3, 3)
+    assert np.allclose(np.diag(M), 1.0)
+    assert np.allclose(M, M.T)  # symmetric
+    assert M[0, 1] > M[0, 2]  # a~b more similar than a~c
+
+
+def test_score_matrix_diagonal_mode_rows_self_one():
+    frames = _three_frames()
+    M = engine.score_matrix(frames, normalize="diagonal")
+    assert np.allclose(np.diag(M), 1.0)
+
+
+def test_score_matrix_none_mode_raw_peaks():
+    frames = _three_frames()
+    M = engine.score_matrix(frames, normalize="none")
+    assert np.allclose(M, M.T)
+    assert (M >= 0).all()
