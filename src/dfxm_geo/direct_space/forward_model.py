@@ -682,6 +682,44 @@ def build_instrument_context() -> InstrumentContext:
     )
 
 
+def build_instrument_context_from_config(
+    *, psize: float, zl_rms: float, Npixels: int, Nsub: int
+) -> InstrumentContext:
+    """Build an InstrumentContext from explicit detector geometry (config-driven).
+
+    Recomputes the derived ray-grid constants from the given psize/Npixels/Nsub,
+    using the SAME expressions as the module-level derivation, so a call with the
+    module defaults (40e-9, zl_rms, 510, 1) returns a context byte-identical to
+    build_instrument_context(). The geometry-independent Ud/Us are reused.
+    """
+    nn1 = int(Npixels // 3 * Nsub)
+    nn2 = int(Npixels * Nsub)
+    nn3 = int(Npixels // 30 * Nsub)
+    yl_start_ = -psize * Npixels / 2 + psize / (2 * Nsub)
+    yi = (np.arange(nn1) // Nsub).repeat(nn3 * nn2)
+    zi = np.tile((np.arange(nn2) // Nsub).repeat(nn3), nn1)
+    indices_ = np.vstack((zi, yi)).T
+    flat_indices_ = indices_[:, 0].astype(np.int64) * (nn1 // Nsub) + indices_[:, 1].astype(
+        np.int64
+    )
+    return InstrumentContext(
+        psize=psize,
+        zl_rms=zl_rms,
+        Npixels=Npixels,
+        Nsub=Nsub,
+        NN1=nn1,
+        NN2=nn2,
+        NN3=nn3,
+        Ud=Ud,
+        Us=Us,
+        flat_indices=flat_indices_,
+        yl_start=yl_start_,
+        xl_steps=nn1,
+        yl_steps=nn2,
+        zl_steps=nn3,
+    )
+
+
 def build_geometry_context(
     theta_0_: float, instrument: InstrumentContext, omega: float = 0.0
 ) -> GeometryContext:
@@ -690,8 +728,8 @@ def build_geometry_context(
     The single source of truth for the theta-dependent geometry (Theta, the
     ray grid ``rl``, ``prob_z``, ``xl_start``/``xl_range``): both simplified and
     oblique runs construct their geometry here from ``run_theta(config)``.
-    ``yl_range`` and ``zl_range`` are theta-independent module-level constants
-    (not in ``InstrumentContext``) and are referenced directly.
+    The y/z grid extents are derived from the instrument's ``yl_start``/``zl_rms``
+    (equal to the module-level constants for the default instrument).
 
     Args:
         theta_0_: Bragg angle in radians.
@@ -703,11 +741,18 @@ def build_geometry_context(
     Theta_ = np.array([[np.cos(th), 0, np.sin(th)], [0, 1, 0], [-np.sin(th), 0, np.cos(th)]])
     xl_start_ = instrument.yl_start / np.tan(2 * th) / 3
     xl_range_ = -xl_start_
+    # y/z grid extents follow the instrument (config-driven psize/Npixels), not
+    # module globals. For the default instrument these equal the module-level
+    # yl_range/zl_range exactly (same expressions), so the default path is
+    # byte-identical.
+    yl_range_ = -instrument.yl_start
+    zl_start_ = -0.5 * instrument.zl_rms * 6
+    zl_range_ = -zl_start_
     rl_ = np.vstack(  # type: ignore[call-overload]
         np.mgrid[
             -xl_range_ : xl_range_ : complex(instrument.xl_steps),
-            -yl_range : yl_range : complex(instrument.yl_steps),
-            -zl_range : zl_range : complex(instrument.zl_steps),
+            -yl_range_ : yl_range_ : complex(instrument.yl_steps),
+            -zl_range_ : zl_range_ : complex(instrument.zl_steps),
         ]
     ).reshape(3, -1)
     prob_z_ = np.exp(-0.5 * (rl_[2] / instrument.zl_rms) ** 2)
