@@ -40,13 +40,37 @@ def test_rank_resamples_off_grid_target():
     assert matches[0].label.burgers == (1, 0, 1)
 
 
+def _two_class_lib():
+    # Leave-one-out top-1 needs >=2 members per class, so a sample can find a
+    # same-class neighbour. The metric is translation-invariant, so the classes
+    # must differ in blob SIZE (not just position): a compact 3x3 blob vs a 7x7
+    # blob. Within-class pairs score ~1.0; cross-class ~9/21~=0.43.
+    rng = np.random.default_rng(11)
+    small = np.zeros((20, 20), dtype=np.float32)
+    small[8:11, 8:11] = 120.0
+    big = np.zeros((20, 20), dtype=np.float32)
+    big[6:13, 6:13] = 120.0
+    a0 = small + rng.normal(0, 1, (20, 20))
+    a1 = small + rng.normal(0, 1, (20, 20))
+    b0 = big + rng.normal(0, 1, (20, 20))
+    b1 = big + rng.normal(0, 1, (20, 20))
+    frames = np.stack([a0, a1, b0, b1]).astype(np.float32)
+    labels = [
+        CandidateLabel((1, 1, 1), (1, 0, 1), 0.0, 0.8, True, (0.0, 2.0, 0.0), 1, "m.h5"),
+        CandidateLabel((1, 1, 1), (1, 0, 1), 0.0, 0.8, True, (0.0, 2.0, 0.0), 2, "m.h5"),
+        CandidateLabel((1, 1, 1), (0, 1, 1), 0.0, 0.8, True, (0.0, 2.0, 0.0), 3, "m.h5"),
+        CandidateLabel((1, 1, 1), (0, 1, 1), 0.0, 0.8, True, (0.0, 2.0, 0.0), 4, "m.h5"),
+    ]
+    return CandidateLibrary(frames, labels, GridSpec((0.1, 0.1), (20, 20)))
+
+
 def test_study_distinct_classes_top1_perfect(tmp_path):
-    lib = _lib()  # two clearly different frames/classes
+    lib = _two_class_lib()  # two distinct classes, two members each
     ident = Identifier(lib, backend="numpy")
     res = ident.study()
     assert isinstance(res, IdentifiabilityResult)
-    assert res.matrix.shape == (2, 2)
-    assert res.top1_accuracy == 1.0  # each recovers its own class (LOO)
+    assert res.matrix.shape == (4, 4)
+    assert res.top1_accuracy == 1.0  # each finds its same-class partner (LOO)
     res.save(tmp_path)
     assert (tmp_path / "matrix.npy").exists()
     assert (tmp_path / "metrics.json").exists()
