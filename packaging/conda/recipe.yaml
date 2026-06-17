@@ -2,7 +2,7 @@ schema_version: 1
 
 context:
   name: dfxm-geo
-  version: "2.1.2"
+  version: "3.0.0"
   # requires-python = ">=3.11"; override conda-forge's lower global python_min.
   python_min: "3.11"
 
@@ -12,21 +12,25 @@ package:
 
 source:
   url: https://pypi.org/packages/source/${{ name[0] }}/${{ name }}/dfxm_geo-${{ version }}.tar.gz
-  sha256: a29846a09834cee59da4cce62baa4252bc7cb2f73306e7859769d7a77e90cc20
+  # FILL with the sha256 of the 3.0.0 PyPI sdist. The regro autotick bot fills
+  # this automatically on its version-bump PR; if editing by hand, run:
+  #   curl -sL https://pypi.org/packages/source/d/dfxm-geo/dfxm_geo-3.0.0.tar.gz | sha256sum
+  sha256: 0000000000000000000000000000000000000000000000000000000000000000
 
 build:
   number: 0
   noarch: python
   script: ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
   python:
-    # Declare the console scripts so rattler-build generates OS-specific
-    # launchers at install time. Without this, the auto-detected Windows
-    # .exe launcher is broken (exits 1 with no output); the package code
-    # itself is fine on Windows.
+    # Declare ALL SEVEN console scripts so rattler-build generates OS-specific
+    # launchers at install time. Without this, the auto-detected Windows .exe
+    # launcher is broken (exits 1 with no output); the package code itself is
+    # fine on Windows. (dfxm-find-reflections is new since 2.x — do not drop it.)
     entry_points:
       - dfxm-forward = dfxm_geo.pipeline:cli_main
       - dfxm-identify = dfxm_geo.pipeline:cli_main_identify
       - dfxm-bootstrap = dfxm_geo.reciprocal_space.kernel:cli_main
+      - dfxm-find-reflections = dfxm_geo.find_reflections_cmd:cli_main
       - dfxm-init = dfxm_geo.init_cmd:cli_main
       - dfxm-migrate-output = dfxm_geo.io.migrate:cli_main_npy_to_h5
       - dfxm-migrate-h5 = dfxm_geo.io.migrate:cli_main_h5_to_h5
@@ -50,9 +54,10 @@ requirements:
     - tqdm >=4.66.3
   run_constraints:
     # Optional extras — not installed by default, but version-pinned if present.
-    - xraylib >=4.1      # beamstop-wire (X-ray attenuation through the wire)
-    - psutil >=5         # memory-aware (adaptive parallel worker capping)
-    - plotly >=5         # identification (interactive viewers)
+    - gemmi >=0.7       # cif (CIF crystal-structure input)
+    - xraylib >=4.1     # beamstop-wire (X-ray attenuation through the wire)
+    - psutil >=5        # memory-aware (adaptive parallel worker capping)
+    - plotly >=5        # identification (interactive viewers)
 
 tests:
   - python:
@@ -71,9 +76,10 @@ tests:
       - dfxm-forward --help
       - dfxm-identify --help
       - dfxm-bootstrap --help
+      - dfxm-find-reflections --help
       - dfxm-init --help
     # Pin the script-test env to the minimum supported Python (3.11), matching
-    # the import test. dfxm-geo targets Python 3.11–3.12.
+    # the import test. dfxm-geo targets Python 3.11+.
     requirements:
       run:
         - python ${{ python_min }}.*
@@ -88,12 +94,13 @@ about:
   description: |
     dfxm-geo is a geometrical-optics forward model for dark-field X-ray
     microscopy (DFXM). It simulates DFXM images of crystals containing
-    dislocations, supports multi-reflection kernels, scan trajectories
-    (theta / two_dtheta / z), and crystal layouts, and writes simulation
-    output in a BLISS-compatible HDF5 layout. A companion identification
-    mode reconstructs dislocation populations from simulated scans.
+    dislocations across FCC, BCC, and HCP structures (or any cell via a CIF
+    file), with multi-reflection runs, symmetric and oblique geometry, scan
+    trajectories, and a measured uint16-ADU detector model, and writes
+    simulation output in a BLISS-compatible HDF5 layout. A companion
+    identification mode reconstructs dislocation populations from scans.
 
-    The model is described in Borgi et al., IUCrJ (2024).
+    The model is described in Borgi et al., J. Appl. Cryst. 57, 358 (2024).
 
 extra:
   recipe-maintainers:
