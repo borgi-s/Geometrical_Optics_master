@@ -12,10 +12,9 @@ package:
 
 source:
   url: https://pypi.org/packages/source/${{ name[0] }}/${{ name }}/dfxm_geo-${{ version }}.tar.gz
-  # FILL with the sha256 of the 3.0.0 PyPI sdist. The regro autotick bot fills
-  # this automatically on its version-bump PR; if editing by hand, run:
-  #   curl -sL https://pypi.org/packages/source/d/dfxm-geo/dfxm_geo-3.0.0.tar.gz | sha256sum
-  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+  # sha256 of the 3.0.0 PyPI sdist (verified 2026-06-17; sdist confirmed complete:
+  # includes src/dfxm_geo/data/configs/*.toml + crystal/cif.py).
+  sha256: 8a5a3e130b5d78b39f6acf3e69540944a9515221abe866d3fb8b2a1af94ec70b
 
 build:
   number: 0
