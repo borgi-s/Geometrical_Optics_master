@@ -50,9 +50,11 @@ Top row: the (negated) ϕ and χ center-of-mass (COM) maps extracted from the ro
 - **Language:** Python 3.11+
 - **Key libraries:** NumPy, SciPy, numba, h5py, matplotlib; optional `gemmi` for CIF input
 - **Geometry:** symmetric and oblique-angle diffraction; single- and multi-reflection runs; any of the seven crystal systems via explicit cell parameters or a CIF file
+- **Crystals:** FCC, BCC, and HCP slip-system registries with structure-factor extinction and per-material elasticity
+- **Detector:** measured uint16-ADU model (gain, exposure-dependent dark, read noise, Poisson, full-well clamp) or raw float32; user-tunable exposure
 - **HPC:** Batch templates for LSF (DTU Sophia) and SLURM (ESRF clusters); in-node config fan-out for large image batches
 - **I/O:** HDF5 / BLISS-schema outputs (master + per-scan layout) readable by `silx` and `darfix`
-- **Testing:** pytest (900+ tests) with reference golden datasets; mypy-clean
+- **Testing:** pytest (1100+ tests) with reference golden datasets; mypy-clean
 - **License:** MIT
 
 ## Install
@@ -124,6 +126,6 @@ Developed during PhD research at DTU Physics in collaboration with ESRF (Europea
 
 ## Roadmap
 
-Latest release: **v2.5.1** (2026-06) — identification throughput work (persistent worker pool, fused numba strain engine, config fan-out) reaching ≥5× on cluster nodes. Earlier milestones added oblique-angle diffraction geometry (v2.1–v2.3), the closed-form analytic resolution backend, and multi-reflection runs.
+Latest release: **v3.0.0** (2026-06) — a major release that generalizes the model beyond cubic FCC. It adds CIF crystal-structure input with space-group extinction rules, general crystal-cell geometry (all seven systems), and slip-system registries for **FCC, BCC, and HCP** (FCC {111}⟨110⟩; BCC {110}⟨111⟩ + {112}⟨111⟩, 24 systems; HCP basal / prismatic / pyramidal ⟨a⟩ and ⟨c+a⟩, 30 systems). It also replaces the additive-noise model with a **measured, realistic uint16-ADU detector model** (PCO-edge at ESRF ID03; a new `[detector]` block — a breaking change from `[noise]`), with `exposure_time` as a user-tunable brightness knob. See [docs/release-notes-3.0.0.md](docs/release-notes-3.0.0.md) and [docs/crystal-structures.md](docs/crystal-structures.md). Earlier milestones added oblique-angle diffraction geometry, the closed-form analytic resolution backend, multi-reflection runs, and the cluster fan-out / fused numba strain engine for large image batches.
 
-In development for **v3.0.0** — general crystal-cell geometry (all seven systems) and CIF crystal-structure input with space-group extinction rules, broadening the model beyond cubic FCC toward ceramics and other lattices. Slip-system registries for **FCC and BCC** (24 systems, {110}⟨111⟩ + {112}⟨111⟩) have already landed (see [docs/crystal-structures.md](docs/crystal-structures.md)); HCP (basal/prismatic/pyramidal ⟨c+a⟩ families) follows in Stage 4.3b. Also tracked: Zenodo deposit of reference datasets, and darling/darfix interop polish (see follow-up issues).
+Next (**v3.x**): pinning the absolute detector intensity calibration (`counts_scale`) against rocking-curve data, anisotropic (full `C_ijkl`) elasticity, Zenodo deposit of reference datasets, and darling/darfix interop polish.
