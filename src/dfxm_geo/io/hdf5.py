@@ -99,12 +99,21 @@ def _set_nx_class(grp: h5py.Group, cls: str) -> None:
 def _get_git_sha_and_dirty() -> tuple[str, bool]:
     """Return (sha, dirty) for the current repo, or ("unknown", False)."""
     try:
+        # stdin=DEVNULL: never inherit the parent's stdin. Behind an stdio
+        # server (e.g. an MCP transport) the parent's stdin is a live JSON-RPC
+        # pipe; a git child that inherits it makes communicate() block forever.
         sha = _subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], stderr=_subprocess.DEVNULL, text=True
+            ["git", "rev-parse", "HEAD"],
+            stdin=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+            text=True,
         ).strip()
         dirty = bool(
             _subprocess.check_output(
-                ["git", "status", "--porcelain"], stderr=_subprocess.DEVNULL, text=True
+                ["git", "status", "--porcelain"],
+                stdin=_subprocess.DEVNULL,
+                stderr=_subprocess.DEVNULL,
+                text=True,
             ).strip()
         )
         return sha, dirty
