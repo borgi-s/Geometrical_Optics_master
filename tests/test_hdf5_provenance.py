@@ -12,6 +12,42 @@ import pytest
 from dfxm_geo.io.hdf5 import _write_provenance
 
 
+def test_get_git_sha_and_dirty_isolates_subprocess_stdin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The git-provenance subprocess must NOT inherit the parent's stdin.
+
+    Behind an stdio server (e.g. dfxm-geo-mcp's MCP transport) the parent's
+    stdin is the live JSON-RPC pipe; a ``git`` child that inherits that handle
+    makes ``subprocess.communicate()`` block forever, hanging the whole call.
+    Pinning ``stdin=DEVNULL`` removes the inherited handle. Regression guard for
+    the embedded/stdio use case (a bare ``check_output`` would re-introduce it).
+    """
+    import subprocess
+
+    from dfxm_geo.io import hdf5
+
+    calls: list[tuple[list[str], dict]] = []
+
+    class _FakeSub:
+        DEVNULL = subprocess.DEVNULL
+        CalledProcessError = subprocess.CalledProcessError
+
+        @staticmethod
+        def check_output(cmd: list[str], **kwargs: object) -> str:
+            calls.append((cmd, kwargs))
+            return "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
+
+    monkeypatch.setattr(hdf5, "_subprocess", _FakeSub)
+
+    hdf5._get_git_sha_and_dirty()
+
+    assert len(calls) == 2  # `git rev-parse HEAD` + `git status --porcelain`
+    for cmd, kwargs in calls:
+        assert cmd[0] == "git"
+        assert kwargs.get("stdin") is subprocess.DEVNULL
+
+
 def test_write_provenance_basic_fields(tmp_path: Path) -> None:
     out = tmp_path / "test.h5"
     with h5py.File(out, "w") as f:
