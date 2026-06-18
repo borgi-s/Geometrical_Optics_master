@@ -531,7 +531,7 @@ When any model is active, the following attributes are written onto the
 | ------------------ | ------- | ------------------------- | -------------------------------------------- |
 | `detector_model`   | str     | `"pco_edge_4.2_id03"`     | Model identifier                             |
 | `exposure_time`    | float64 | `1.0`                     | Exposure time used for offset calculation (s)|
-| `counts_scale`     | float64 | `1.0e4`                   | Physics-to-photon scaling factor             |
+| `counts_scale`     | float64 | `666.67`                  | Physics-to-photon scaling factor (provisional default `1.0e4 / 15`) |
 | `detector_gain`    | float64 | `2.14`                    | ADU per photon (fitted)                      |
 | `detector_offset`  | float64 | `110.0`                   | Baseline ADU offset at t = exposure_time (s) |
 | `detector_spec`    | str     | `"2026-06-12-detector-noise-model-design"` | Provenance slug identifying the design-spec document that defines this detector model |

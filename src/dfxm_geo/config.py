@@ -701,7 +701,9 @@ class DetectorConfig:
 
     model: str = "pco_edge_4.2_id03"
     exposure_time: float = 1.0
-    counts_scale: float = 1.0e4  # provisional anchor; data-anchored derivation NOT yet pinned (fails per-pixel sanity due to optic/pixel-pitch mismatch) — see docs/detector-noise-model.md and docs/calibration/derive_counts_scale.py
+    counts_scale: float = (
+        1.0e4 / 15
+    )  # provisional anchor ~667 ADU/s (15x below the old 1.0e4); the rocking-curve study puts the true value at O(1e2-1e3) in the weak-beam regime, so 1e4 was ~15-30x too high — pin still OPEN, see docs/calibration/counts_scale_rocking_study_2026-06-16.md
     rng_seed: int = 0
 
     def __post_init__(self) -> None:
