@@ -69,7 +69,7 @@ def test_identification_scan_config_defaults():
     detector = DetectorConfig()
     assert detector.model == "pco_edge_4.2_id03"
     assert detector.rng_seed == 0
-    assert detector.counts_scale == 1.0e4
+    assert detector.counts_scale == 1.0e4 / 15
 
 
 def test_identification_montecarlo_config_defaults():
