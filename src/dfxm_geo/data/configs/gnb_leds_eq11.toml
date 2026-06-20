@@ -33,7 +33,7 @@ mode     = "gnb"
 [crystal.gnb]
 recipe    = "leds_eq11"     # (111) pure-twist: two-set, n=a=(1,1,1), ratio 1:1
 theta_deg = 0.05            # misorientation across boundary (degrees)
-extent_um = 25.0            # in-plane half-width rendered per family (um); should exceed FOV
+extent_um = 25.0            # total in-plane width rendered per family (um); should exceed FOV
 
 [scan.phi]
 value = 0.0

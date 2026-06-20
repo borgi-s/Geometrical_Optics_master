@@ -298,7 +298,7 @@ class GnbCrystalConfig:
 
     `recipe` selects a named Frank-equation recipe (leds_eq11, leds_eq14,
     frankus) or 'custom', in which case `custom` must supply the full set list.
-    `theta_deg` is the misorientation angle; `extent_um` is the FOV half-width.
+    `theta_deg` is the misorientation angle; `extent_um` is the total in-plane width.
     """
 
     recipe: str  # leds_eq11 | leds_eq14 | frankus | custom

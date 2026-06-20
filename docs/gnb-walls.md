@@ -36,7 +36,7 @@ mode     = "gnb"
 [crystal.gnb]
 recipe    = "leds_eq11" # (111) two-set pure-twist
 theta_deg = 0.05        # misorientation angle (degrees)
-extent_um = 25.0        # in-plane half-width rendered per family (µm)
+extent_um = 25.0        # total in-plane width rendered per family (µm)
 ```
 
 Full runnable configs are provided in
@@ -49,7 +49,7 @@ Full runnable configs are provided in
 |---|---|---|---|
 | `recipe` | string | yes | `"leds_eq11"`, `"leds_eq14"`, `"frankus"`, or `"custom"` |
 | `theta_deg` | float (> 0) | yes | Misorientation angle across the boundary, degrees |
-| `extent_um` | float (> 0) | yes | In-plane half-width rendered per dislocation family, µm |
+| `extent_um` | float (> 0) | yes | Total in-plane width rendered per dislocation family, µm |
 | `max_dislocations` | int | no | Safety cap; raises if the total dislocation count exceeds this |
 
 For `recipe = "custom"` an additional `[crystal.gnb.custom]` block is required
@@ -161,9 +161,10 @@ Smaller θ produces fewer, more widely spaced lines.
 
 ## `extent_um` — in-plane width
 
-`extent_um` sets the half-width of the rendered wall in micrometres.  The
-builder places dislocation lines symmetrically over `[−extent_um/2, +extent_um/2]`
-in the in-plane direction perpendicular to each family's line direction.
+`extent_um` sets the total in-plane width of the rendered wall in micrometres.
+The builder places dislocation lines symmetrically over `[−extent_um/2, +extent_um/2]`
+(a total span equal to `extent_um`) in the in-plane direction perpendicular to each
+family's line direction.
 This should be set **larger than the imaging field of view** (typically ~20 µm)
 so the wall fills the entire frame.  Setting it too small produces a truncated
 wall.
@@ -279,6 +280,9 @@ Hirth & Lothe isotropic solution with a single scalar ν.  See the
 structures page.
 
 **FCC recipes only in the built-in registry.** The three built-in recipes are
-written for FCC {111}⟨110⟩ slip.  The `custom` hatch accepts any slip system,
-including BCC and HCP families, but the recipe vectors must be supplied by the
-user.
+written for FCC {111}⟨110⟩ slip.  The `custom` hatch accepts any slip system
+for **cubic** structures (FCC and BCC); the recipe vectors must be supplied by
+the user.  Non-cubic custom recipes (e.g. HCP) are a planned follow-up:
+plane normals require reciprocal-space (B-matrix) handling that is not yet
+implemented, and `build_wall_population` raises `NotImplementedError` for
+non-cubic cells.

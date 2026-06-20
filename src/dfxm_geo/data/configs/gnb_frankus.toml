@@ -38,7 +38,7 @@ mode     = "gnb"
 [crystal.gnb]
 recipe    = "frankus"       # (010) twist: three-set, n=a=(0,1,0), ratio 1:1:1 (approximate)
 theta_deg = 0.05            # misorientation across boundary (degrees)
-extent_um = 25.0            # in-plane half-width rendered per family (um); should exceed FOV
+extent_um = 25.0            # total in-plane width rendered per family (um); should exceed FOV
 
 [scan.phi]
 value = 0.0

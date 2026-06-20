@@ -13,7 +13,10 @@ _TOL = 1e-9
 
 def _unit(v) -> np.ndarray:
     v = np.asarray(v, dtype=np.float64)
-    return v / np.linalg.norm(v)
+    nrm = np.linalg.norm(v)
+    if nrm == 0.0:
+        raise ValueError("cannot normalize a zero vector")
+    return v / nrm
 
 
 def _cartesian(miller, cell) -> np.ndarray:
@@ -158,7 +161,7 @@ def build_wall_population(
     theta_deg : float
         Misorientation angle across the boundary (degrees).
     extent_um : float
-        Half-width of the wall extent in micrometres; dislocations are placed
+        Total in-plane width of the wall in micrometres; dislocations are placed
         symmetrically over [-extent_um/2, +extent_um/2].
     cell : UnitCell
         Crystal unit cell (cubic for FCC recipes).
@@ -174,6 +177,13 @@ def build_wall_population(
     -------
     DislocationPopulation
     """
+    if cell is not None and not cell.is_cubic:
+        raise NotImplementedError(
+            "gnb walls currently support cubic cells only (FCC/BCC); non-cubic "
+            "(e.g. HCP) custom recipes are a follow-up because plane normals need "
+            "reciprocal-space (B-matrix) handling. See docs/gnb-walls.md."
+        )
+
     from dfxm_geo.direct_space.forward_model import (  # function-local: breaks import cycle  # type: ignore[attr-defined]
         DislocationPopulation,
         _ud_matrix_from_bnt,

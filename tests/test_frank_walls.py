@@ -164,6 +164,26 @@ def test_lines_lie_in_boundary_plane_crystal():
     assert np.max(np.abs(pop.positions_um @ n_hat)) < 1e-6
 
 
+def test_unit_raises_on_zero_vector():
+    with pytest.raises(ValueError, match="zero vector"):
+        fw._unit([0.0, 0.0, 0.0])
+
+
+def test_build_wall_population_rejects_non_cubic_cell():
+    # Hexagonal UnitCell (Ti: a=3.21 Å, c=5.21 Å, gamma=120°) is non-cubic.
+    hex_cell = UnitCell.from_lattice("hexagonal", a=3.21e-10, c=5.21e-10)
+    assert not hex_cell.is_cubic
+    with pytest.raises(NotImplementedError, match="cubic"):
+        fw.build_wall_population(
+            fw.RECIPES["leds_eq11"],
+            theta_deg=0.05,
+            extent_um=10.0,
+            cell=hex_cell,
+            ny=0.334,
+            crystal_to_lab=np.eye(3),
+        )
+
+
 def test_built_line_directions_equal_xi():
     # rotation_deg must rotate the kernel reference edge t0 = b x n (= post-flip Ud[:,2])
     # about the slip-plane normal (Ud[:,1]) onto each set's xi. This directly locks the
