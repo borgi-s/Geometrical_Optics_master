@@ -1331,6 +1331,7 @@ def build_dislocation_population(
     rng: np.random.Generator | None,
     *,
     mount: "CrystalMount | None" = None,
+    theta: np.ndarray | None = None,
 ) -> DislocationPopulation:
     """Dispatch on crystal.mode and realize the dislocation population.
 
@@ -1423,14 +1424,23 @@ def build_dislocation_population(
             # the recipes are written in, and the legacy FCC ν (POISSON_RATIO).
             cell_g = UnitCell.cubic(4.05e-10)
             ny_g = POISSON_RATIO
-        # boundary-plane placement = sample->grain rotation Us (gnb spike 2026-06-20)
+        # Crystal->lab placement frame. Each dislocation's strain field is rendered
+        # through rd = Ud.T @ Us.T @ S.T @ Theta @ (rl - offset), so the position
+        # offsets must live in the SAME lab frame: crystal_to_lab = Theta.T @ Us
+        # (S = I for the cubic FCC/BCC recipes). The 2026-06-20 spike used Us alone,
+        # assuming a simplified-geometry Theta = I; but Theta = R_y(theta_Bragg) is
+        # never identity, so that left the cores rotated by ~theta_Bragg from their
+        # own fields (followup Bug 2). The orchestrator passes the run's
+        # ctx.geometry.Theta; theta is None only for direct unit-test calls without
+        # a run geometry, where Us (no Bragg tilt) is an acceptable fallback.
+        crystal_to_lab = Us if theta is None else (np.asarray(theta, dtype=np.float64).T @ Us)
         return build_wall_population(
             g.to_recipe(),
             theta_deg=g.theta_deg,
             extent_um=g.extent_um,
             cell=cell_g,
             ny=ny_g,
-            crystal_to_lab=Us,
+            crystal_to_lab=crystal_to_lab,
             max_dislocations=g.max_dislocations,
         )
 

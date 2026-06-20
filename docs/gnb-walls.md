@@ -201,15 +201,27 @@ backend.
 
 ## Frame model
 
-Dislocation positions are placed in the **lab frame** via the sample→grain
-rotation matrix `Us` (the module-level constant in `dfxm_geo.direct_space.
-forward_model`).  This is the only placement that keeps the dislocation field
-lines coplanar with the boundary plane the position comb occupies.  Using the
-identity matrix or `Us.T` instead causes the field lines to pierce the boundary
-by 18–60° — an incoherent wall (verified in the Task-1 spike,
-`docs/superpowers/notes/2026-06-20-gnb-spike-findings.md`).  The crystal mount
-(`mount_x/y/z`) controls only the reflection/Q path and does not appear in
-the displacement-field placement.
+Dislocation positions are placed in the **lab frame** via `Theta.T @ Us`, where
+`Us` is the sample→grain rotation (the module-level constant in
+`dfxm_geo.direct_space.forward_model`) and `Theta = R_y(theta_Bragg)` is the
+run's lab→sample (Bragg-tilt) rotation.  This is the only placement that keeps
+the dislocation field lines coplanar with the boundary plane the position comb
+occupies, because each dislocation's strain field is rendered through the full
+chain `rd = Ud.T @ Us.T @ S.T @ Theta @ (rl - offset)` (S = I for the cubic
+FCC/BCC recipes), so the field's line direction in the lab is `Theta.T @ Us @ ξ`.
+Placing with `Us` alone (a Theta-less simplification) leaves the field lines
+piercing the boundary by ~theta_Bragg — an incoherent wall.
+
+> The 2026-06-20 spike (`docs/superpowers/notes/2026-06-20-gnb-spike-findings.md`)
+> originally pinned the placement to `Us`, assuming `Theta = I` in simplified
+> geometry; but `Theta = R_y(theta_Bragg)` is never identity (it is built for both
+> simplified and oblique runs in `build_geometry_context`), so the Theta factor
+> was added in the 2026-06-20 placement followup fix.
+
+Because `Theta` is per-reflection, multi-reflection (`[[reflections]]`) runs place
+the wall independently for each Bragg condition (physically correct — the sample
+tilts to each reflection).  The crystal mount (`mount_x/y/z`) controls only the
+reflection/Q path and does not appear in the displacement-field placement.
 
 ## Schmid–Boas sign reconciliation
 

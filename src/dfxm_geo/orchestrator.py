@@ -366,8 +366,38 @@ def _run_simulation_inner(
         Nsub=config.detector_geometry.Nsub,
     )
     fov_lateral_um = instr.Npixels * instr.psize * 1e6  # m -> um
+
+    # Snapshot the run's ForwardContext BEFORE the population.  build_forward_context
+    # calls build_geometry_context(run_theta(config), ...) which computes
+    # Theta/rl/prob_z from the correct Bragg angle (oblique or simplified) — no
+    # module globals needed.  S2a+S3 (#16): CM call site removed; ctx is the sole
+    # geometry source.  M3 plan 2 (B'): per-reflection runs use _context_for_run
+    # which threads the run's hkl and omega; single-reflection uses the config-level
+    # hkl with omega=0 (the original code path).  ctx is built first because the gnb
+    # crystal mode needs the run's Theta (ctx.geometry.Theta) to place the wall in
+    # its field's lab frame (Theta.T @ Us); every other mode ignores `theta`.
+    if reflection is not None:
+        # Multi-reflection path: _context_for_run calls build_forward_context
+        # WITHOUT an instrument= kwarg, so the context uses the module-global
+        # detector geometry (Npixels=510, psize=40nm).  Threading `instr` here
+        # is a documented [detector_geometry] follow-up; single-reflection
+        # (the else branch) already threads `instr` correctly.
+        ctx = _context_for_run(res, reflection, cell=_mount_cell(config))
+    else:
+        ctx = fm.build_forward_context(
+            run_theta(config),
+            res,
+            config.reciprocal.hkl,
+            instrument=instr,
+            cell=_mount_cell(config),
+        )
+
     population = fm.build_dislocation_population(
-        config.crystal, fov_lateral_um=fov_lateral_um, rng=None, mount=config.geometry.mount
+        config.crystal,
+        fov_lateral_um=fov_lateral_um,
+        rng=None,
+        mount=config.geometry.mount,
+        theta=ctx.geometry.Theta,
     )
 
     # Write sidecar BEFORE forward kernel so a forward crash still leaves
@@ -390,29 +420,6 @@ def _run_simulation_inner(
         f"axes_scanned={config.scan.scanned_axes()}",
         flush=True,
     )
-
-    # Snapshot the run's ForwardContext.  build_forward_context calls
-    # build_geometry_context(run_theta(config), ...) which computes Theta/rl/prob_z
-    # from the correct Bragg angle (oblique or simplified) — no module globals needed.
-    # S2a+S3 (#16): CM call site removed; ctx is the sole geometry source.
-    # M3 plan 2 (B'): per-reflection runs use _context_for_run which threads the
-    # run's hkl and omega into the ForwardContext; single-reflection uses the
-    # config-level hkl with omega=0 (the original code path).
-    if reflection is not None:
-        # Multi-reflection path: _context_for_run calls build_forward_context
-        # WITHOUT an instrument= kwarg, so the context uses the module-global
-        # detector geometry (Npixels=510, psize=40nm).  Threading `instr` here
-        # is a documented [detector_geometry] follow-up; single-reflection
-        # (the else branch) already threads `instr` correctly.
-        ctx = _context_for_run(res, reflection, cell=_mount_cell(config))
-    else:
-        ctx = fm.build_forward_context(
-            run_theta(config),
-            res,
-            config.reciprocal.hkl,
-            instrument=instr,
-            cell=_mount_cell(config),
-        )
 
     # Wall mode preserves legacy Find_Hg path (Fg cache + sidecar _vars.txt).
     # Centered + random_dislocations use Find_Hg_from_population.
