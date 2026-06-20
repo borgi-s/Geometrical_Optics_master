@@ -89,3 +89,26 @@ def test_frank_residual_matches_solver():
     r = _eq11()
     rho_hat, resid = fw.solve_density_scale(r, 0.05, CUBIC)
     assert fw.frank_residual(r, rho_hat, 0.05, CUBIC) < 1e-6
+
+
+@pytest.mark.parametrize(
+    "name,strict", [("leds_eq11", True), ("leds_eq14", True), ("frankus", False)]
+)
+@pytest.mark.parametrize("theta", [0.02, 0.05, 0.2])
+def test_registry_recipes_satisfy_frank(name, strict, theta):
+    r = fw.RECIPES[name]
+    r.validate(CUBIC)
+    rho_hat, resid = fw.solve_density_scale(r, theta, CUBIC)
+    tol = 1e-6 if strict else r.frank_tol
+    assert resid < tol, f"{name} residual {resid:.2e} >= {tol:.2e}"
+    assert fw.frank_residual(r, rho_hat, theta, CUBIC) < tol
+
+
+def test_eq14_density_ratio_1_1_3():
+    r = fw.RECIPES["leds_eq14"]
+    rels = [s.rel_density for s in r.sets]
+    assert rels == [1.0, 1.0, 3.0]
+
+
+def test_frankus_documents_discrepancy():
+    assert fw.RECIPES["frankus"].frank_tol >= 1e-3  # approximate per the paper

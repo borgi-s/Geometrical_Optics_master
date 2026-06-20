@@ -119,3 +119,42 @@ def frank_residual(recipe, rho_hat, theta_deg, cell, n_test=8, seed=0) -> float:
         rhs = k * np.cross(V, a_hat)
         worst = max(worst, float(np.linalg.norm(G @ V - rhs) / (np.linalg.norm(rhs) + 1e-300)))
     return worst
+
+
+RECIPES: dict[str, WallRecipe] = {
+    "leds_eq11": WallRecipe(
+        name="leds_eq11",
+        n=(1, 1, 1),
+        a=(1, 1, 1),
+        sets=(
+            DislocationSet(b=(1, 0, -1), xi=(2, -1, -1), slip_plane=(1, 1, 1), rel_density=1.0),
+            DislocationSet(b=(0, 1, -1), xi=(-1, 2, -1), slip_plane=(1, 1, 1), rel_density=1.0),
+        ),
+        frank_tol=1e-6,
+    ),
+    "leds_eq14": WallRecipe(
+        name="leds_eq14",
+        n=(1, 1, 1),
+        a=(-1, 3, 1),
+        sets=(
+            DislocationSet(b=(1, 0, -1), xi=(1, 0, -1), slip_plane=(1, 1, 1), rel_density=1.0),
+            DislocationSet(b=(0, 1, -1), xi=(1, 0, -1), slip_plane=(1, 1, 1), rel_density=1.0),
+            DislocationSet(b=(1, 0, 1), xi=(1, -1, 0), slip_plane=(1, 1, -1), rel_density=3.0),
+        ),
+        frank_tol=1e-6,
+    ),
+    # frankus: APPROXIMATE per the paper (Sina's decision). In-plane B2/B5 candidate
+    # (1:1:1) matches the paper's relaxed densities; the paper's ideal Eq.2 ratio is
+    # 2:2:1 — documented discrepancy, flagged for G. Winther. See spike findings.
+    "frankus": WallRecipe(
+        name="frankus",
+        n=(0, 1, 0),
+        a=(0, 1, 0),
+        sets=(
+            DislocationSet(b=(1, -1, 0), xi=(1, 0, -1), slip_plane=(1, 1, 1), rel_density=1.0),
+            DislocationSet(b=(0, 1, -1), xi=(1, 0, -1), slip_plane=(1, 1, 1), rel_density=1.0),
+            DislocationSet(b=(1, 0, 1), xi=(1, 0, 1), slip_plane=(1, 1, -1), rel_density=1.0),
+        ),
+        frank_tol=2e-2,
+    ),
+}
