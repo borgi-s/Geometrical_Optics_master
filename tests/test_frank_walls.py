@@ -66,12 +66,23 @@ def test_solver_residual_tiny_for_eq11():
     assert np.allclose(rho_hat[0], rho_hat[1])  # ratio 1:1
 
 
-def test_spacing_matches_frank_relation():
-    rho_hat, _ = fw.solve_density_scale(_eq11(), theta_deg=0.05, cell=CUBIC)
+def test_spacing_scaling_and_geometric_factor():
+    # solve_density_scale returns the EXACT Frank solution. The simple
+    # estimate d ~ |b|/(2 sin(theta/2)) carries a recipe-specific geometric
+    # factor; for leds_eq11 (two in-plane Burgers 60deg apart on (111)) that
+    # factor is sqrt(3)/2. Verify (1) the exact inverse-sin(theta/2) scaling
+    # law (recipe-agnostic) and (2) the exact eq11 geometric factor.
     b_m = burgers_magnitude_of((1, 0, -1), CUBIC, fraction=1.0) * 1e-6
-    d_expected = b_m / (2 * np.sin(np.deg2rad(0.05) / 2))
-    d_actual = 1.0 / rho_hat[0]
-    assert d_actual == pytest.approx(d_expected, rel=0.05)
+    rho_a, _ = fw.solve_density_scale(_eq11(), theta_deg=0.05, cell=CUBIC)
+    rho_b, _ = fw.solve_density_scale(_eq11(), theta_deg=0.10, cell=CUBIC)
+    d_a, d_b = 1.0 / rho_a[0], 1.0 / rho_b[0]
+    # (1) exact scaling: d ∝ 1/sin(theta/2)
+    assert d_a / d_b == pytest.approx(
+        np.sin(np.deg2rad(0.10) / 2) / np.sin(np.deg2rad(0.05) / 2), rel=1e-4
+    )
+    # (2) exact eq11 geometric factor sqrt(3)/2 vs the simple estimate
+    d_simple = b_m / (2 * np.sin(np.deg2rad(0.05) / 2))
+    assert d_a == pytest.approx((np.sqrt(3) / 2) * d_simple, rel=1e-3)
 
 
 def test_frank_residual_matches_solver():
