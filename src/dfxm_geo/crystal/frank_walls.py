@@ -121,6 +121,115 @@ def frank_residual(recipe, rho_hat, theta_deg, cell, n_test=8, seed=0) -> float:
     return worst
 
 
+def _edge_t(slip_plane, b) -> np.ndarray:
+    """Input t vector for _ud_matrix_from_bnt (before the det-flip inside it).
+
+    After the flip, Ud[:,2] = b×n (the kernel's reference edge t_0).
+    We still pass slip_plane×b here as the 'raw' t so that the det-flip
+    inside _ud_matrix_from_bnt yields the correct b×n column.
+    """
+    return np.cross(np.asarray(slip_plane, float), np.asarray(b, float))
+
+
+def _signed_angle(t0: np.ndarray, target: np.ndarray, axis: np.ndarray) -> float:
+    """Signed angle (deg) rotating t0 -> target about axis. All args Cartesian."""
+    t0h, th, ax = _unit(t0), _unit(target), _unit(axis)
+    sin = float(np.cross(t0h, th) @ ax)
+    cos = float(np.clip(t0h @ th, -1.0, 1.0))
+    return float(np.degrees(np.arctan2(sin, cos)))
+
+
+def build_wall_population(
+    recipe,
+    *,
+    theta_deg,
+    extent_um,
+    cell,
+    ny,
+    crystal_to_lab,
+    max_dislocations=None,
+):
+    """Assemble a DislocationPopulation for the gnb crystal mode.
+
+    Parameters
+    ----------
+    recipe : WallRecipe
+        Validated Frank-equation recipe (from RECIPES or custom).
+    theta_deg : float
+        Misorientation angle across the boundary (degrees).
+    extent_um : float
+        Half-width of the wall extent in micrometres; dislocations are placed
+        symmetrically over [-extent_um/2, +extent_um/2].
+    cell : UnitCell
+        Crystal unit cell (cubic for FCC recipes).
+    ny : float
+        Isotropic Poisson ratio.
+    crystal_to_lab : array-like, shape (3, 3)
+        Rotation from crystal frame to lab/sample frame.
+    max_dislocations : int or None
+        If not None, raise ValueError when the total dislocation count exceeds
+        this limit (guard against accidental huge walls).
+
+    Returns
+    -------
+    DislocationPopulation
+    """
+    from dfxm_geo.direct_space.forward_model import (  # function-local: breaks import cycle  # type: ignore[attr-defined]
+        DislocationPopulation,
+        _ud_matrix_from_bnt,
+    )
+
+    recipe.validate(cell)
+    rho_hat, resid = solve_density_scale(recipe, theta_deg, cell)
+    if resid > recipe.frank_tol:
+        raise ValueError(
+            f"{recipe.name}: Frank residual {resid:.2e} exceeds tol {recipe.frank_tol:.2e}"
+        )
+    n_hat = _unit(_cartesian(recipe.n, cell))
+    R_place = np.asarray(crystal_to_lab, dtype=np.float64)
+
+    positions, Ud_list, rot_list, b_list = [], [], [], []
+    for s, rho in zip(recipe.sets, rho_hat, strict=True):
+        d_um = (1.0 / rho) * 1e6
+        xih = _unit(_cartesian(s.xi, cell))
+        u = _unit(np.cross(n_hat, xih))  # in-plane perpendicular (position offset direction)
+        n_lines = int(np.floor(extent_um / d_um)) + 1
+        ks = np.arange(n_lines) - (n_lines - 1) / 2.0
+        # Build Ud FIRST; the det-flip inside _ud_matrix_from_bnt makes Ud[:,2] = b×n
+        # (the kernel's reference edge t_0). Then measure rotation_deg from Ud[:,2] → xi
+        # about Ud[:,1] (the slip-plane normal).
+        Ud = _ud_matrix_from_bnt(s.b, s.slip_plane, _edge_t(s.slip_plane, s.b))
+        rot = _signed_angle(
+            Ud[:, 2], xih, Ud[:, 1]
+        )  # POST-FLIP edge (b×n) → xi about slip-plane normal
+        b_um = burgers_magnitude_of(s.b, cell, fraction=1.0)
+        for k in ks:
+            positions.append(R_place @ ((k * d_um) * u))
+            Ud_list.append(Ud)
+            rot_list.append(rot)
+            b_list.append(b_um)
+
+    if max_dislocations is not None and len(positions) > max_dislocations:
+        raise ValueError(
+            f"{recipe.name}: {len(positions)} dislocations exceeds max_dislocations="
+            f"{max_dislocations}; increase theta_deg or reduce extent_um"
+        )
+
+    return DislocationPopulation(
+        positions_um=np.asarray(positions, dtype=np.float64),
+        Ud=np.asarray(Ud_list, dtype=np.float64),
+        sidecar={
+            "recipe": recipe.name,
+            "theta_deg": theta_deg,
+            "rho_hat_m_inv": rho_hat.tolist(),
+            "frank_residual": resid,
+        },
+        rotation_deg=np.asarray(rot_list, dtype=np.float64),
+        b_um_per=np.asarray(b_list, dtype=np.float64),
+        ny=ny,
+    )
+
+
 RECIPES: dict[str, WallRecipe] = {
     "leds_eq11": WallRecipe(
         name="leds_eq11",

@@ -112,3 +112,91 @@ def test_eq14_density_ratio_1_1_3():
 
 def test_frankus_documents_discrepancy():
     assert fw.RECIPES["frankus"].frank_tol >= 1e-3  # approximate per the paper
+
+
+def test_build_population_shapes_and_ratio():
+    r = fw.RECIPES["leds_eq11"]
+    pop = fw.build_wall_population(
+        r,
+        theta_deg=0.05,
+        extent_um=10.0,
+        cell=CUBIC,
+        ny=0.334,
+        crystal_to_lab=np.eye(3),
+    )
+    n = pop.positions_um.shape[0]
+    assert pop.Ud.shape == (n, 3, 3)
+    assert pop.rotation_deg.shape == (n,)
+    assert pop.b_um_per.shape == (n,)
+    assert pop.sidecar["recipe"] == "leds_eq11"
+    assert pop.sidecar["frank_residual"] < 1e-6
+
+
+def test_build_population_respects_max_dislocations():
+    # At theta=0.5 deg, extent=50 um the solver yields ~1760 dislocations
+    # (spacing ~0.057 um), which far exceeds max_dislocations=10.
+    r = fw.RECIPES["leds_eq11"]
+    with pytest.raises(ValueError, match="max_dislocations"):
+        fw.build_wall_population(
+            r,
+            theta_deg=0.5,
+            extent_um=50.0,
+            cell=CUBIC,
+            ny=0.334,
+            crystal_to_lab=np.eye(3),
+            max_dislocations=10,
+        )
+
+
+def test_lines_lie_in_boundary_plane_crystal():
+    # With identity placement, in-plane perpendicular offsets ⊥ n in crystal frame.
+    r = fw.RECIPES["leds_eq11"]
+    pop = fw.build_wall_population(
+        r,
+        theta_deg=0.05,
+        extent_um=10.0,
+        cell=CUBIC,
+        ny=0.334,
+        crystal_to_lab=np.eye(3),
+    )
+    n_hat = fw._unit(fw._cartesian(r.n, CUBIC))
+    # every position offset is in the boundary plane (⊥ n) under identity placement
+    assert np.max(np.abs(pop.positions_um @ n_hat)) < 1e-6
+
+
+def test_built_line_directions_equal_xi():
+    # rotation_deg must rotate the kernel reference edge t0 = b x n (= post-flip Ud[:,2])
+    # about the slip-plane normal (Ud[:,1]) onto each set's xi. This directly locks the
+    # Task-1 sign correction; the brief's slip_plane x b formula would fail here (180 deg off).
+    def _rodrigues(axis, deg):
+        a = axis / np.linalg.norm(axis)
+        th = np.deg2rad(deg)
+        c, s = np.cos(th), np.sin(th)
+        K = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
+        return np.eye(3) * c + (1 - c) * np.outer(a, a) + s * K
+
+    for name in ("leds_eq11", "leds_eq14"):
+        r = fw.RECIPES[name]
+        pop = fw.build_wall_population(
+            r,
+            theta_deg=0.1,
+            extent_um=5.0,
+            cell=CUBIC,
+            ny=0.334,
+            crystal_to_lab=np.eye(3),
+        )
+        for i in range(pop.Ud.shape[0]):
+            Ud_i = pop.Ud[i]
+            line = _rodrigues(Ud_i[:, 1], float(pop.rotation_deg[i])) @ Ud_i[:, 2]
+            line /= np.linalg.norm(line)
+            # identify this dislocation's set by its Burgers column, compare reconstructed line to that set's xi
+            matches = [
+                s
+                for s in r.sets
+                if np.allclose(Ud_i[:, 0], fw._unit(fw._cartesian(s.b, CUBIC)), atol=1e-9)
+            ]
+            assert matches, f"{name}: no set matches b_hat {Ud_i[:, 0]}"
+            xi_hat = fw._unit(fw._cartesian(matches[0].xi, CUBIC))
+            assert np.allclose(line, xi_hat, atol=1e-7), (
+                f"{name} set b={matches[0].b}: reconstructed line {line} != xi {xi_hat}"
+            )
