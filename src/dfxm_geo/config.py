@@ -273,22 +273,98 @@ class RandomDislocationsConfig:
             raise ValueError(f"`min_distance` must be >= 0 when set; got {self.min_distance}")
 
 
-_CRYSTAL_MODE_NAMES = ("centered", "wall", "random_dislocations")
+@dataclass(frozen=True)
+class GnbSetConfig:
+    """One dislocation set in a custom GNB wall recipe."""
+
+    b: tuple[int, int, int]
+    xi: tuple[int, int, int]
+    slip_plane: tuple[int, int, int]
+    rel_density: float
+
+
+@dataclass(frozen=True)
+class GnbCustomConfig:
+    """Custom GNB wall recipe geometry (replaces a named RECIPES entry)."""
+
+    n: tuple[int, int, int]
+    a: tuple[int, int, int]
+    set: tuple[GnbSetConfig, ...]
+
+
+@dataclass(frozen=True)
+class GnbCrystalConfig:
+    """Parameters for mode='gnb' (geometrically-necessary boundary wall).
+
+    `recipe` selects a named Frank-equation recipe (leds_eq11, leds_eq14,
+    frankus) or 'custom', in which case `custom` must supply the full set list.
+    `theta_deg` is the misorientation angle; `extent_um` is the FOV half-width.
+    """
+
+    recipe: str  # leds_eq11 | leds_eq14 | frankus | custom
+    theta_deg: float
+    extent_um: float
+    max_dislocations: int | None = None
+    custom: GnbCustomConfig | None = None
+
+    def __post_init__(self) -> None:
+        if self.theta_deg <= 0:
+            raise ValueError("gnb.theta_deg must be > 0")
+        if self.extent_um <= 0:
+            raise ValueError("gnb.extent_um must be > 0")
+        valid = {"leds_eq11", "leds_eq14", "frankus", "custom"}
+        if self.recipe not in valid:
+            raise ValueError(f"gnb.recipe must be one of {sorted(valid)}, got {self.recipe!r}")
+        if self.recipe == "custom" and self.custom is None:
+            raise ValueError("gnb.recipe='custom' requires a [crystal.gnb.custom] block")
+        if self.recipe != "custom" and self.custom is not None:
+            raise ValueError("gnb.custom is only allowed when recipe='custom'")
+
+    def to_recipe(self):  # -> WallRecipe
+        """Resolve to a WallRecipe (named → registry; custom → built inline)."""
+        from dfxm_geo.crystal.frank_walls import (  # noqa: PLC0415
+            RECIPES,
+            DislocationSet,
+            WallRecipe,
+        )
+
+        if self.recipe != "custom":
+            return RECIPES[self.recipe]
+        c = self.custom
+        assert c is not None
+        return WallRecipe(
+            name="custom",
+            n=c.n,
+            a=c.a,
+            sets=tuple(
+                DislocationSet(
+                    b=s.b,
+                    xi=s.xi,
+                    slip_plane=s.slip_plane,
+                    rel_density=s.rel_density,
+                )
+                for s in c.set
+            ),
+        )
+
+
+_CRYSTAL_MODE_NAMES = ("centered", "wall", "random_dislocations", "gnb")
 
 
 @dataclass
 class CrystalConfig:
-    """Discriminated union over the three crystal-layout modes (sub-project C).
+    """Discriminated union over the crystal-layout modes (sub-project C + gnb).
 
-    Exactly one of `centered`/`wall`/`random_dislocations` is non-None and
-    matches `mode`. Constructed via `CrystalConfig.from_dict` from a TOML
+    Exactly one of `centered`/`wall`/`random_dislocations`/`gnb` is non-None
+    and matches `mode`. Constructed via `CrystalConfig.from_dict` from a TOML
     `[crystal]` table.
     """
 
-    mode: Literal["centered", "wall", "random_dislocations"]
+    mode: Literal["centered", "wall", "random_dislocations", "gnb"]
     centered: CenteredCrystalConfig | None = None
     wall: WallCrystalConfig | None = None
     random_dislocations: RandomDislocationsConfig | None = None
+    gnb: GnbCrystalConfig | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in _CRYSTAL_MODE_NAMES:
@@ -365,6 +441,31 @@ class CrystalConfig:
             kwargs["wall"] = WallCrystalConfig(**sub_data)
         elif mode == "random_dislocations":
             kwargs["random_dislocations"] = RandomDislocationsConfig(**sub_data)
+        elif mode == "gnb":
+            gnb_d = sub_data
+            custom: GnbCustomConfig | None = None
+            if "custom" in gnb_d:
+                cu = gnb_d["custom"]
+                custom = GnbCustomConfig(
+                    n=tuple(cu["n"]),
+                    a=tuple(cu["a"]),
+                    set=tuple(
+                        GnbSetConfig(
+                            b=tuple(s["b"]),
+                            xi=tuple(s["xi"]),
+                            slip_plane=tuple(s["slip_plane"]),
+                            rel_density=float(s["rel_density"]),
+                        )
+                        for s in cu["set"]
+                    ),
+                )
+            kwargs["gnb"] = GnbCrystalConfig(
+                recipe=gnb_d["recipe"],
+                theta_deg=float(gnb_d["theta_deg"]),
+                extent_um=float(gnb_d["extent_um"]),
+                max_dislocations=gnb_d.get("max_dislocations"),
+                custom=custom,
+            )
         return cls(**kwargs)
 
 
