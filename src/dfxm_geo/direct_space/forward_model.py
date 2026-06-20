@@ -1403,6 +1403,37 @@ def build_dislocation_population(
             positions_um=positions, Ud=Ud, sidecar=None, b_um=b_wall, ny=ny
         )
 
+    if crystal.mode == "gnb":
+        # Geometrically-necessary boundary wall (Frank-equation recipe). The
+        # physics lives in crystal.frank_walls; this branch resolves cell + ν
+        # from the mount (oblique) or synthesizes the FCC Al default (simplified
+        # mount=None) and hands off to build_wall_population.
+        from dfxm_geo.crystal.cell import UnitCell  # function-local
+        from dfxm_geo.crystal.frank_walls import (  # function-local: breaks import cycle
+            build_wall_population,
+        )
+
+        g = crystal.gnb
+        assert g is not None  # __post_init__ guarantees for mode="gnb"
+        if mount is not None:
+            cell_g = mount.cell
+            ny_g = mount.resolved_poisson_ratio
+        else:
+            # Simplified geometry has no mount; synthesize the FCC Al cell (m)
+            # the recipes are written in, and the legacy FCC ν (POISSON_RATIO).
+            cell_g = UnitCell.cubic(4.05e-10)
+            ny_g = POISSON_RATIO
+        # boundary-plane placement = sample->grain rotation Us (gnb spike 2026-06-20)
+        return build_wall_population(
+            g.to_recipe(),
+            theta_deg=g.theta_deg,
+            extent_um=g.extent_um,
+            cell=cell_g,
+            ny=ny_g,
+            crystal_to_lab=Us,
+            max_dislocations=g.max_dislocations,
+        )
+
     if crystal.mode == "random_dislocations":
         rd = crystal.random_dislocations
         assert rd is not None
