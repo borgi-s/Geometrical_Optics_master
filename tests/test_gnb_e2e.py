@@ -29,6 +29,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 
 from dfxm_geo.crystal import frank_walls as fw
 from dfxm_geo.crystal.cell import UnitCell
@@ -92,6 +93,9 @@ extent_um = {extent_um}
 
 [scan.phi]
 value = 0.0
+
+[detector]
+model = "ideal"
 
 [io]
 include_perfect_crystal = false
@@ -158,3 +162,79 @@ def test_gnb_simplified_builds_population_without_mount():
     pop = build_dislocation_population(crystal, fov_lateral_um=50.0, rng=None, mount=None)
     assert pop.positions_um.shape[0] > 0
     assert pop.Ud.shape[0] == pop.positions_um.shape[0]
+
+
+# ---------------------------------------------------------------------------
+# Part A: golden snapshot regression tests
+# ---------------------------------------------------------------------------
+
+_GOLDEN_DIR = Path(__file__).parent / "data" / "golden" / "gnb"
+
+
+@pytest.mark.parametrize("recipe", ["leds_eq11", "frankus"])
+def test_gnb_golden_snapshot(tmp_path, recipe):
+    """Regression-snapshot test: rendered image must match the saved golden.
+
+    Determinism is guaranteed by ``[detector] model = "ideal"`` in
+    ``_gnb_toml``, which bypasses all stochastic noise (Poisson + read-out).
+    The analytic resolution backend is also fully deterministic.  The golden
+    is generated once (see the generate script in this file's docstring) and
+    force-added past the repo's ``*.npy`` gitignore.
+    """
+    golden = _GOLDEN_DIR / f"{recipe}_oblique.npy"
+    if not golden.exists():
+        pytest.skip(f"golden {golden} missing — run the generate block in this file")
+    img = _run(tmp_path / recipe, _gnb_toml(recipe))
+    np.testing.assert_allclose(img, np.load(golden), rtol=1e-5, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Part B: g·b = 0 invisibility sanity test
+# ---------------------------------------------------------------------------
+
+# leds_eq11 dislocation sets:
+#   set1  b = [1, 0, -1]  →  g·b1 = h - l
+#   set2  b = [0, 1, -1]  →  g·b2 = k - l
+#
+# Reflection pair chosen (both FCC-allowed, both give finite eta at 17 keV,
+# and SAME {111} family so |g| and resolution function are equivalent):
+#   (1, 1, -1):  g·b1 = 2, g·b2 = 2  → both sets visible
+#   (1, 1,  1):  g·b1 = 0, g·b2 = 0  → BOTH sets simultaneously extinct
+#
+# eta verified finite for both at 17 keV (see task-8-report.md):
+#   (1,1,-1): eta_1=-2.1951  (finite)
+#   (1,1, 1): eta_1=-0.9465  (finite)
+#
+# Physical argument: when g·b = 0 for ALL dislocations, every dislocation
+# strain field is invisible in this reflection → image is nearly uniform
+# (high mean, very low spatial std).  When g·b ≠ 0, dislocations create
+# dark extinction features → lower mean, much higher std.
+# Measured values (analytic backend, ideal detector, leds_eq11 wall):
+#   both-visible  (1,1,-1): std ≈ 0.310
+#   all-extinct   (1,1, 1): std ≈ 0.079  (≈4× reduction)
+#
+# NOTE on partial extinction: comparing a partially-extinct reflection
+# (g·b1=0, g·b2≠0) against the same fully-visible reflection across
+# DIFFERENT hkl values is unreliable because the different eta / rocking
+# geometry changes the mean brightness level, making std a confounded metric.
+# The total-extinction test (g·b = 0 for EVERY dislocation) is
+# unambiguous: the image reverts to near-uniform background.
+
+
+def test_gb_zero_set_drops_contrast(tmp_path):
+    """Total g·b=0 extinction renders the wall nearly uniform (low std).
+
+    leds_eq11 has two sets with b=[1,0,-1] and b=[0,1,-1].  At reflection
+    (1,1,1): g·b1 = h-l = 0 and g·b2 = k-l = 0 → ALL 44 dislocations are
+    simultaneously invisible.  At reflection (1,1,-1): g·b1 = 2 and g·b2 = 2
+    → all dislocations contribute dark contrast features.  Both reflections
+    belong to the FCC {111} family and have finite eta at 17 keV.
+
+    The analytic backend + ideal detector (model = "ideal") make both renders
+    fully deterministic.
+    """
+    img_both = _run(tmp_path / "both", _gnb_toml("leds_eq11", hkl=(1, 1, -1)))
+    img_ext = _run(tmp_path / "ext", _gnb_toml("leds_eq11", hkl=(1, 1, 1)))
+    assert float(img_ext.std()) < float(img_both.std()), (
+        f"Expected all-extinct std ({img_ext.std():.6g}) < both-visible std ({img_both.std():.6g})"
+    )
