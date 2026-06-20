@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from dfxm_geo.crystal.slip_systems import burgers_magnitude_of
+
 _TOL = 1e-9
 
 
@@ -68,3 +70,52 @@ class WallRecipe:
                 )
             if s.rel_density <= 0:
                 raise ValueError(f"{self.name} set {i}: rel_density must be > 0")
+
+
+def _frank_tensor(recipe, rho_hat, cell) -> np.ndarray:
+    n_hat = _unit(_cartesian(recipe.n, cell))
+    G = np.zeros((3, 3))
+    for s, rho in zip(recipe.sets, rho_hat, strict=True):
+        bhat = _unit(_cartesian(s.b, cell))
+        xih = _unit(_cartesian(s.xi, cell))
+        b_m = burgers_magnitude_of(s.b, cell, fraction=1.0) * 1e-6
+        nxxi = np.cross(n_hat, xih)
+        G += rho * np.outer(b_m * bhat, nxxi)
+    return G
+
+
+def _rhs_operator(recipe, theta_deg, cell) -> np.ndarray:
+    a_hat = _unit(_cartesian(recipe.a, cell))
+    ax = np.array(
+        [[0.0, -a_hat[2], a_hat[1]], [a_hat[2], 0.0, -a_hat[0]], [-a_hat[1], a_hat[0], 0.0]]
+    )
+    return -2.0 * np.sin(np.deg2rad(theta_deg) / 2.0) * ax  # R: R@V == 2 sin(θ/2)(V×a)
+
+
+def solve_density_scale(recipe, theta_deg, cell) -> tuple[np.ndarray, float]:
+    n_hat = _unit(_cartesian(recipe.n, cell))
+    rel = np.array([s.rel_density for s in recipe.sets], dtype=np.float64)
+    G0 = _frank_tensor(recipe, rel, cell)  # tensor at rho0 = 1
+    R = _rhs_operator(recipe, theta_deg, cell)
+    e1, e2 = _in_plane_basis(n_hat)
+    g = np.concatenate([G0 @ e1, G0 @ e2])
+    r = np.concatenate([R @ e1, R @ e2])
+    rho0 = float(g @ r / (g @ g))
+    resid = float(np.linalg.norm(rho0 * g - r) / (np.linalg.norm(r) + 1e-300))
+    return rel * rho0, resid
+
+
+def frank_residual(recipe, rho_hat, theta_deg, cell, n_test=8, seed=0) -> float:
+    n_hat = _unit(_cartesian(recipe.n, cell))
+    a_hat = _unit(_cartesian(recipe.a, cell))
+    e1, e2 = _in_plane_basis(n_hat)
+    k = 2.0 * np.sin(np.deg2rad(theta_deg) / 2.0)
+    rng = np.random.default_rng(seed)
+    worst = 0.0
+    G = _frank_tensor(recipe, rho_hat, cell)
+    for _ in range(n_test):
+        c = rng.standard_normal(2)
+        V = c[0] * e1 + c[1] * e2
+        rhs = k * np.cross(V, a_hat)
+        worst = max(worst, float(np.linalg.norm(G @ V - rhs) / (np.linalg.norm(rhs) + 1e-300)))
+    return worst
