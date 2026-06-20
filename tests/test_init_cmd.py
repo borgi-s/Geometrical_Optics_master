@@ -20,9 +20,10 @@ class TestBundledConfigAccessor:
         assert "identification_single.toml" in rels
         assert "variants/dis_1.toml" in rels
         assert "al_oblique_figure3.toml" in rels
-        # 12 shipped templates: default + 3 identification_* + 7 variants
-        # + al_oblique_figure3 (v2.3.0 oblique-angle paper Fig 3B reproduction).
-        assert len(rels) == 12
+        # 14 shipped templates: default + 3 identification_* + 7 variants
+        # + al_oblique_figure3 (v2.3.0 oblique-angle paper Fig 3B reproduction)
+        # + gnb_leds_eq11 + gnb_frankus (gnb wall mode examples, feature/gnb-walls).
+        assert len(rels) == 14
 
 
 class TestDfxmInit:
