@@ -3,13 +3,15 @@
 These tests prove the ``crystal.mode == "gnb"`` branch of
 ``build_dislocation_population`` composes end-to-end:
 
-  * the discriminating frame test (``test_placement_us_makes_field_lines_coherent``)
-    pins the crystal->lab placement to the module-global ``Us`` (sample->grain
-    rotation). This is the ONLY orthogonal map that keeps the dislocation FIELD
-    lines (oriented by the fixed ``Us``: ``line_lab = Us @ xi_hat``) coplanar with
-    the boundary plane the POSITIONS occupy (Task-1 spike). ``eye`` and ``Us.T``
-    make the lines pierce the boundary by 18-60 deg (an incoherent wall). A
-    positions-only assertion is NOT sufficient: it passes for any orthogonal R.
+  * the discriminating frame test (``test_field_frame_placement_is_coherent``)
+    pins the crystal->lab placement to ``Theta.T @ Us`` (Theta = R_y(theta_Bragg);
+    S = I, cubic mount). The field's line direction in the lab is the full chain
+    ``line_lab = Theta.T @ Us @ xi_hat``, so the ONLY placement that keeps the FIELD
+    lines coplanar with the boundary plane the POSITIONS occupy is the same
+    ``Theta.T @ Us``. The 2026-06-20 spike used ``Us`` alone (assuming Theta = I);
+    with the real Theta that leaves the lines piercing the boundary (followup
+    Bug 2). A positions-only assertion is NOT sufficient: it passes for any
+    orthogonal R.
 
   * the analytic+oblique forward render (``test_gnb_forward_renders_finite``)
     runs the whole pipeline kernel-free (mirrors ``tests/test_bcc_e2e.py``).
@@ -117,30 +119,51 @@ def _run(base: Path, body: str) -> np.ndarray:
         return f["/entry_0000/dfxm_sim_detector/image"][...]
 
 
-def test_placement_us_makes_field_lines_coherent():
-    # The field line orientation is ALWAYS Us @ xi_hat (the field is oriented by the
-    # fixed Us). For a coherent wall the field lines must be perpendicular to the lab
-    # boundary-plane normal the POSITIONS occupy (R @ n_hat). This holds ONLY for R = Us;
-    # eye and Us.T make the lines pierce the boundary (Task-1 spike). Positions-only is
-    # NOT sufficient (it passes for any orthogonal R).
+def test_field_frame_placement_is_coherent():
+    """A coherent wall requires the cores to be placed in the field's lab frame.
+
+    Each dislocation's strain field is rendered through the full chain
+    rd = Ud.T @ Us.T @ S.T @ Theta @ (rl - offset), so the field's line direction in
+    the lab is Theta.T @ Us @ xi (S = I, cubic mount). The wall is coherent only when
+    the position comb occupies a boundary plane whose normal is perpendicular to those
+    field lines, i.e. crystal_to_lab = Theta.T @ Us. The 2026-06-20 spike used Us
+    alone, assuming a simplified-geometry Theta = I; but Theta = R_y(theta_Bragg) is
+    never identity, so Us-only placement leaves the field lines piercing the boundary
+    the positions occupy (followup Bug 2). Positions-only is NOT sufficient (it passes
+    for any orthogonal R) — the discriminator is placement frame == field frame.
+    """
     from dfxm_geo.direct_space.forward_model import Us
+
+    mount = CrystalMount(
+        lattice="cubic",
+        a=_AL_A,
+        mount_x=(1, 0, 0),
+        mount_y=(0, 1, 0),
+        mount_z=(0, 0, 1),
+        structure_type="fcc",
+        material="Al",
+    )
+    th = compute_omega_eta(mount, _HKL, _KEV).theta_1  # Bragg angle, the gnb e2e reflection
+    Theta = np.array([[np.cos(th), 0, np.sin(th)], [0, 1, 0], [-np.sin(th), 0, np.cos(th)]])
+    R_field = Theta.T @ Us  # the self-consistent crystal -> lab placement frame
 
     r = fw.RECIPES["leds_eq11"]
     n_hat = fw._unit(fw._cartesian(r.n, CUBIC))
-    field_lines = [fw._unit(Us @ fw._unit(fw._cartesian(s.xi, CUBIC))) for s in r.sets]
+    # field-frame line directions (the truth: full chain, includes Theta)
+    field_lines = [fw._unit(R_field @ fw._unit(fw._cartesian(s.xi, CUBIC))) for s in r.sets]
 
     def max_pierce(R):
         n_lab = fw._unit(R @ n_hat)
         return max(abs(float(L @ n_lab)) for L in field_lines)
 
-    assert max_pierce(Us) < 1e-9  # correct placement: lines in-plane
-    assert max_pierce(np.eye(3)) > 1e-2  # eye is wrong (spike: ~0.35)
-    assert max_pierce(Us.T) > 1e-2  # Us.T is wrong (spike: ~0.88)
-    # and the builder's positions lie in the boundary plane under the Us placement:
+    assert max_pierce(R_field) < 1e-9  # placement frame == field frame: lines in-plane
+    assert max_pierce(Us) > 1e-2  # Theta-less Us placement: lines pierce (Bug 2)
+    assert max_pierce(np.eye(3)) > 1e-2  # eye is wrong too
+    # the builder places the comb in the field-frame boundary plane:
     pop = fw.build_wall_population(
-        r, theta_deg=0.05, extent_um=12.0, cell=CUBIC, ny=0.334, crystal_to_lab=Us
+        r, theta_deg=0.05, extent_um=12.0, cell=CUBIC, ny=0.334, crystal_to_lab=R_field
     )
-    n_lab = fw._unit(Us @ n_hat)
+    n_lab = fw._unit(R_field @ n_hat)
     assert np.max(np.abs(pop.positions_um @ n_lab)) < 1e-6
 
 

@@ -142,6 +142,25 @@ def _signed_angle(t0: np.ndarray, target: np.ndarray, axis: np.ndarray) -> float
     return float(np.degrees(np.arctan2(sin, cos)))
 
 
+def _direction_key(u, decimals: int = 6) -> tuple:
+    """Canonical hashable key for a direction up to sign.
+
+    Two sets that share an in-plane line-spacing direction ``u = n x xi`` (whether
+    parallel or antiparallel) lay their parallel-line combs on the SAME geometric
+    lines, so they must be grouped and interleaved. Rounding + a sign canonical
+    (first significantly-nonzero component positive) collapses ``u`` and ``-u`` to
+    one key. ``+ 0.0`` normalizes any ``-0.0`` to ``0.0``.
+    """
+    u = np.round(np.asarray(u, dtype=np.float64), decimals) + 0.0
+    tol = 10.0 ** (-decimals)
+    for c in u:
+        if abs(c) > tol:
+            if c < 0:
+                u = -u + 0.0
+            break
+    return tuple(u)
+
+
 def build_wall_population(
     recipe,
     *,
@@ -198,11 +217,27 @@ def build_wall_population(
     n_hat = _unit(_cartesian(recipe.n, cell))
     R_place = np.asarray(crystal_to_lab, dtype=np.float64)
 
+    # Bug-1 fix: co-directional sets (sets that share the in-plane spacing
+    # direction u = n x xi, up to sign) would otherwise lay their parallel-line
+    # combs on the SAME geometric lines, fusing two distinct dislocations into a
+    # non-physical super-dislocation. Group sets by u-direction; within a group of
+    # m co-directional sets, offset the j-th set by a fractional phase j/m of the
+    # spacing so the combs interleave instead of coincide. Solitary sets (m=1) get
+    # phase 0 and are unchanged (e.g. leds_eq11's two sets have different u).
+    set_u = [_unit(np.cross(n_hat, _unit(_cartesian(s.xi, cell)))) for s in recipe.sets]
+    _groups: dict[tuple, list[int]] = {}
+    for _i, _u in enumerate(set_u):
+        _groups.setdefault(_direction_key(_u), []).append(_i)
+    phase_of = {
+        _i: j / len(members) for members in _groups.values() for j, _i in enumerate(members)
+    }
+
     positions, Ud_list, rot_list, b_list = [], [], [], []
-    for s, rho in zip(recipe.sets, rho_hat, strict=True):
+    for i, (s, rho) in enumerate(zip(recipe.sets, rho_hat, strict=True)):
         d_um = (1.0 / rho) * 1e6
         xih = _unit(_cartesian(s.xi, cell))
-        u = _unit(np.cross(n_hat, xih))  # in-plane perpendicular (position offset direction)
+        u = set_u[i]  # in-plane perpendicular (position offset direction)
+        phase = phase_of[i]  # 0 for solitary sets; interleaves co-directional sets
         n_lines = int(np.floor(extent_um / d_um)) + 1
         ks = np.arange(n_lines) - (n_lines - 1) / 2.0
         # Build Ud FIRST; the det-flip inside _ud_matrix_from_bnt makes Ud[:,2] = b×n
@@ -214,7 +249,7 @@ def build_wall_population(
         )  # POST-FLIP edge (b×n) → xi about slip-plane normal
         b_um = burgers_magnitude_of(s.b, cell, fraction=1.0)
         for k in ks:
-            positions.append(R_place @ ((k * d_um) * u))
+            positions.append(R_place @ (((k + phase) * d_um) * u))
             Ud_list.append(Ud)
             rot_list.append(rot)
             b_list.append(b_um)
