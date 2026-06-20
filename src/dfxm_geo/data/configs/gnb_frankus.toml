@@ -1,0 +1,54 @@
+# GNB wall (geometrically-necessary boundary) — frankus recipe
+#
+# Simulates a (010) twist boundary in FCC aluminium using the three-set frankus
+# recipe: two in-plane B2/B5-type {111}<110> dislocations (b=[1,-1,0] and
+# b=[0,1,-1]) plus a collinear screw ([1,0,1]) at equal density (ratio 1:1:1).
+# This matches the paper's relaxed DDD densities.
+#
+# NOTE: The paper's Eq. 2 highlights a 2:2:1 density ratio, which is NOT
+# stress-free (directional Frank residual ~40%).  The implementation uses
+# 1:1:1 (exact, 0% residual) — see docs/gnb-walls.md for the full discussion
+# and the flag to co-author G. Winther.
+#
+# The recipe is built APPROXIMATE (loose frank_tol=0.02 in the registry).
+#
+# Kernel-free: analytic resolution backend, no dfxm-bootstrap needed.
+# Run:  dfxm-forward --config gnb_frankus.toml
+
+[reciprocal]
+hkl     = [-1, 1, -1]   # FCC Al (111) reflection, 17 keV
+keV     = 17.0
+backend = "analytic"    # kernel-free: no dfxm-bootstrap needed
+beamstop = false
+
+[geometry]
+mode = "oblique"
+eta  = 2.1950624059     # radians — computed by compute_omega_eta for (cubic identity FCC mount, hkl=(-1,1,-1), 17 keV)
+
+[crystal]
+lattice  = "cubic"
+a        = 4.05e-10         # Al lattice parameter, metres
+structure_type = "fcc"
+material = "Al"             # Poisson ratio nu=0.334 (Simmons & Wang)
+mount_x  = [1, 0, 0]
+mount_y  = [0, 1, 0]
+mount_z  = [0, 0, 1]
+mode     = "gnb"
+
+[crystal.gnb]
+recipe    = "frankus"       # (010) twist: three-set, n=a=(0,1,0), ratio 1:1:1 (approximate)
+theta_deg = 0.05            # misorientation across boundary (degrees)
+extent_um = 25.0            # in-plane half-width rendered per family (um); should exceed FOV
+
+[scan.phi]
+value = 0.0
+
+[detector]
+model = "ideal"             # noise-free; change to "pco_ff" for realistic uint16 ADU
+
+[io]
+include_perfect_crystal = false
+write_strain_provenance = false
+
+[postprocess]
+enabled = false

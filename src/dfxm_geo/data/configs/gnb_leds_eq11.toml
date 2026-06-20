@@ -1,0 +1,49 @@
+# GNB wall (geometrically-necessary boundary) — leds_eq11 recipe
+#
+# Simulates a (111) pure-twist boundary in FCC aluminium using the two-set
+# leds_eq11 Frank-equation recipe: two in-plane {111}<110> mixed dislocations
+# (b=[1,0,-1] and b=[0,1,-1]) at equal density (ratio 1:1) satisfying the
+# Frank equation exactly.  At theta_deg=0.05 the dislocation spacing is
+# ~320 nm ≈ 8 object pixels (psize ≈ 40 nm), making the lines individually
+# resolvable.
+#
+# Kernel-free: analytic resolution backend, no dfxm-bootstrap needed.
+# Run:  dfxm-forward --config gnb_leds_eq11.toml
+
+[reciprocal]
+hkl     = [-1, 1, -1]   # FCC Al (111) reflection, 17 keV
+keV     = 17.0
+backend = "analytic"    # kernel-free: no dfxm-bootstrap needed
+beamstop = false
+
+[geometry]
+mode = "oblique"
+eta  = 2.1950624059     # radians — computed by compute_omega_eta for (cubic identity FCC mount, hkl=(-1,1,-1), 17 keV)
+
+[crystal]
+lattice  = "cubic"
+a        = 4.05e-10         # Al lattice parameter, metres
+structure_type = "fcc"
+material = "Al"             # Poisson ratio nu=0.334 (Simmons & Wang)
+mount_x  = [1, 0, 0]
+mount_y  = [0, 1, 0]
+mount_z  = [0, 0, 1]
+mode     = "gnb"
+
+[crystal.gnb]
+recipe    = "leds_eq11"     # (111) pure-twist: two-set, n=a=(1,1,1), ratio 1:1
+theta_deg = 0.05            # misorientation across boundary (degrees)
+extent_um = 25.0            # in-plane half-width rendered per family (um); should exceed FOV
+
+[scan.phi]
+value = 0.0
+
+[detector]
+model = "ideal"             # noise-free; change to "pco_ff" for realistic uint16 ADU
+
+[io]
+include_perfect_crystal = false
+write_strain_provenance = false
+
+[postprocess]
+enabled = false

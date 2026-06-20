@@ -448,6 +448,18 @@ FCC run with no `[crystal] cif` or `structure_type` set), **none** of these
 attrs are written. The forward and identify outputs remain byte-identical to
 v2.5.x in this case.
 
+## GNB walls — geometrically-necessary boundaries
+
+`dfxm-geo` can also simulate a **geometrically-necessary boundary** (GNB) — a
+planar dislocation wall whose composition is fixed by the Frank equation for a
+prescribed misorientation angle θ.  Set `[crystal] mode = "gnb"` to activate
+this path.
+
+See **[docs/gnb-walls.md](gnb-walls.md)** for the full description: built-in
+recipes (`leds_eq11`, `leds_eq14`, `frankus`), the θ knob and dislocation
+spacing, `extent_um` semantics, simplified vs. oblique geometry, and the
+`custom` recipe escape hatch.
+
 ## Limitations
 
 **Isotropic elasticity only.** The displacement field implemented in
