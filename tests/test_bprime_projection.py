@@ -1,4 +1,9 @@
-"""B-prime omega seam: R_z(omega) @ Us at the projection step only."""
+"""Omega q-path seam: R_z(omega) @ Us at the projection step.
+
+This is the q-path half of full-omega (2026-06-21). The matching rl
+counter-rotation lives in build_geometry_context (see test_full_omega_geometry.py).
+These tests pin the projection-step rotation and that Us itself stays unrotated
+on the instrument context (so omega is applied exactly once on the q side)."""
 
 from __future__ import annotations
 
@@ -57,8 +62,11 @@ def test_omega_rotates_projection(small_hg):
     np.testing.assert_allclose(basew, _R_z(omega) @ base0, rtol=1e-12, atol=1e-18)
 
 
-def test_hg_paths_unaffected_by_omega():
-    """ctx.instrument.Us must stay UN-rotated — Hg computation reads it."""
+def test_instrument_us_stays_unrotated_under_omega():
+    """ctx.instrument.Us must stay UN-rotated: the q-path applies R_z(omega) @ Us
+    locally in precompute_forward_static, and Find_Hg reads the unrotated Us while
+    the rl grid carries the rotation (full-omega). If Us itself were rotated here,
+    omega would be double-counted on the q side."""
     ctxw = fm.build_forward_context(0.3, _dummy_resolution(), (1, 1, 1), omega=0.7)
     ctx0 = fm.build_forward_context(0.3, _dummy_resolution(), (1, 1, 1))
     assert np.array_equal(ctxw.instrument.Us, ctx0.instrument.Us)
