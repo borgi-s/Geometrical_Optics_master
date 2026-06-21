@@ -1,5 +1,60 @@
 # GNB / oblique forward — implement the FULL-OMEGA path (handoff)
 
+## UPDATE 2026-06-21 (later) — FULL-OMEGA IMPLEMENTED + VALIDATED (uncommitted)
+
+Done on branch `fix/gnb-placement-bugs` (worktree `wt-gnb-walls`), **NOT committed**.
+
+- **Fix (one guarded seam):** `build_geometry_context` now counter-rotates the ray
+  grid `rl -> R_z(omega).T @ rl` when `omega != 0` (z preserved -> `prob_z`
+  byte-identical). The q-path keeps `R_z(omega) @ Us` in
+  `precompute_forward_static`, so omega is applied once on each side. Adding the
+  rl rotation flips the old B' into full-omega. Guarded so `omega == 0.0` stays
+  bit-identical.
+- **Convention settled EMPIRICALLY (oracle, not argument):** rotate `rl`, KEEP the
+  offset (it lives in the omega0 lab frame); the field-singular `|Hg|` ridge then
+  lands in the detector at `R_z(omega) @ offset` to grid resolution. So the
+  overlay/core formula is `det = R_z(omega) @ (offset + t*xi)`. (The earlier
+  "counter-rotate offsets / 1.57um mismatch" worry was wrong.)
+- **Handoff diagnosis corrected on two points:** (1) the dominant defect for the
+  COM-map builders was that the SINGLE-reflection oblique path *drops* omega
+  (orchestrator ~387 calls `build_forward_context` with no omega, so omega=0 even
+  though `config.geometry.omega` is resolved) — that is a deliberate M2/M3
+  convention, LEFT AS-IS (changing it churns BCC/HCP/M2/gnb oblique goldens).
+  (2) "off-Bragg at omega=0 -> dark" is FALSE for this GO model: a perfect crystal
+  is bright at every omega (resolution centered at qi=0); omega only orients the
+  LOCAL strain projection. The real test is whether the dislocation contrast lands
+  where the rotated wall predicts (the overlay), which it now does.
+- **Tests:** new `tests/test_full_omega_geometry.py` (rl rotation; z/prob_z
+  preserved; omega=0 plain-mgrid guard; e2e core-at-`R_z(omega)*offset`).
+  `tests/test_bprime_projection.py` docstrings updated (q-path half of full-omega).
+  **Gate: 1107 passed / 70 skipped / 0 failed; mypy 0/52.** omega=0 bit-identical;
+  single-reflection oblique goldens (gnb/bcc/hcp) unchanged; multi-reflection
+  `[[reflections]]` path upgraded B'->full-omega (its physics tests still pass).
+- **Deliverables (in `_gnb_render/`):** `_verifyomega_offset.py` oracle (|Hg| ridge
+  on `R_z(omega)*offset`); `_gnb_grid_standard.py` -> `gnb_leds_eq11_fullomega_4x3.png`
+  + `gnb_leds_eq14_fullomega_4x3.png` (standard centred 4x3 COM grids, overlays);
+  `_gnb_fullomega_grid.py` (3x4 hi-DPI, 4x-pixel FOV, in-plane shift demo);
+  `_gnb_growth_movie.py` (growth movies eq11+eq14, schedule 1..40 by1 / 43..70 by3 /
+  80..400 by10, round-robin centre-outward; -> `gnb_leds_eq{11,14}_growth_fullomega.mp4`).
+- **SINGLE-REFLECTION OMEGA FIXED (2026-06-21):** the single-reflection branch of
+  `_run_simulation_inner` (orchestrator ~387) now threads `omega=config.geometry.omega`,
+  so oblique single-reflection runs render full-omega at the resolved omega
+  (simplified mode resolves omega=0 -> byte-identical). Test:
+  `tests/test_single_reflection_omega.py` (spies the threaded omega). Only the two
+  gnb byte-goldens changed (`tests/data/golden/gnb/{leds_eq11,frankus}_oblique.npy`)
+  -> REGENERATED to the eta/omega-consistent full-omega render via
+  `tests/test_gnb_e2e._regen_goldens()` (the old goldens paired the omega=124 eta
+  with geometry omega=0 -- inconsistent). BCC/HCP/oblique-provenance/identify tests
+  are smoke -> unaffected. **Gate after fix: 1108 passed / 70 skipped / 0 failed,
+  mypy 0/52.**
+- **STILL OPEN:** (b) full-omega +
+  z-scan: `Z_shift` path does NOT counter-rotate rl (only `ctx.geometry.rl` does)
+  — handle if scanning z at oblique reflections; (c) commit/merge decision (the
+  fix needs a physics review — Sina is the author); (d) multi-reflection byte
+  goldens, if any are added later, will reflect full-omega not B'.
+
+---
+
 Date 2026-06-21. Handoff for a NEW session.
 Worktree `C:\Users\borgi\Documents\GM-reworked\wt-gnb-walls`, branch
 `fix/gnb-placement-bugs` (the GNB placement-bug fix is committed `6a9b0c0` and

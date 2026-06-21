@@ -738,8 +738,12 @@ def build_geometry_context(
     Args:
         theta_0_: Bragg angle in radians.
         instrument: ``InstrumentContext`` that provides the detector/grid dims.
-        omega: B' goniometer omega in radians (default 0.0); forwarded to
-            ``GeometryContext`` and consumed ONLY by ``precompute_forward_static``.
+        omega: goniometer omega in radians (default 0.0). Full-omega: when
+            non-zero the ray grid ``rl`` is counter-rotated by ``R_z(omega).T``
+            here (the probed volume rotates with the sample), and the matching
+            ``R_z(omega) @ Us`` is applied to the q-path in
+            ``precompute_forward_static`` — omega applied once on each side.
+            Guarded so ``omega == 0.0`` stays byte-identical (no rl rotation).
     """
     th = float(theta_0_)
     Theta_ = np.array([[np.cos(th), 0, np.sin(th)], [0, 1, 0], [-np.sin(th), 0, np.cos(th)]])
@@ -759,6 +763,19 @@ def build_geometry_context(
             -zl_range_ : zl_range_ : complex(instrument.zl_steps),
         ]
     ).reshape(3, -1)
+    # Full-omega (supersedes the B' approximation): the goniometer rotates the
+    # SAMPLE by omega about lab z, so a fixed detector ray rl_lab probes the
+    # material coordinate R_z(omega).T @ rl_lab. Counter-rotate the ray grid here
+    # (the q-path keeps the matching R_z(omega) @ Us in precompute_forward_static,
+    # so omega is applied once on each side). R_z is about lab z, so the z-row and
+    # the beam profile prob_z are exactly preserved. Guarded on omega != 0.0 so the
+    # default/simplified path stays byte-identical to v2.5.1 (no array copy, no
+    # float-op change). Verified by the offset oracle: the field-singular core then
+    # appears in the detector at R_z(omega) @ offset.
+    if omega != 0.0:
+        from dfxm_geo.crystal.oblique import _R_z
+
+        rl_ = _R_z(omega).T @ rl_
     prob_z_ = np.exp(-0.5 * (rl_[2] / instrument.zl_rms) ** 2)
     return GeometryContext(
         theta_0=th,
@@ -831,19 +848,23 @@ def precompute_forward_static(
 
     ``ctx`` is required (#16 Slice 5): ``Us`` and ``q_hkl`` are sourced from it.
 
-    B' (spec §3, decided 2026-06-11): the diffraction vector and projection
-    rotate with goniometer omega about lab ẑ: ``base_qc = (R_z(ω) @ Us) @ Hg @
-    q_hkl``. The ray grid ``rl``, beam profile, and Hg field stay shared (same
-    probed volume — the B' approximation). Goniometer scan offsets (φ, χ, 2θ)
-    remain lab-frame and are added to the rotated ``base_qc`` (the goniometer is
-    lab-mounted). Full-ω (rotating ``rl`` itself) is the documented upgrade path,
-    isolated behind this one seam.
+    Full-omega (supersedes the B' approximation, 2026-06-21): the goniometer
+    rotates the sample by omega about lab ẑ. This is the q-path half — the
+    diffraction vector and projection rotate with the sample:
+    ``base_qc = (R_z(ω) @ Us) @ Hg @ q_hkl``. The matching half is in
+    ``build_geometry_context``, which counter-rotates the ray grid ``rl`` by
+    ``R_z(ω).T`` so the field is sampled in the rotated probed volume (omega
+    applied once on each side). Goniometer scan offsets (φ, χ, 2θ) remain
+    lab-frame and are added to the rotated ``base_qc`` (the goniometer is
+    lab-mounted). Verified by the offset oracle: the field-singular core then
+    appears in the detector at ``R_z(ω) @ offset``. Guarded so ``omega == 0.0``
+    keeps v2.5.1 float ops bit-identical.
     """
     Us = ctx.instrument.Us
     if ctx.geometry.omega != 0.0:
-        # B' (spec §3, decided 2026-06-11): the diffraction vector and projection
-        # rotate with goniometer omega about lab z; rl/Hg stay shared (same
-        # probed volume). Guarded so omega=0 keeps v2.5.1 float ops bit-identical.
+        # Full-omega q-path: rotate the diffraction vector with the sample about
+        # lab z (rl is counter-rotated in build_geometry_context). Guarded so
+        # omega=0 keeps v2.5.1 float ops bit-identical.
         from dfxm_geo.crystal.oblique import _R_z
 
         Us = _R_z(ctx.geometry.omega) @ Us

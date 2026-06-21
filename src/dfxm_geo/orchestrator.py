@@ -371,9 +371,10 @@ def _run_simulation_inner(
     # calls build_geometry_context(run_theta(config), ...) which computes
     # Theta/rl/prob_z from the correct Bragg angle (oblique or simplified) — no
     # module globals needed.  S2a+S3 (#16): CM call site removed; ctx is the sole
-    # geometry source.  M3 plan 2 (B'): per-reflection runs use _context_for_run
-    # which threads the run's hkl and omega; single-reflection uses the config-level
-    # hkl with omega=0 (the original code path).  ctx is built first because the gnb
+    # geometry source.  Full-omega: per-reflection runs use _context_for_run
+    # which threads the run's hkl and omega; single-reflection threads the
+    # config-level hkl and config.geometry.omega (0.0 for simplified mode -> the
+    # original byte-identical path; the resolved omega for oblique).  ctx is built first because the gnb
     # crystal mode needs the run's Theta (ctx.geometry.Theta) to place the wall in
     # its field's lab frame (Theta.T @ Us); every other mode ignores `theta`.
     if reflection is not None:
@@ -384,11 +385,16 @@ def _run_simulation_inner(
         # (the else branch) already threads `instr` correctly.
         ctx = _context_for_run(res, reflection, cell=_mount_cell(config))
     else:
+        # Single-reflection: thread the solver-resolved goniometer omega
+        # (config.geometry.omega) so OBLIQUE runs render at the true omega
+        # (full-omega), exactly as the multi-reflection path does.  SIMPLIFIED
+        # mode resolves omega == 0.0, so that path stays byte-identical.
         ctx = fm.build_forward_context(
             run_theta(config),
             res,
             config.reciprocal.hkl,
             instrument=instr,
+            omega=config.geometry.omega,
             cell=_mount_cell(config),
         )
 

@@ -194,6 +194,22 @@ def test_gnb_simplified_builds_population_without_mount():
 _GOLDEN_DIR = Path(__file__).parent / "data" / "golden" / "gnb"
 
 
+def _regen_goldens() -> None:
+    """Regenerate the gnb oblique goldens from the current (full-omega) code.
+
+    Run only after a deliberate, verified physics change (e.g. the 2026-06-21
+    full-omega fix). Uses the same _gnb_toml + _run as the test, so the golden
+    is exactly what the test renders.
+    """
+    import tempfile
+
+    for recipe in ("leds_eq11", "frankus"):
+        img = _run(Path(tempfile.mkdtemp(prefix=f"regen_{recipe}_")), _gnb_toml(recipe))
+        out = _GOLDEN_DIR / f"{recipe}_oblique.npy"
+        np.save(out, img)
+        print(f"regenerated {out}  shape={img.shape} std={img.std():.4f}")
+
+
 @pytest.mark.parametrize("recipe", ["leds_eq11", "frankus"])
 def test_gnb_golden_snapshot(tmp_path, recipe):
     """Regression-snapshot test: rendered image must match the saved golden.
@@ -201,8 +217,15 @@ def test_gnb_golden_snapshot(tmp_path, recipe):
     Determinism is guaranteed by ``[detector] model = "ideal"`` in
     ``_gnb_toml``, which bypasses all stochastic noise (Poisson + read-out).
     The analytic resolution backend is also fully deterministic.  The golden
-    is generated once (see the generate script in this file's docstring) and
-    force-added past the repo's ``*.npy`` gitignore.
+    is generated once and force-added past the repo's ``*.npy`` gitignore.
+
+    REGENERATED 2026-06-21 for the full-omega fix: single-reflection oblique
+    runs now render at the solver-resolved goniometer omega (was dropped ->
+    omega=0). For this (-1,1,-1) mount omega ~ 124 deg is a free azimuth (Us.q ||
+    lab z), but the previous golden paired that omega's eta with geometry omega=0
+    (inconsistent); the new golden is the eta/omega-consistent full-omega render.
+    To regenerate: ``python -c "from tests.test_gnb_e2e import _regen_goldens;
+    _regen_goldens()"`` from the repo root.
     """
     golden = _GOLDEN_DIR / f"{recipe}_oblique.npy"
     if not golden.exists():
